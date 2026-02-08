@@ -51,3 +51,6 @@
     - [x] Implement Data Persistence (CSV) in `MarketDataManager`
     - [x] **Fix Redundant Logs**: Refactor `execution.py` & `bot.py` to use `symbol_timeframe` key for positions.
     - [x] **Account-Level Guard**: Prevent entering the same coin multiple times across different timeframes (Global Guard).
+    - [x] **Fixed TF Sync Race**: Implemented shared Trader singleton and async locking to prevent `positions.json` overwrites.
+    - [x] **ROE-Scaled SL/TP**: Adjusted targets to 5% SL and 10-20% TP **ROE** by scaling price movement based on leverage.
+    - [x] **Improved Formatting**: Rounded all prices, quantities, and PnL values to 3 decimal places across logs, notifications, and storage.

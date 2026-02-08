@@ -177,7 +177,7 @@ class StrategyAnalyzer:
                 "risk": {"sl_pct": sl_pct, "tp_pct": tp_pct},
                 "tiers": {
                     "low": { "min_score": entry_score, "leverage": 3, "cost_usdt": 3.0 },
-                    "high": { "min_score": entry_score + 2.0, "leverage": 5, "cost_usdt": 8.0 }
+                    "high": { "min_score": entry_score + 2.0, "leverage": 5, "cost_usdt": 5.0 }
                 }
             }
         

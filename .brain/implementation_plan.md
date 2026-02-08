@@ -1,21 +1,22 @@
-# Fee-Aware Strategy Optimization
+# System Reliability & Multi-Timeframe Synchronization
 
-We discovered that the optimizer (analyzer.py) was ignoring trading commissions, which led to "Active" strategies that looked profitable in validation but lost money in real backtests due to fee accumulation.
+Following the initial deployment, we identified race conditions and data synchronization issues when running multiple timeframes (15m, 30m, 1h, 4h, 1d) concurrently.
 
-## Proposed Changes
+## Implemented Solutions
 
-### [Bot & Automation]
+### 1. Unified Trader Architecture
+- **Problem**: Individual bot instances had their own `Trader` objects, causing corrupted `positions.json` updates and independent (conflicting) position tracking.
+- **Solution**: Refactored `bot.py` to use a **Shared Trader Singleton**. All timeframe bots now feed into a single memory-mapped position manager.
 
-#### [MODIFY] [bot.py](file:///d:/code/tradingBot/src/bot.py)
-- Move `current_price` assignment to the start of the `run_bot` loop so it's available for exit checks.
-- Add a background task to run the optimization (`analyzer.analyze`) periodically (e.g., once every 24h) if the user wants full automation.
-- Ensure the bot reloads its configuration after optimization.
+### 2. Multi-TF Race Condition Guard
+- **Problem**: Two bots (e.g., 15m and 1h) could detect a signal for the same symbol at the exact same millisecond, leading to double-buying.
+- **Solution**: Implemented `asyncio.Lock` (per symbol) in `Trader`. The entry process (Signal Check -> Global Guard -> Place Order) is now strictly serialized.
 
-#### [MODIFY] [backtester.py](file:///d:/code/tradingBot/src/backtester.py)
-- Ensure consistency in commission rates between the backtester and analyzer.
+### 3. ROE-Targeted SL/TP
+- **Problem**: SL/TP percentages were being interpreted as price movements, resulting in targets that were too far away (e.g., 30% TP).
+- **Solution**: Scaled targets based on the active leverage (e.g., 5% ROE / 3x Lev = 1.7% Price SL).
 
-## Verification Plan
-
-### Automated Tests
-- Run `python src/analyzer.py` and verify that low-quality symbols (which were previously "Active" but losing) are now correctly labeled as `NO MONEY` or `TEST`.
-- Run `python src/backtester.py` and check if the total PnL for active symbols stays closer to the optimizer's expectations.
+## Verification Success
+- [x] `positions.json` now correctly shows all concurrent symbols across timeframes.
+- [x] Telegram logs match local storage 1:1.
+- [x] Bot no longer enters a coin if another timeframe already holds it.

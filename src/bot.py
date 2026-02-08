@@ -161,7 +161,15 @@ class TradingBot:
                         res = await self.trader.place_order(self.symbol, exec_side, qty, timeframe=self.timeframe, price=current_price, sl=sl, tp=tp)
                         if res:
                             mode_label = "✅ REAL RUNNING" if not self.trader.dry_run else "🧪 TEST"
-                            msg = f"{mode_label} 🚀\n[{self.symbol}] {side} {qty:.3f}\nPrice: {current_price:.3f}\nScore: {score:.1f}\nLev: {target_lev}x | Margin: {risk_info}"
+                            msg = (
+                                f"{mode_label} 🚀\n"
+                                f"**[{self.symbol}] {side}**\n"
+                                f"Qty: {qty:.3f}\n"
+                                f"Entry: {current_price:.3f}\n"
+                                f"SL: {sl:.3f} | TP: {tp:.3f}\n"
+                                f"Score: {score:.1f} | Lev: {target_lev}x\n"
+                                f"Margin: {risk_info}"
+                            )
                             print(msg)
                             await send_telegram_message(msg)
 
@@ -171,6 +179,32 @@ class TradingBot:
 
 import time
 from analyzer import run_global_optimization
+from notification import send_telegram_message, send_telegram_chunked
+
+async def send_periodic_status_report(trader):
+    """Aggregates all active positions and sends a summary to Telegram."""
+    positions = trader.active_positions
+    if not positions:
+        # await send_telegram_message("📊 **Status Update**: No open positions.")
+        return
+
+    msg = "📊 **Active Positions Summary** 📊\n\n"
+    for key, pos in positions.items():
+        symbol = pos['symbol']
+        side = pos['side'].upper()
+        entry = pos['entry_price']
+        qty = pos['qty']
+        
+        # PnL Calculation (Approximate using entry vs current if we had current, 
+        # but for simplicity we report entry and size)
+        msg += (
+            f"**{symbol}** ({side})\n"
+            f"Size: {qty:.3f}\n"
+            f"Entry: {entry:.3f}\n"
+            f"-------------------\n"
+        )
+    
+    await send_telegram_chunked(msg)
 
 async def main():
     manager = MarketDataManager()
@@ -192,6 +226,10 @@ async def main():
     # Track optimization time (set to 0 to trigger first run if needed)
     last_auto_opt = time.time()
     opt_interval = 12 * 3600 # 12 hours
+
+    # Track periodic status update
+    last_status_update = time.time()
+    status_interval = 2 * 3600 # 2 hours
             
     print("Starting Loop...")
     try:
@@ -211,6 +249,15 @@ async def main():
                     await send_telegram_message("🔄 Auto-Optimization Complete and Bot Configs Reloaded.")
                 except Exception as opt_err:
                     print(f"Error during auto-optimization: {opt_err}")
+
+            # 0.1 Check for Periodic Status Update (Every 2 hours)
+            if curr_time - last_status_update >= status_interval:
+                print("📊 Sending periodic status update...")
+                try:
+                    await send_periodic_status_report(trader)
+                    last_status_update = curr_time
+                except Exception as status_err:
+                    print(f"Error sending status update: {status_err}")
 
             # 1. Centralized Data Fetch
             print(f"🔄 Heartbeat: Updating data for {len(TRADING_SYMBOLS)} symbols...")

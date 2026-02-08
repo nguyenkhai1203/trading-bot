@@ -16,15 +16,31 @@ USE_TESTNET = os.getenv('USE_TESTNET', 'True').lower() in ('true', '1', 't')
 # Trading Settings
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 TRADING_SYMBOLS = [
-    'BTC/USDT',
     'ETH/USDT',
+    'BTC/USDT',
     'SOL/USDT',
-    'BNB/USDT',
     'XRP/USDT',
-    'DOGE/USDT',
+    'HYPE/USDT',
+    'BNB/USDT',
+    'BCH/USDT',
     'ADA/USDT',
-    'TRX/USDT',
-    'LINK/USDT'
+    'SUI/USDT',
+    'LINK/USDT',
+    'AVAX/USDT',
+    'LTC/USDT',
+    'NEAR/USDT',
+    'FET/USDT',
+    'DOT/USDT',
+    'STX/USDT',
+    'TAO/USDT',
+    'FTM/USDT',
+    'OP/USDT',
+    'ARB/USDT',
+    'INJ/USDT',
+    'TIA/USDT',
+    'JUP/USDT',
+    'SEI/USDT',
+    'FIL/USDT'
 ]
 
 # Timeframes to run (Concurrent execution)

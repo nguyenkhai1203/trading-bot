@@ -60,7 +60,7 @@ class WeightedScoringStrategy(Strategy):
         
         if not hasattr(self, 'config_data') or 'tiers' not in self.config_data:
             # Fallback hardcoded if config missing
-            if score >= 7.0: return { "leverage": 5, "cost_usdt": 8.0 }
+            if score >= 7.0: return { "leverage": 5, "cost_usdt": 5.0 }
             else: return { "leverage": 3, "cost_usdt": 3.0 }
             
         tiers = self.config_data['tiers']
