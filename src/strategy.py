@@ -15,12 +15,13 @@ import json
 import os
 
 class WeightedScoringStrategy(Strategy):
-    def __init__(self, symbol="default"):
-        super().__init__(name=f"WeightedScoringStrategy_{symbol}")
+    def __init__(self, symbol="default", timeframe="1h"):
+        super().__init__(name=f"WeightedScoringStrategy_{symbol}_{timeframe}")
         self.symbol = symbol
-        self.weights = self.load_weights(symbol)
+        self.timeframe = timeframe
+        self.weights = self.load_weights(symbol, timeframe)
         
-    def load_weights(self, symbol):
+    def load_weights(self, symbol, timeframe):
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
         if not os.path.exists(config_path):
             print("Config not found, using defaults")
@@ -29,15 +30,29 @@ class WeightedScoringStrategy(Strategy):
         with open(config_path, 'r') as f:
             data = json.load(f)
             
-        # Try specific symbol, then default
-        if symbol in data:
+        # Try specific symbol_timeframe, then symbol, then default
+        key = f"{symbol}_{timeframe}"
+        if key in data:
+            self.config_data = data[key]
+        elif symbol in data:
             self.config_data = data[symbol]
         elif 'default' in data:
              self.config_data = data['default']
         else:
              self.config_data = {}
+        
+        # Load Risk Settings
+        risk = self.config_data.get('risk', {})
+        from config import STOP_LOSS_PCT, TAKE_PROFIT_PCT
+        self.sl_pct = risk.get('sl_pct', STOP_LOSS_PCT)
+        self.tp_pct = risk.get('tp_pct', TAKE_PROFIT_PCT)
              
         return self.config_data.get('weights', self.get_default_weights())
+
+    def reload_config(self):
+        """Reloads parameters from strategy_config.json"""
+        self.weights = self.load_weights(self.symbol, self.timeframe)
+        print(f"🔄 [{self.symbol} {self.timeframe}] Config reloaded.")
 
     def get_sizing_tier(self, score):
         # Default fallback
@@ -103,8 +118,9 @@ class WeightedScoringStrategy(Strategy):
             if col_name in row and row[col_name]:
                 # Determine polarity based on name
                 # (Simple heuristic: oversold/cross_up/gt/golden -> Long)
-                is_long = any(x in signal_name for x in ['oversold', 'up', 'golden', 'gt_200', 'gt_signal', 'Price_lt_BB'])
-                is_short = any(x in signal_name for x in ['overbought', 'down', 'death', 'lt_200', 'lt_signal', 'Price_gt_BB'])
+                # Broadened polarity detection
+                is_long = any(x in signal_name for x in ['oversold', 'up', 'golden', 'gt_200', 'gt_signal', 'Price_lt_BB', 'gt_50', 'gt_'])
+                is_short = any(x in signal_name for x in ['overbought', 'down', 'death', 'lt_200', 'lt_signal', 'Price_gt_BB', 'lt_50', 'lt_'])
                 
                 # Special cases or manual mapping overrides
                 # For safety, let's explicitly separate LONG vs SHORT keys in config or use robust naming.

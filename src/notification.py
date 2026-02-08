@@ -26,6 +26,17 @@ async def send_telegram_message(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
+async def send_telegram_chunked(message):
+    """Splits long messages (>4000 chars) into chunks for Telegram."""
+    if not message: return
+    
+    max_len = 3500 # Safe margin below 4096
+    chunks = [message[i:i+max_len] for i in range(0, len(message), max_len)]
+    
+    for chunk in chunks:
+        await send_telegram_message(chunk)
+        await asyncio.sleep(1) # Rate limit safety
+
 async def send_trade_notification(symbol, side, entry, exit, pnl, pnl_pct, reason):
     emoji = "🟢" if pnl > 0 else "🔴"
     msg = (

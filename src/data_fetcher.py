@@ -3,10 +3,10 @@ import asyncio
 import pandas as pd
 import os
 import time
-from config import BYBIT_API_KEY, BYBIT_API_SECRET, USE_TESTNET
+from config import BINANCE_API_KEY, BINANCE_API_SECRET, USE_TESTNET
 
 class DataFetcher:
-    def __init__(self, exchange_id='bybit', symbol='BTC/USDT:USDT', timeframe='1m'):
+    def __init__(self, exchange_id='binance', symbol='BTC/USDT', timeframe='1h'):
         self.exchange_id = exchange_id
         self.symbol = symbol
         self.timeframe = timeframe
@@ -15,10 +15,9 @@ class DataFetcher:
     def _initialize_exchange(self):
         exchange_class = getattr(ccxt, self.exchange_id)
         
-        # Check if keys are set and look valid (simple length check + not placeholder)
-        # Bybit keys are usually 18+ chars
-        is_placeholder = 'your_api_key' in BYBIT_API_KEY or 'your_api_secret' in BYBIT_API_SECRET
-        has_keys = BYBIT_API_KEY and len(BYBIT_API_KEY) > 10 and BYBIT_API_SECRET and not is_placeholder
+        # Check if keys are set and look valid
+        is_placeholder = 'your_api_key' in str(BINANCE_API_KEY) or 'your_api_secret' in str(BINANCE_API_SECRET)
+        has_keys = BINANCE_API_KEY and len(BINANCE_API_KEY) > 10 and BINANCE_API_SECRET and not is_placeholder
         
         config = {
             'enableRateLimit': True,
@@ -29,10 +28,10 @@ class DataFetcher:
         }
         
         if has_keys:
-            config['apiKey'] = BYBIT_API_KEY
-            config['secret'] = BYBIT_API_SECRET
+            config['apiKey'] = BINANCE_API_KEY
+            config['secret'] = BINANCE_API_SECRET
         else:
-            print("WARNING: Invalid or missing API keys. Running in Public Data Only mode.")
+            print("WARNING: Invalid or missing Binance API keys. Running in Public Data Only mode.")
 
         exchange = exchange_class(config)
         

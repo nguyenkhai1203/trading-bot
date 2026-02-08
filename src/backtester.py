@@ -25,7 +25,7 @@ class Backtester:
         self.equity_curve = []
         
         self.feature_engineer = FeatureEngineer()
-        self.strategy = WeightedScoringStrategy(symbol=symbol)
+        self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe)
         # Mock Risk Manager for backtest sizing logic
         self.risk_manager = RiskManager(risk_per_trade=RISK_PER_TRADE)
 
@@ -104,12 +104,12 @@ class Backtester:
 
             self.equity_curve.append({'timestamp': timestamp, 'equity': self.balance})
 
-        self._print_results()
+        return self._print_results()
 
     def _open_position(self, time, price, side, confidence=0.5):
         # Risk Management logic now delegated to RiskManager completely
-        sl_dist = STOP_LOSS_PCT
-        tp_dist = TAKE_PROFIT_PCT
+        sl_dist = self.strategy.sl_pct
+        tp_dist = self.strategy.tp_pct
         
         sl = price * (1 - sl_dist) if side == 'long' else price * (1 + sl_dist)
         tp = price * (1 + tp_dist) if side == 'long' else price * (1 - tp_dist)
@@ -171,32 +171,63 @@ class Backtester:
 
     def _print_results(self):
         if not self.trades:
-            print(f"[{self.symbol}] No trades executed.")
-            return
+            print(f"[{self.symbol} {self.timeframe}] No trades executed.")
+            return {
+                'symbol': self.symbol, 'tf': self.timeframe, 
+                'trades': 0, 'win_rate': 0, 'pnl': 0, 'balance': self.balance
+            }
 
         df = pd.DataFrame(self.trades)
         wins = df[df['pnl'] > 0]
         win_rate = len(wins) / len(df) * 100
         total_pnl = df['pnl'].sum()
         
+        # Save detailed trades to CSV
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        report_dir = os.path.join(base_dir, 'reports')
+        if not os.path.exists(report_dir):
+            os.makedirs(report_dir, exist_ok=True)
+            
+        report_path = os.path.join(report_dir, f"backtest_{self.symbol.replace('/', '')}_{self.timeframe}.csv")
+        df.to_csv(report_path, index=False)
+        
         print(f"\n--- Results for {self.symbol} ({self.timeframe}) ---")
-        print(f"Trades: {len(df)}")
-        print(f"Win Rate: {win_rate:.1f}%")
-        print(f"Total PnL: ${total_pnl:.2f}")
-        print(f"Final Balance: ${self.balance:.2f}")
+        print(f"Trades: {len(df)} | Win Rate: {win_rate:.1f}%")
+        print(f"Total PnL: ${total_pnl:.3f} | Final Balance: ${self.balance:.3f}")
+        print(f"Detailed report saved to: {report_path}")
+        
+        return {
+            'symbol': self.symbol, 'tf': self.timeframe, 
+            'trades': len(df), 'win_rate': round(win_rate, 1), 
+            'pnl': round(total_pnl, 3), 'balance': round(self.balance, 3)
+        }
 
 async def main():
-    # Test on a few symbols/timeframes
-    print("Running Backtest Batch...")
-    # Test on all configured symbols
-    from config import TRADING_SYMBOLS
-    symbols = TRADING_SYMBOLS # Use the full list from config
-    tfs = ['1h'] # Faster test
+    print("🚀 Starting Global Backtest Session...")
+    from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES
     
-    for s in symbols:
-        for tf in tfs:
+    all_results = []
+    for s in TRADING_SYMBOLS:
+        for tf in TRADING_TIMEFRAMES:
             bt = Backtester(s, tf)
-            await bt.run()
+            res = await bt.run()
+            if res:
+                all_results.append(res)
+    
+    # Print Final Summary Table
+    if all_results:
+        print("\n" + "="*80)
+        print(f"{'SYMBOL':<15} {'TF':<6} {'TRADES':<8} {'WIN%':<8} {'PNL':<10} {'BALANCE':<10}")
+        print("-" * 80)
+        for r in all_results:
+            print(f"{r['symbol']:<15} {r['tf']:<6} {r['trades']:<8} {r['win_rate']:<8} ${r['pnl']:<9} ${r['balance']:<9}")
+        print("="*80)
+        
+        # Save Global Summary
+        summary_df = pd.DataFrame(all_results)
+        summary_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'reports', 'global_backtest_summary.csv')
+        summary_df.to_csv(summary_path, index=False)
+        print(f"Global summary saved to: {summary_path}")
 
 if __name__ == "__main__":
     asyncio.run(main())

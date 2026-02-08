@@ -33,11 +33,11 @@
             "high": {
                 "min_score": 7.0,
                 "leverage": 5,
-                "cost_usdt": 8.0
+                "cost_usdt": 5.0
             }
         }
     },
-    "BTC/USDT:USDT": {
+    "BTC/USDT": {
         "weights": {
             "EMA9_EMA21_cross_up": 1.5,
             "EMA50_EMA200_golden_cross": 1.5,
@@ -87,9 +87,21 @@
         "thresholds": {
             "entry_score": 5.0,
             "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 5.0
+            }
         }
     },
-    "ETH/USDT:USDT": {
+    "ETH/USDT": {
         "weights": {
             "EMA9_EMA21_cross_up": 1.5,
             "EMA50_EMA200_golden_cross": 1.5,
@@ -128,9 +140,21 @@
         "thresholds": {
             "entry_score": 5.0,
             "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 5.0
+            }
         }
     },
-    "SOL/USDT:USDT": {
+    "SOL/USDT": {
         "weights": {
             "EMA_9_cross_21_up": 1.5,
             "EMA_9_gt_21": 1.5,
@@ -164,16 +188,16 @@
             "low": {
                 "min_score": 5.0,
                 "leverage": 3,
-                "risk_pct": 0.03
+                "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 7.0,
                 "leverage": 5,
-                "risk_pct": 0.08
+                "cost_usdt": 5.0
             }
         }
     },
-    "BNB/USDT:USDT": {
+    "BNB/USDT": {
         "weights": {
             "EMA9_EMA21_cross_up": 0.0,
             "EMA50_EMA200_golden_cross": 0.0,
@@ -204,16 +228,16 @@
             "low": {
                 "min_score": 5.0,
                 "leverage": 3,
-                "risk_pct": 0.03
+                "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 7.0,
                 "leverage": 5,
-                "risk_pct": 0.08
+                "cost_usdt": 5.0
             }
         }
     },
-    "XRP/USDT:USDT": {
+    "XRP/USDT": {
         "weights": {
             "EMA9_EMA21_cross_up": 0.0,
             "EMA50_EMA200_golden_cross": 0.0,
@@ -246,16 +270,16 @@
             "low": {
                 "min_score": 5.0,
                 "leverage": 3,
-                "risk_pct": 0.03
+                "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 7.0,
                 "leverage": 5,
-                "risk_pct": 0.08
+                "cost_usdt": 5.0
             }
         }
     },
-    "DOGE/USDT:USDT": {
+    "DOGE/USDT": {
         "weights": {
             "EMA9_EMA21_cross_up": 0.0,
             "EMA50_EMA200_golden_cross": 1.5,
@@ -292,16 +316,16 @@
             "low": {
                 "min_score": 5.0,
                 "leverage": 3,
-                "risk_pct": 0.03
+                "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 7.0,
                 "leverage": 5,
-                "risk_pct": 0.08
+                "cost_usdt": 5.0
             }
         }
     },
-    "ADA/USDT:USDT": {
+    "ADA/USDT": {
         "weights": {
             "EMA9_EMA21_cross_up": 0.0,
             "EMA50_EMA200_golden_cross": 0.0,
@@ -324,16 +348,16 @@
             "low": {
                 "min_score": 5.0,
                 "leverage": 3,
-                "risk_pct": 0.03
+                "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 7.0,
                 "leverage": 5,
-                "risk_pct": 0.08
+                "cost_usdt": 5.0
             }
         }
     },
-    "TRX/USDT:USDT": {
+    "TRX/USDT": {
         "weights": {
             "EMA9_EMA21_cross_up": 0.0,
             "EMA50_EMA200_golden_cross": 0.0,
@@ -351,16 +375,16 @@
             "low": {
                 "min_score": 5.0,
                 "leverage": 3,
-                "risk_pct": 0.03
+                "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 7.0,
                 "leverage": 5,
-                "risk_pct": 0.08
+                "cost_usdt": 5.0
             }
         }
     },
-    "LINK/USDT:USDT": {
+    "LINK/USDT": {
         "weights": {
             "EMA_9_gt_21": 1.5,
             "EMA_9_cross_21_down": 2.0,
@@ -390,12 +414,1538 @@
             "low": {
                 "min_score": 5.0,
                 "leverage": 3,
-                "risk_pct": 0.03
+                "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 7.0,
                 "leverage": 5,
-                "risk_pct": 0.08
+                "cost_usdt": 5.0
+            }
+        }
+    },
+    "BTC/USDT_15m": {
+        "weights": {
+            "EMA_9_gt_21": 0.5,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 1.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 1.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 1.2,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.2
+        }
+    },
+    "BTC/USDT_30m": {
+        "weights": {
+            "EMA_9_cross_21_up": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.30000000000000004
+        }
+    },
+    "BTC/USDT_1h": {
+        "weights": {
+            "EMA_9_gt_21": 1.0,
+            "EMA_50_gt_200": 1.2,
+            "RSI_7_oversold": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_gt_50": 1.2,
+            "RSI_14_oversold": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_gt_50": 1.2,
+            "RSI_21_oversold": 1.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_gt_50": 1.2,
+            "MACD_cross_up": 1.2,
+            "MACD_gt_signal": 1.2,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.30000000000000004
+        }
+    },
+    "BTC/USDT_4h": {
+        "weights": {},
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.02,
+            "tp_pct": 0.04
+        }
+    },
+    "BTC/USDT_1d": {
+        "weights": {
+            "EMA_9_cross_21_up": 1.2,
+            "EMA_9_gt_21": 2.0,
+            "EMA_50_gt_200": 1.0,
+            "RSI_7_oversold": 1.0,
+            "RSI_7_gt_50": 2.0,
+            "RSI_14_oversold": 1.2,
+            "RSI_14_gt_50": 2.0,
+            "RSI_21_oversold": 1.2,
+            "RSI_21_gt_50": 2.0,
+            "MACD_cross_up": 1.2,
+            "MACD_gt_signal": 2.0,
+            "Price_lt_BB_Low": 1.2,
+            "Price_gt_BB_Up": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.2
+        }
+    },
+    "ETH/USDT_15m": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.14
+        }
+    },
+    "ETH/USDT_30m": {
+        "weights": {
+            "EMA_9_cross_21_up": 1.2,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 0.5,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_overbought": 1.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.14
+        }
+    },
+    "ETH/USDT_1h": {
+        "weights": {
+            "RSI_7_oversold": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_14_oversold": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_overbought": 2.0,
+            "MACD_cross_up": 1.2,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.21000000000000002
+        }
+    },
+    "ETH/USDT_4h": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 0.5,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_oversold": 0.5,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_overbought": 1.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 0.5
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.15000000000000002
+        }
+    },
+    "ETH/USDT_1d": {
+        "weights": {
+            "EMA_9_cross_21_up": 1.2,
+            "EMA_9_gt_21": 1.0,
+            "EMA_9_lt_21": 2.0,
+            "RSI_7_oversold": 0.5,
+            "RSI_7_gt_50": 1.2,
+            "RSI_7_lt_50": 0.5,
+            "RSI_14_oversold": 2.0,
+            "RSI_14_gt_50": 1.2,
+            "RSI_14_lt_50": 1.0,
+            "RSI_21_gt_50": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_gt_signal": 1.2,
+            "MACD_lt_signal": 0.5,
+            "Price_gt_BB_Up": 2.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.30000000000000004
+        }
+    },
+    "SOL/USDT_15m": {
+        "weights": {
+            "EMA_9_gt_21": 0.5,
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 1.0,
+            "RSI_7_lt_50": 1.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_gt_50": 1.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 1.2,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.05,
+            "tp_pct": 0.1
+        }
+    },
+    "SOL/USDT_1h": {
+        "weights": {
+            "EMA_9_gt_21": 1.2,
+            "EMA_9_lt_21": 0.5,
+            "RSI_7_oversold": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_gt_50": 1.2,
+            "RSI_14_oversold": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_gt_50": 1.2,
+            "MACD_gt_signal": 1.2,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.30000000000000004
+        }
+    },
+    "SOL/USDT_4h": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 1.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 1.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 1.0,
+            "Price_gt_BB_Up": 2.0
+        },
+        "thresholds": {
+            "entry_score": 4.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 4.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 6.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.30000000000000004
+        }
+    },
+    "SOL/USDT_1d": {
+        "weights": {
+            "EMA_9_cross_21_up": 2.0,
+            "EMA_9_gt_21": 1.0,
+            "EMA_50_gt_200": 1.0,
+            "RSI_7_oversold": 1.2,
+            "RSI_7_gt_50": 2.0,
+            "RSI_7_lt_50": 1.0,
+            "RSI_14_oversold": 1.2,
+            "RSI_14_gt_50": 2.0,
+            "RSI_14_lt_50": 1.0,
+            "RSI_21_oversold": 1.2,
+            "RSI_21_overbought": 1.0,
+            "RSI_21_gt_50": 2.0,
+            "MACD_cross_up": 2.0,
+            "MACD_gt_signal": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 1.2,
+            "Price_gt_BB_Up": 1.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.30000000000000004
+        }
+    },
+    "BNB/USDT_15m": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.05,
+            "tp_pct": 0.15000000000000002
+        }
+    },
+    "BNB/USDT_1h": {
+        "weights": {
+            "EMA_50_gt_200": 0.5,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_oversold": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_14_oversold": 2.0,
+            "RSI_14_lt_50": 1.0,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_lt_50": 1.0,
+            "MACD_lt_signal": 1.0,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 4.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 4.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 6.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.14
+        }
+    },
+    "BNB/USDT_4h": {
+        "weights": {
+            "EMA_9_gt_21": 1.0,
+            "EMA_50_gt_200": 1.0,
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_oversold": 1.0,
+            "RSI_7_overbought": 1.2,
+            "RSI_7_lt_50": 1.0,
+            "RSI_14_oversold": 0.5,
+            "RSI_14_gt_50": 0.5,
+            "RSI_14_lt_50": 1.0,
+            "RSI_21_oversold": 1.0,
+            "RSI_21_gt_50": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 1.2,
+            "MACD_lt_signal": 1.0,
+            "Price_lt_BB_Low": 2.0,
+            "Price_gt_BB_Up": 1.0
+        },
+        "thresholds": {
+            "entry_score": 4.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 4.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 6.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.2
+        }
+    },
+    "BNB/USDT_1d": {
+        "weights": {
+            "EMA_9_gt_21": 1.0,
+            "EMA_50_gt_200": 1.0,
+            "RSI_7_oversold": 1.0,
+            "RSI_7_gt_50": 0.5,
+            "RSI_14_gt_50": 0.5,
+            "RSI_21_gt_50": 1.0,
+            "MACD_gt_signal": 1.2,
+            "Price_lt_BB_Low": 2.0,
+            "Price_gt_BB_Up": 1.2
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.2
+        }
+    },
+    "XRP/USDT_15m": {
+        "weights": {
+            "EMA_9_gt_21": 1.2,
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 0.5,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_gt_50": 1.2,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 1.0,
+            "MACD_lt_signal": 2.0,
+            "Price_gt_BB_Up": 1.2
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.10500000000000001
+        }
+    },
+    "XRP/USDT_1h": {
+        "weights": {
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_oversold": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_14_oversold": 1.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_overbought": 2.0,
+            "MACD_lt_signal": 1.0,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.30000000000000004
+        }
+    },
+    "XRP/USDT_4h": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 1.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_oversold": 1.2,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.05,
+            "tp_pct": 0.1
+        }
+    },
+    "XRP/USDT_1d": {
+        "weights": {},
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.02,
+            "tp_pct": 0.04
+        }
+    },
+    "DOGE/USDT_15m": {
+        "weights": {
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 1.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_gt_50": 1.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 1.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.2
+        }
+    },
+    "DOGE/USDT_30m": {
+        "weights": {
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 1.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.05,
+            "tp_pct": 0.1
+        }
+    },
+    "DOGE/USDT_1h": {
+        "weights": {
+            "EMA_50_gt_200": 1.0,
+            "EMA_9_lt_21": 0.5,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_oversold": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 1.0,
+            "RSI_14_oversold": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 0.5,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_overbought": 2.0,
+            "MACD_cross_down": 1.0,
+            "MACD_lt_signal": 1.0,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.30000000000000004
+        }
+    },
+    "DOGE/USDT_4h": {
+        "weights": {
+            "EMA_9_cross_21_up": 2.0,
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_oversold": 1.2,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_oversold": 1.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_overbought": 1.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_up": 1.2,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.14
+        }
+    },
+    "DOGE/USDT_1d": {
+        "weights": {},
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.02,
+            "tp_pct": 0.04
+        }
+    },
+    "ADA/USDT_15m": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.05,
+            "tp_pct": 0.1
+        }
+    },
+    "ADA/USDT_30m": {
+        "weights": {
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_oversold": 1.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 1.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 1.0
+        },
+        "thresholds": {
+            "entry_score": 4.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 4.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 6.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.10500000000000001
+        }
+    },
+    "ADA/USDT_1h": {
+        "weights": {
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_oversold": 1.2,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 1.2,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.10500000000000001
+        }
+    },
+    "ADA/USDT_4h": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_oversold": 1.2,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 1.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 1.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.10500000000000001
+        }
+    },
+    "ADA/USDT_1d": {
+        "weights": {},
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.02,
+            "tp_pct": 0.04
+        }
+    },
+    "TRX/USDT_15m": {
+        "weights": {},
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.02,
+            "tp_pct": 0.04
+        }
+    },
+    "TRX/USDT_30m": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 1.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_gt_BB_Up": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.05,
+            "tp_pct": 0.1
+        }
+    },
+    "TRX/USDT_4h": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.05,
+            "tp_pct": 0.1
+        }
+    },
+    "TRX/USDT_1d": {
+        "weights": {
+            "EMA_9_gt_21": 2.0,
+            "EMA_50_gt_200": 2.0,
+            "EMA_50_lt_200": 1.0,
+            "RSI_7_oversold": 2.0,
+            "RSI_7_overbought": 1.0,
+            "RSI_7_gt_50": 1.2,
+            "RSI_14_oversold": 1.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_gt_50": 1.0,
+            "RSI_21_oversold": 1.2,
+            "RSI_21_overbought": 1.0,
+            "RSI_21_gt_50": 2.0,
+            "MACD_cross_up": 2.0,
+            "MACD_gt_signal": 1.2,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.15000000000000002
+        }
+    },
+    "LINK/USDT_15m": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 1.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.07,
+            "tp_pct": 0.10500000000000001
+        }
+    },
+    "LINK/USDT_30m": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 1.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 2.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.05,
+            "tp_pct": 0.1
+        }
+    },
+    "LINK/USDT_1h": {
+        "weights": {
+            "EMA_9_cross_21_down": 1.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_oversold": 1.2,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_oversold": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 1.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.15000000000000002
+        }
+    },
+    "LINK/USDT_4h": {
+        "weights": {
+            "EMA_9_cross_21_down": 1.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_oversold": 1.2,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.2
+        }
+    },
+    "LINK/USDT_1d": {
+        "weights": {},
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        },
+        "risk": {
+            "sl_pct": 0.02,
+            "tp_pct": 0.04
+        }
+    },
+    "SOL/USDT_30m": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_overbought": 1.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.15000000000000002
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        }
+    },
+    "BNB/USDT_30m": {
+        "weights": {
+            "EMA_9_cross_21_down": 1.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 1.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.2
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        }
+    },
+    "XRP/USDT_30m": {
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 2.0,
+            "RSI_7_overbought": 2.0,
+            "RSI_7_lt_50": 2.0,
+            "RSI_14_overbought": 2.0,
+            "RSI_14_lt_50": 2.0,
+            "RSI_21_overbought": 2.0,
+            "RSI_21_lt_50": 2.0,
+            "MACD_cross_down": 2.0,
+            "MACD_lt_signal": 2.0
+        },
+        "thresholds": {
+            "entry_score": 3.0,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.1,
+            "tp_pct": 0.2
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
+            }
+        }
+    },
+    "TRX/USDT_1h": {
+        "weights": {},
+        "thresholds": {
+            "entry_score": 5.0,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.02,
+            "tp_pct": 0.04
+        },
+        "tiers": {
+            "low": {
+                "min_score": 5.0,
+                "leverage": 3,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 7.0,
+                "leverage": 5,
+                "cost_usdt": 8.0
             }
         }
     }

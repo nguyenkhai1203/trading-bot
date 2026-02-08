@@ -1,0 +1,53 @@
+# Trading Bot Development Task List
+
+- [x] **Setup Environment & API Connection** <!-- id: 0 -->
+    - [x] Create virtual environment and install dependencies (`ccxt`, `python-dotenv`, `pandas`, `numpy`) <!-- id: 1 -->
+    - [x] Create `.env` file for API keys <!-- id: 2 -->
+    - [x] Implement basic connection test script for Bybit/Binance <!-- id: 3 -->
+- [x] **Data Fetching Module (Layer 1)** <!-- id: 4 -->
+    - [x] Implement `DataFetcher` class using `ccxt` <!-- id: 5 -->
+    - [x] Add WebSocket stream support (mock) <!-- id: 6 -->
+    - [x] Add historical data download <!-- id: 7 -->
+- [x] **Decision Layer (Layer 2)** <!-- id: 8 -->
+    - [x] Create `src/feature_engineering.py` (decouple from strategy) <!-- id: 9 -->
+    - [x] Update `Strategy` to use Feature Engineer & return Confidence/Signal <!-- id: 10 -->
+    - [x] Incorporate external signals (placeholder) <!-- id: 11 -->
+- [x] **Risk Management (Layer 3)** <!-- id: 12 -->
+    - [x] Implement `calculate_position_size` <!-- id: 13 -->
+    - [x] Add Circuit Breaker (Max Drawdown / Daily Loss) <!-- id: 14 -->
+    - [x] Define SL/TP calculations <!-- id: 14 -->
+- [x] **Order Execution** <!-- id: 15 -->
+    - [x] specific `Trader` class for order placement (Market, Limit) <!-- id: 16 -->
+    - [x] Add support for Conditional Orders (SL/TP) <!-- id: 17 -->
+    - [x] Implement "Dry Run" mode <!-- id: 18 -->
+- [x] **Main Loop & Monitoring** <!-- id: 19 -->
+    - [x] Build main bot loop (Data -> Signal -> Risk -> Order) <!-- id: 20 -->
+    - [x] Add logging to file/CSV <!-- id: 21 -->
+    - [x] Implement Telegram notification system <!-- id: 22 -->
+- [x] **Backtesting** <!-- id: 23 -->
+    - [x] specific backtest engine or integrate `vectorbt`/`backtesting.py` <!-- id: 24 -->
+    - [x] Run initial backtests and analyze results <!-- id: 25 -->
+- [x] **Optimization & Documentation** <!-- id: 26 -->
+    - [x] Refine strategy parameters <!-- id: 27 -->
+    - [x] Maintain `knowledge.md` with findings and signal sources <!-- id: 28 -->
+    - [x] Support Multi-Pair & Multi-Timeframe (BTC, ETH, SOL, BNB, LINK) <!-- id: 29 -->
+    - [x] Implement `MarketDataManager` to fix "Too Many Requests" <!-- id: 30 -->
+    - [x] Fix Telegram Notifications (Async + PnL Reporting) <!-- id: 31 -->
+    - [x] Implement `WeightedScoringStrategy` (New Indicators + Logic) <!-- id: 32 -->
+    - [x] Build `Analyzer` for Asset-Specific Weight Optimization <!-- id: 33 -->
+    - [x] Create `strategy_config.json` for dynamic weights <!-- id: 34 -->
+    - [x] Implement `Fixed Margin` Sizing ($3/$8) <!-- id: 35 -->
+    - [x] Expand `FeatureEngineer` with Super-Features (RSI 7/14/21) <!-- id: 36 -->
+    - [x] Create `daily_optimizer.py` automation script <!-- id: 37 -->
+    - [x] Implement `get_open_position` check in `bot.py` <!-- id: 38 -->
+    - [x] Implement Persistent Position Storage (`positions.json`) <!-- id: 39 -->
+    - [x] Implement Trade History Logging (`trade_history.json`) <!-- id: 40 -->
+    - [x] Add "Exit Management" logic to auto-close/remove positions <!-- id: 41 -->
+- [x] **New: Auto-Optimizer & Bug Fixes**
+    - [x] Fix `current_price` UnboundLocalError in `bot.py`
+    - [x] Refactor `analyzer.py` for bot integration
+    - [x] Implement 12-hour Auto-Optimization loop in `bot.py`
+    - [x] Implement Dynamic Config Reload in `strategy.py`
+    - [x] Implement Data Persistence (CSV) in `MarketDataManager`
+    - [x] **Fix Redundant Logs**: Refactor `execution.py` & `bot.py` to use `symbol_timeframe` key for positions.
+    - [x] **Account-Level Guard**: Prevent entering the same coin multiple times across different timeframes (Global Guard).

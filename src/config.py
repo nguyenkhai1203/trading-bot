@@ -16,23 +16,22 @@ USE_TESTNET = os.getenv('USE_TESTNET', 'True').lower() in ('true', '1', 't')
 # Trading Settings
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 TRADING_SYMBOLS = [
-    'BTC/USDT:USDT',
-    'ETH/USDT:USDT',
-    'SOL/USDT:USDT',
-    'BNB/USDT:USDT',
-    'XRP/USDT:USDT',
-    'DOGE/USDT:USDT',
-    'ADA/USDT:USDT',
-    'AVAX/USDT:USDT',
-    'TRX/USDT:USDT',
-    'LINK/USDT:USDT'
+    'BTC/USDT',
+    'ETH/USDT',
+    'SOL/USDT',
+    'BNB/USDT',
+    'XRP/USDT',
+    'DOGE/USDT',
+    'ADA/USDT',
+    'TRX/USDT',
+    'LINK/USDT'
 ]
 
 # Timeframes to run (Concurrent execution)
 # 15m, 1h, 4h
 TRADING_TIMEFRAMES = ['15m', '30m', '1h', '4h', '1d']
 
-LEVERAGE = 3            # Increased from 1 to 5
-RISK_PER_TRADE = 0.05   # Increased from 1% to 2%
-STOP_LOSS_PCT = 0.085    # Widened SL to 3% to handle volatility
-TAKE_PROFIT_PCT = 0.15  # Increased TP to 9% (3:1 Reward/Risk)
+LEVERAGE = 3
+RISK_PER_TRADE = 0.05
+STOP_LOSS_PCT = 0.017   # Updated: 5% ROE / 3x Lev ≈ 1.67%
+TAKE_PROFIT_PCT = 0.04  # Updated: 12% ROE / 3x Lev = 4.0%

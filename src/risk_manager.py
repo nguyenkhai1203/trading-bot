@@ -78,7 +78,7 @@ class RiskManager:
         qty = position_value / entry_price
         return qty
 
-    def calculate_sl_tp(self, entry_price, signal_type, atr=None, sl_dist_pct=0.02, tp_dist_pct=0.04):
+    def calculate_sl_tp(self, entry_price, signal_type, atr=None, sl_pct=0.02, tp_pct=0.04):
         """
         Calculates Stop Loss and Take Profit levels.
         """
@@ -87,15 +87,15 @@ class RiskManager:
                  sl = entry_price - (atr * 2)
                  tp = entry_price + (atr * 3)
             else:
-                sl = entry_price * (1 - sl_dist_pct)
-                tp = entry_price * (1 + tp_dist_pct)
+                sl = entry_price * (1 - sl_pct)
+                tp = entry_price * (1 + tp_pct)
         elif signal_type == 'SELL':
             if atr:
                 sl = entry_price + (atr * 2)
                 tp = entry_price - (atr * 3)
             else:
-                sl = entry_price * (1 + sl_dist_pct)
-                tp = entry_price * (1 - tp_dist_pct)
+                sl = entry_price * (1 + sl_pct)
+                tp = entry_price * (1 - tp_pct)
         else:
             return None, None
             

@@ -1,7 +1,7 @@
 import asyncio
 import ccxt.async_support as ccxt
 import pandas as pd
-from config import BYBIT_API_KEY, BYBIT_API_SECRET, USE_TESTNET
+from config import BINANCE_API_KEY, BINANCE_API_SECRET, USE_TESTNET
 
 class MarketDataManager:
     _instance = None
@@ -20,15 +20,15 @@ class MarketDataManager:
 
     def _initialize_exchange(self):
         # ... logic similar to DataFetcher ...
-        exchange_class = ccxt.bybit # Default to Bybit
+        exchange_class = ccxt.binance # Default to Binance
         
         config = {
             'enableRateLimit': True,
             'options': {'defaultType': 'future', 'adjustForTimeDifference': True}
         }
-        if BYBIT_API_KEY and 'your_' not in BYBIT_API_KEY:
-            config['apiKey'] = BYBIT_API_KEY
-            config['secret'] = BYBIT_API_SECRET
+        if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY:
+            config['apiKey'] = BINANCE_API_KEY
+            config['secret'] = BINANCE_API_SECRET
             
         exchange = exchange_class(config)
         if USE_TESTNET: exchange.set_sandbox_mode(True)
@@ -53,9 +53,16 @@ class MarketDataManager:
                 try:
                     ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe=tf, limit=100)
                     if ohlcv:
-                         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                         self.data_store[key] = df
+                        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                        self.data_store[key] = df
+                        
+                        # SAVE TO DISK for Analyzer (Layer 2)
+                        import os
+                        os.makedirs('data', exist_ok=True)
+                        safe_symbol = symbol.replace('/', '').replace(':', '')
+                        file_path = os.path.join('data', f"{safe_symbol}_{tf}.csv")
+                        df.to_csv(file_path, index=False)
                 except Exception as e:
                     print(f"Fetch error {key}: {e}")
                 

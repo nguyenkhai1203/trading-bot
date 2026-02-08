@@ -3,3 +3,6 @@
 *.log
 data
 src/__pycache__
+positions.json
+trade_history.json
+reports
