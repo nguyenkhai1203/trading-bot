@@ -190,8 +190,8 @@ async def send_periodic_status_report(trader):
 
     msg = "📊 **Active Positions Summary** 📊\n\n"
     for key, pos in positions.items():
-        symbol = pos['symbol']
-        side = pos['side'].upper()
+        symbol = pos.get('symbol', key.split('_')[0])
+        side = pos.get('side', 'N/A').upper()
         entry = pos['entry_price']
         qty = pos['qty']
         

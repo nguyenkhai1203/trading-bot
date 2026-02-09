@@ -101,6 +101,7 @@ class Trader:
             print(f"[DRY RUN] Placed {side} {symbol} {timeframe} {qty}")
             
             self.active_positions[pos_key] = {
+                "symbol": symbol,
                 "side": side.upper(),
                 "qty": round(qty, 3),
                 "entry_price": round(price, 3) if isinstance(price, (int, float)) else price,
@@ -125,6 +126,7 @@ class Trader:
             
             # Save for persistence
             self.active_positions[pos_key] = {
+                "symbol": symbol,
                 "side": side.upper(),
                 "qty": round(qty, 3),
                 "entry_price": round(order.get('average', price), 3),
