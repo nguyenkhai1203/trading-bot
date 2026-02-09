@@ -19,6 +19,8 @@ class WeightedScoringStrategy(Strategy):
         super().__init__(name=f"WeightedScoringStrategy_{symbol}_{timeframe}")
         self.symbol = symbol
         self.timeframe = timeframe
+        self.config_mtime = 0  # Track config file modification time
+        self.config_version = 0  # Version number for positions to reference
         self.weights = self.load_weights(symbol, timeframe)
         
     def load_weights(self, symbol, timeframe):
@@ -29,6 +31,13 @@ class WeightedScoringStrategy(Strategy):
             
         with open(config_path, 'r') as f:
             data = json.load(f)
+        
+        # Track file modification time and increment version on reload
+        import os.path as osp
+        mtime = osp.getmtime(config_path)
+        if mtime != self.config_mtime:
+            self.config_version += 1
+            self.config_mtime = mtime
             
         # Try specific symbol_timeframe, then symbol, then default
         key = f"{symbol}_{timeframe}"
@@ -48,6 +57,28 @@ class WeightedScoringStrategy(Strategy):
         self.tp_pct = risk.get('tp_pct', TAKE_PROFIT_PCT)
              
         return self.config_data.get('weights', self.get_default_weights())
+    
+    def reload_weights_if_changed(self):
+        """Check if config file changed, reload if needed.
+        Option 3: Allow existing positions to continue, but block new positions if disabled.
+        """
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
+        if not os.path.exists(config_path):
+            return
+        
+        import os.path as osp
+        current_mtime = osp.getmtime(config_path)
+        
+        # Check if config file was modified
+        if current_mtime != self.config_mtime:
+            print(f"[CONFIG RELOAD] {self.symbol}_{self.timeframe} - Config file changed, reloading...")
+            self.load_weights(self.symbol, self.timeframe)
+    
+    def is_enabled(self):
+        """Check if this strategy config is enabled.
+        Used to block NEW positions if config becomes disabled.
+        """
+        return self.config_data.get('enabled', True)
 
     def reload_config(self):
         """Reloads parameters from strategy_config.json"""

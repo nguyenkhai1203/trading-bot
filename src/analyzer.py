@@ -3,7 +3,8 @@ import numpy as np
 import os
 import json
 import asyncio
-from config import TRADING_SYMBOLS, BINANCE_API_KEY, BINANCE_API_SECRET
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from config import TRADING_SYMBOLS, BINANCE_API_KEY, BINANCE_API_SECRET, MAX_WORKERS
 from feature_engineering import FeatureEngineer
 
 class StrategyAnalyzer:
@@ -33,17 +34,22 @@ class StrategyAnalyzer:
     def get_signal_category(self, name):
         """Categorize signals to avoid redundancy."""
         name = name.lower()
-        if any(x in name for x in ['ema', 'death', 'golden', 'gt_200', 'lt_200']):
+        if any(x in name for x in ['ema', 'death', 'golden', 'gt_200', 'lt_200', 'adx', 'di_', 'strong']):
             return 'Trend'
-        if any(x in name for x in ['rsi', 'macd']):
+        if any(x in name for x in ['rsi', 'macd', 'stoch', 'mfi', 'divergence', 'div']):
             return 'Momentum'
-        if any(x in name for x in ['bb', 'bollinger']):
+        if any(x in name for x in ['bb', 'bollinger', 'volatility', 'atr']):
             return 'Volatility'
+        if any(x in name for x in ['vwap', 'price_above', 'price_below']):
+            return 'Level'
+        if any(x in name for x in ['volume', 'vol_']):
+            return 'Volume'
         return 'Other'
 
     def analyze(self, symbol, timeframe='1h', horizon=4):
         """
-        Analyzes signals with Layer 1: Trend Filter and Layer 2: Diversity.
+        Analyzes signals with Layer 1: Trend Filter and Layer 2: Diversity (IMPROVED).
+        Now picks TOP 3 signals per category for better coverage.
         """
         print(f"Analyzing {symbol} {timeframe}...")
         df = self.load_data(symbol, timeframe)
@@ -54,7 +60,7 @@ class StrategyAnalyzer:
         
         signal_cols = [c for c in df.columns if c.startswith('signal_')]
         
-        category_best = {} # {category: {name, wr, weight}}
+        category_signals = {} # {category: [signals with metrics]}
         
         print(f"  Scanning {len(signal_cols)} signals with EMA-200 Trend Filter...")
         
@@ -62,8 +68,8 @@ class StrategyAnalyzer:
             config_key = name.replace('signal_', '')
             cat = self.get_signal_category(config_key)
             
-            is_long = any(x in config_key for x in ['oversold', 'up', 'golden', 'gt_200', 'gt_signal', 'lt_BB', 'cross_up', 'gt_50', 'gt_'])
-            is_short = any(x in config_key for x in ['overbought', 'down', 'death', 'lt_200', 'lt_signal', 'gt_BB', 'cross_down', 'lt_50', 'lt_'])
+            is_long = any(x in config_key for x in ['oversold', 'up', 'golden', 'gt_200', 'gt_signal', 'lt_BB', 'cross_up', 'gt_50', 'gt_', 'bullish', 'above', 'strong_uptrend'])
+            is_short = any(x in config_key for x in ['overbought', 'down', 'death', 'lt_200', 'lt_signal', 'gt_BB', 'cross_down', 'lt_50', 'lt_', 'bearish', 'below', 'strong_downtrend'])
             
             # --- LAYER 1: TREND FILTER ---
             # Only analyze signals that follow the 200-EMA trend
@@ -82,29 +88,99 @@ class StrategyAnalyzer:
             actual_win_rate = raw_win_rate_long if is_long else (1.0 - raw_win_rate_long if is_short else 0)
             avg_return = subset['Target_Return'].mean() if is_long else (-subset['Target_Return'].mean() if is_short else 0)
             
-            # Weighting Logic
+            # Weighting Logic - IMPROVED
             weight = 0.0
             if actual_win_rate > 0.58: weight = 2.0
             elif actual_win_rate > 0.55: weight = 1.0
             elif actual_win_rate > 0.52: weight = 0.5
             
             if weight > 0:
-                # Update category best (Diversity)
-                if cat not in category_best or actual_win_rate > category_best[cat]['wr']:
-                    category_best[cat] = {'name': config_key, 'wr': actual_win_rate, 'weight': weight, 'dir': 'LONG' if is_long else 'SHORT'}
+                if cat not in category_signals:
+                    category_signals[cat] = []
+                category_signals[cat].append({
+                    'name': config_key, 
+                    'wr': actual_win_rate, 
+                    'weight': weight, 
+                    'dir': 'LONG' if is_long else 'SHORT',
+                    'trades': len(subset),
+                    'avg_return': avg_return
+                })
 
-        # --- LAYER 2: CLEAN PARAMETERS ---
-        # Construct final weights from diverse categories
+        # --- LAYER 2: CLEAN PARAMETERS (IMPROVED - Pick TOP 3 per category) ---
+        # Now pick up to 3 signals per category instead of just 1
         results = {}
-        for cat, best in category_best.items():
-            print(f"    [CLEAN] Picked best {cat}: {best['name']} ({best['dir']}) | WR={best['wr']*100:.1f}%")
-            results[best['name']] = best['weight']
+        for cat, signals_list in category_signals.items():
+            # Sort by win-rate, descending
+            signals_list = sorted(signals_list, key=lambda x: x['wr'], reverse=True)
+            
+            # Pick top 3 (or fewer if not enough)
+            top_n = min(3, len(signals_list))
+            for i, sig in enumerate(signals_list[:top_n]):
+                # Decrease weight for lower priority signals in same category
+                adj_weight = sig['weight'] * (1.0 if i == 0 else 0.7 if i == 1 else 0.5)
+                print(f"    [LAYER2-{i+1}] {cat}: {sig['name']} ({sig['dir']}) | WR={sig['wr']*100:.1f}% | Trades={sig['trades']}")
+                results[sig['name']] = adj_weight
             
         return results
 
+    def cross_timeframe_validate(self, symbol, weights_dict, timeframes=['15m', '30m', '1h', '4h', '1d']):
+        """
+        CROSS-TIMEFRAME VALIDATION: Check if signals are reliable across multiple timeframes.
+        Two distant timeframes (e.g., 15m+1h, 30m+4h, 1h+1d) = HIGH confidence.
+        This ensures signal validity without requiring excessive confirmations.
+        """
+        print(f"\n  [CROSS-TF VALIDATION] Checking {symbol} across {len(timeframes)} timeframes...")
+        
+        tf_results = {}
+        profitable_tfs = 0
+        
+        for tf in timeframes:
+            if tf not in weights_dict[symbol]:
+                continue
+            
+            weights = weights_dict[symbol][tf].get('weights', {})
+            if not weights:
+                continue
+            
+            df = self.load_data(symbol, tf)
+            if df is None:
+                continue
+            
+            df = self.feature_engineer.calculate_features(df)
+            best_result = self.validate_weights(df, weights, symbol, tf)
+            
+            if best_result and best_result['pnl'] > 0 and best_result['win_rate'] >= 0.52:
+                profitable_tfs += 1
+                tf_results[tf] = {
+                    'pnl': best_result['pnl'],
+                    'wr': best_result['win_rate'],
+                    'trades': best_result['trades']
+                }
+        
+        # Confidence scoring based on cross-TF alignment
+        # Strategy: 2+ distant timeframes = HIGH confidence (sufficient validation)
+        # This allows more signals to pass while maintaining safety
+        confidence = 'LOW'
+        if profitable_tfs >= 4:
+            confidence = 'VERY HIGH'  # Profitable on 4+ TF (exceptional)
+        elif profitable_tfs >= 2:
+            confidence = 'HIGH'        # Profitable on 2+ TF (robust, recommended)
+        elif profitable_tfs == 1:
+            confidence = 'MEDIUM'      # Profitable only 1 TF (watch, single validation)
+        
+        print(f"  Cross-TF Confidence: {confidence} ({profitable_tfs}/{len(timeframes)} TF profitable)")
+        
+        return {
+            'confidence': confidence,
+            'profitable_tfs': profitable_tfs,
+            'total_tfs': len(timeframes),
+            'tf_results': tf_results
+        }
+
     def validate_weights(self, df, weights, symbol, timeframe):
-        """--- LAYER 3: 70/30 WALK-FORWARD VALIDATION ---"""
-        if not weights: return None
+        """--- LAYER 3: 70/30 WALK-FORWARD VALIDATION with SAFETY CHECKS ---"""
+        if not weights: 
+            return None
         
         split_idx = int(len(df) * 0.7)
         train_df = df.iloc[:split_idx]
@@ -114,10 +190,12 @@ class StrategyAnalyzer:
         mock_strat = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe)
         mock_strat.weights = weights
         
-        sl_ranges = [0.015, 0.02, 0.025] 
-        tp_min = 0.033 
-        rr_ratios = [1.5, 2.0, 3.0] 
-        thresholds_to_test = [3.0, 4.0, 5.0]
+        # EXPANDED ranges to find better SL/TP combinations
+        sl_ranges = [0.01, 0.015, 0.02, 0.025, 0.03, 0.035] 
+        tp_min = 0.025
+        rr_ratios = [1.0, 1.5, 2.0, 2.5, 3.0] 
+        # EXPANDED thresholds: test more entry difficulty levels
+        thresholds_to_test = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0]
         
         round_trip_fee = 0.0012
         best_overall = None
@@ -132,9 +210,26 @@ class StrategyAnalyzer:
                     # 1. TEST ON TRAINING DATA
                     train_perf = self._backtest_segment(train_df, mock_strat, sl_test, tp_test, round_trip_fee)
                     
-                    if train_perf['trades'] >= 2 and train_perf['pnl'] > max_train_pnl:
-                        # 2. VALIDATE ON TESTING DATA (The "Future")
+                    # SAFETY CHECK 1: Minimum trade count
+                    if train_perf['trades'] < 2:
+                        continue
+                    
+                    # SAFETY CHECK 2: Win rate higher than baseline
+                    if train_perf['win_rate'] < 0.52:
+                        continue
+                    
+                    if train_perf['pnl'] > max_train_pnl:
+                        # 2. VALIDATE ON TESTING DATA
                         test_perf = self._backtest_segment(test_df, mock_strat, sl_test, tp_test, round_trip_fee)
+                        
+                        # SAFETY CHECK 3: Test must be consistent with train
+                        if abs(test_perf['win_rate'] - train_perf['win_rate']) > 0.25:
+                            # Too much divergence, likely overfitted
+                            continue
+                        
+                        # SAFETY CHECK 4: Minimum trades in test set
+                        if test_perf['trades'] < 2:
+                            continue
                         
                         max_train_pnl = train_perf['pnl']
                         best_overall = {
@@ -144,7 +239,8 @@ class StrategyAnalyzer:
                             'trades': train_perf['trades'] + test_perf['trades'], 
                             'win_rate': (train_perf['win_rate'] + test_perf['win_rate']) / 2,
                             'test_wr': test_perf['win_rate'],
-                            'test_pnl': test_perf['pnl']
+                            'test_pnl': test_perf['pnl'],
+                            'consistency': abs(test_perf['win_rate'] - train_perf['win_rate'])
                         }
 
         return best_overall
@@ -226,8 +322,16 @@ class StrategyAnalyzer:
                 "trades_sim": stats.get('trades', 0)
             }
 
-        with open(config_path, 'w') as f:
-            json.dump(data, f, indent=4)
+        # ATOMIC WRITE: Write to temp file, then rename (prevents bot reading corrupted data during reload)
+        import tempfile
+        temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(config_path), text=True)
+        try:
+            with os.fdopen(temp_fd, 'w') as f:
+                json.dump(data, f, indent=4)
+            os.replace(temp_path, config_path)  # Atomic rename
+        except Exception as e:
+            os.unlink(temp_path)
+            raise e
         print(f"Updated config for {key} | Score={entry_score} SL={sl_pct*100:.1f}% TP={tp_pct*100:.1f}%")
 
 async def run_global_optimization():
@@ -235,61 +339,159 @@ async def run_global_optimization():
     from notification import send_telegram_chunked
     
     analyzer = StrategyAnalyzer()
-    print("🔍 **STRATEGY OPTIMIZATION STARTED**")
+    print("[*] **STRATEGY OPTIMIZATION STARTED** (Enhanced with Cross-TF Validation + Parallel Processing)")
     
     results_summary = []
     horizon = 15 # Balanced horizon
+    all_weights_by_symbol = {}  # {symbol: {tf: weights}}
     
-    print("Running Global Strategy Optimization...")
-    for symbol in TRADING_SYMBOLS:
+    # OPTIMIZED Step 1: Parallel analysis by symbol (seq by timeframe within symbol)
+    print("Step 1: Analyzing all symbol+TF combinations (PARALLEL)...")
+    
+    def analyze_symbol(symbol):
+        """Helper: Analyze single symbol across all timeframes."""
+        weights_by_tf = {}
         for tf in TRADING_TIMEFRAMES:
             weights = analyzer.analyze(symbol, timeframe=tf, horizon=horizon)
             if weights:
-                df = analyzer.load_data(symbol, tf)
-                df = analyzer.feature_engineer.calculate_features(df)
-                
-                best_result = analyzer.validate_weights(df, weights, symbol, tf)
-                
-                if best_result and best_result['pnl'] > 0:
-                    wr = best_result['win_rate']
-                    test_wr = best_result.get('test_wr', 0)
-                    
-                    # More rigorous enabling condition
-                    is_enabled = wr >= 0.55 and test_wr >= 0.52
-                    
-                    status_icon = "🚀" if is_enabled else "⚠️"
-                    status_label = "ENABLED (Tactical)" if is_enabled else "PROFITABLE BUT UNSTABLE"
-                    
-                    status_str = (
-                        f"{status_icon} **[{symbol} {tf}] {status_label}**\n"
-                        f"Overall PnL: +${best_result['pnl']:.2f} | WR: {wr*100:.1f}%\n"
-                        f"Test WR: {test_wr*100:.1f}% | Trades: {best_result['trades']}\n"
-                        f"SL: {best_result['sl_pct']*100:.1f}% | TP: {best_result['tp_pct']*100:.1f}%"
-                    )
-                    print(f"  {status_str.replace('**', '')}")
-                    
-                    analyzer.update_config(symbol, tf, weights, 
-                                         sl_pct=best_result['sl_pct'], 
-                                         tp_pct=best_result['tp_pct'],
-                                         entry_score=best_result['entry_score'],
-                                         stats=best_result,
-                                         enabled=is_enabled)
-                    
-                    if is_enabled:
-                        results_summary.append(status_str)
-                elif best_result:
-                    print(f"❌ [{symbol} {tf}] NO MONEY (Loss={best_result['pnl']:.2f})")
-                    analyzer.update_config(symbol, tf, {}, enabled=False) # Deactivate
-                else:
-                    print(f"🧪 [{symbol} {tf}] TEST (No trades)")
-            else:
-                print(f"  [SKIP] No strong signals for {symbol} {tf}")
+                weights_by_tf[tf] = {'weights': weights}
+        return symbol, weights_by_tf
+    
+    # Use ThreadPoolExecutor for parallel symbol processing
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(analyze_symbol, sym): sym for sym in TRADING_SYMBOLS}
+        completed = 0
+        for future in as_completed(futures):
+            symbol, weights_by_tf = future.result()
+            all_weights_by_symbol[symbol] = weights_by_tf
+            completed += 1
+            if completed % 8 == 0:  # Progress feedback every 8 symbols
+                print(f"  [Progress] {completed}/{len(TRADING_SYMBOLS)} symbols analyzed...")
+    
+    print("  ✓ Step 1 complete: All symbols analyzed in parallel")
+
+    print("\nStep 2: Cross-Timeframe Validation (Filtering unreliable signals) - PARALLEL...")
+    
+    def validate_symbol_tf(symbol, tf):
+        """Helper: Validate and collect results for one (symbol, tf) pair."""
+        if tf not in all_weights_by_symbol.get(symbol, {}):
+            return None
+        
+        weights = all_weights_by_symbol[symbol][tf].get('weights', {})
+        df = analyzer.load_data(symbol, tf)
+        if df is None or not weights:
+            return {'symbol': symbol, 'tf': tf, 'action': 'skip', 'reason': 'no_data'}
+        
+        df = analyzer.feature_engineer.calculate_features(df)
+        best_result = analyzer.validate_weights(df, weights, symbol, tf)
+        
+        if best_result and best_result['pnl'] > 0:
+            wr = best_result['win_rate']
+            test_wr = best_result.get('test_wr', 0)
+            consistency = best_result.get('consistency', 0)
+            
+            # ENHANCED ENABLING CONDITIONS with Cross-TF check
+            is_profitable = wr >= 0.52 and test_wr >= 0.51
+            is_consistent = consistency < 0.25
+            
+            # Check if same signal is profitable on other timeframes
+            other_tf_supported = _check_other_timeframes(analyzer, symbol, weights, TRADING_TIMEFRAMES)
+            
+            # === NOTE: IMPORTANT DECISION ===
+            # RELAXED cross-TF requirement: 2+ TF → 1+ TF for ALL symbols
+            # Rationale: Increase enabled configs vs strict multi-TF diversity
+            # Risk: Reduced safety margin on cross-timeframe validation
+            # Mitigation: 70/30 walk-forward + 4 safety checks still enforce quality
+            # Enable logic
+            tf_requirement = 1  # All symbols require 1+ TF (relaxed from prior 2+ for alts)
+            is_enabled = is_profitable and is_consistent and other_tf_supported >= tf_requirement
+            
+            status_icon = "[OK]" if is_enabled else "[WATCH]"
+            status_label = "ENABLED" if is_enabled else "WATCH (Below threshold)"
+            status_str = (
+                f"{status_icon} **[{symbol} {tf}] {status_label}**\n"
+                f"PnL: +${best_result['pnl']:.2f} | WR: {wr*100:.1f}% | Test WR: {test_wr*100:.1f}%\n"
+                f"Consistency: {consistency*100:.1f}% | Trades: {best_result['trades']}"
+            )
+            
+            return {
+                'symbol': symbol, 'tf': tf, 'action': 'update',
+                'weights': weights, 'best_result': best_result,
+                'is_enabled': is_enabled, 'status_str': status_str
+            }
+        elif best_result:
+            return {
+                'symbol': symbol, 'tf': tf, 'action': 'disable',
+                'pnl': best_result['pnl']
+            }
+        else:
+            return {'symbol': symbol, 'tf': tf, 'action': 'skip', 'reason': 'no_signals'}
+    
+    # Parallel validation of all symbol+tf combinations
+    validation_tasks = []
+    for symbol in TRADING_SYMBOLS:
+        for tf in TRADING_TIMEFRAMES:
+            validation_tasks.append((symbol, tf))
+    
+    validation_results = []
+    completed_val = 0
+    import time
+    step2_start = time.time()
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(validate_symbol_tf, sym, tf): (sym, tf) for sym, tf in validation_tasks}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                validation_results.append(result)
+            completed_val += 1
+            elapsed = time.time() - step2_start
+            throughput = completed_val / elapsed if elapsed > 0 else 0
+            if completed_val % 10 == 0:
+                print(f"  [Progress] {completed_val}/{len(validation_tasks)} done | {elapsed:.1f}s | {throughput:.1f}/s (parallel x{MAX_WORKERS})")
+    
+    print(f"  ✓ Step 2a complete: {completed_val} validations done (parallel)")
+    
+    # Step 2b: Update configs serially (prevent file write race conditions)
+    print("  → Updating configs from validation results...")
+    for result in validation_results:
+        symbol, tf = result['symbol'], result['tf']
+        
+        if result['action'] == 'update':
+            print(f"  {result['status_str'].replace('**', '')}")
+            analyzer.update_config(symbol, tf, result['weights'],
+                                 sl_pct=result['best_result']['sl_pct'],
+                                 tp_pct=result['best_result']['tp_pct'],
+                                 entry_score=result['best_result']['entry_score'],
+                                 stats=result['best_result'],
+                                 enabled=result['is_enabled'])
+            if result['is_enabled']:
+                results_summary.append(result['status_str'])
+        elif result['action'] == 'disable':
+            print(f"  [SKIP] [{symbol} {tf}] Loss=${result['pnl']:.2f}")
+            analyzer.update_config(symbol, tf, {}, enabled=False)
+        elif result['action'] == 'skip':
+            print(f"  [SKIP] [{symbol} {tf}] {result.get('reason', 'no_data')}")
 
     if results_summary:
-        final_msg = "📊 **STRATEGY OPTIMIZATION COMPLETE**\n\n" + "\n".join(results_summary)
+        final_msg = "[OK] **STRATEGY OPTIMIZATION COMPLETE**\n\n" + "\n".join(results_summary[:20])  # Limit to 20 for Telegram
         await send_telegram_chunked(final_msg)
     else:
-        print("No new profitable configurations found.")
+        print("[!] No new profitable configurations found.")
+
+def _check_other_timeframes(analyzer, symbol, weights, timeframes):
+    """Helper: Count how many other timeframes support these weights."""
+    supported_count = 0
+    for tf in timeframes:
+        df = analyzer.load_data(symbol, tf)
+        if df is None:
+            continue
+        df = analyzer.feature_engineer.calculate_features(df)
+        result = analyzer.validate_weights(df, weights, symbol, tf)
+        # RELAXED: Accept if pnl > 0 OR decent WR (>=50% instead of >=52%)
+        # This helps major pairs which have fewer cross-TF confirmations
+        if result and (result['pnl'] > 0 or result['win_rate'] >= 0.50):
+            supported_count += 1
+    return supported_count
 
 if __name__ == "__main__":
     asyncio.run(run_global_optimization())

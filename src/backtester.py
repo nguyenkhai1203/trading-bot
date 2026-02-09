@@ -36,7 +36,7 @@ class Backtester:
     async def run(self):
         # Print Status
         wa = [k for k,v in self.strategy.weights.items() if v != 0]
-        status = "🟢 ACTIVE" if wa else "🔴 INACTIVE (Safety Mode)"
+        status = "[ACTIVE]" if wa else "[INACTIVE]"
         print(f"[{self.symbol}] Strategy Status: {status} ({len(wa)} parameters)")
         
         # Check cache first
@@ -169,18 +169,91 @@ class Backtester:
         })
         self.position = None
 
+    def _calculate_metrics(self, df):
+        """Calculate advanced performance metrics."""
+        if df.empty:
+            return None
+        
+        # Basic metrics
+        wins = df[df['pnl'] > 0]
+        losses = df[df['pnl'] <= 0]
+        win_rate = len(wins) / len(df) * 100 if len(df) > 0 else 0
+        total_pnl = df['pnl'].sum()
+        avg_trade = total_pnl / len(df) if len(df) > 0 else 0
+        
+        # Profit Factor (Gross Profit / |Gross Loss|)
+        gross_profit = wins['pnl'].sum() if len(wins) > 0 else 0
+        gross_loss = abs(losses['pnl'].sum()) if len(losses) > 0 else 0
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else (999 if gross_profit > 0 else 0)
+        
+        # ROI %
+        roi = ((self.balance - self.initial_balance) / self.initial_balance * 100) if self.initial_balance > 0 else 0
+        
+        # Max Drawdown (from equity curve)
+        equity_values = [x['equity'] for x in self.equity_curve]
+        if equity_values:
+            running_max = np.maximum.accumulate(equity_values)
+            drawdown = (equity_values - running_max) / running_max * 100
+            max_drawdown = np.min(drawdown) if len(drawdown) > 0 else 0
+        else:
+            max_drawdown = 0
+        
+        # Sharpe Ratio (assuming daily returns, risk-free rate = 0)
+        if len(df) > 1:
+            returns = df['pnl'].values
+            log_returns = np.log(1 + returns / self.initial_balance)
+            sharpe = (np.mean(log_returns) / np.std(log_returns)) * np.sqrt(252) if np.std(log_returns) > 0 else 0
+        else:
+            sharpe = 0
+        
+        # Consecutive wins/losses
+        max_consecutive_wins = 0
+        max_consecutive_losses = 0
+        current_wins = 0
+        current_losses = 0
+        
+        for pnl in df['pnl'].values:
+            if pnl > 0:
+                current_wins += 1
+                current_losses = 0
+                max_consecutive_wins = max(max_consecutive_wins, current_wins)
+            else:
+                current_losses += 1
+                current_wins = 0
+                max_consecutive_losses = max(max_consecutive_losses, current_losses)
+        
+        # Largest win/loss
+        largest_win = wins['pnl'].max() if len(wins) > 0 else 0
+        largest_loss = losses['pnl'].min() if len(losses) > 0 else 0
+        
+        return {
+            'trades': len(df),
+            'win_rate': win_rate,
+            'total_pnl': total_pnl,
+            'avg_trade': avg_trade,
+            'largest_win': largest_win,
+            'largest_loss': largest_loss,
+            'profit_factor': profit_factor,
+            'roi': roi,
+            'max_drawdown': max_drawdown,
+            'sharpe_ratio': sharpe,
+            'max_consecutive_wins': max_consecutive_wins,
+            'max_consecutive_losses': max_consecutive_losses,
+            'balance': self.balance
+        }
+
     def _print_results(self):
         if not self.trades:
             print(f"[{self.symbol} {self.timeframe}] No trades executed.")
             return {
                 'symbol': self.symbol, 'tf': self.timeframe, 
-                'trades': 0, 'win_rate': 0, 'pnl': 0, 'balance': self.balance
+                'trades': 0, 'win_rate': 0, 'pnl': 0, 'balance': self.balance,
+                'avg_trade': 0, 'largest_win': 0, 'largest_loss': 0,
+                'profit_factor': 0, 'roi': 0, 'max_drawdown': 0, 'sharpe_ratio': 0
             }
 
         df = pd.DataFrame(self.trades)
-        wins = df[df['pnl'] > 0]
-        win_rate = len(wins) / len(df) * 100
-        total_pnl = df['pnl'].sum()
+        metrics = self._calculate_metrics(df)
         
         # Save detailed trades to CSV
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -191,43 +264,117 @@ class Backtester:
         report_path = os.path.join(report_dir, f"backtest_{self.symbol.replace('/', '')}_{self.timeframe}.csv")
         df.to_csv(report_path, index=False)
         
-        print(f"\n--- Results for {self.symbol} ({self.timeframe}) ---")
-        print(f"Trades: {len(df)} | Win Rate: {win_rate:.1f}%")
-        print(f"Total PnL: ${total_pnl:.3f} | Final Balance: ${self.balance:.3f}")
-        print(f"Detailed report saved to: {report_path}")
+        print(f"\n{'='*70}")
+        print(f"BACKTEST RESULTS: {self.symbol} ({self.timeframe})")
+        print(f"{'='*70}")
+        print(f"Trades:                {metrics['trades']}")
+        print(f"Win Rate:              {metrics['win_rate']:.1f}%")
+        print(f"Total PnL:             ${metrics['total_pnl']:.3f}")
+        print(f"Avg Trade PnL:         ${metrics['avg_trade']:.3f}")
+        print(f"Largest Win/Loss:      ${metrics['largest_win']:.3f} / ${metrics['largest_loss']:.3f}")
+        print(f"Profit Factor:         {metrics['profit_factor']:.2f}x")
+        print(f"ROI:                   {metrics['roi']:.2f}%")
+        print(f"Max Drawdown:          {metrics['max_drawdown']:.2f}%")
+        print(f"Sharpe Ratio:          {metrics['sharpe_ratio']:.2f}")
+        print(f"Max Consecutive W/L:   {metrics['max_consecutive_wins']} / {metrics['max_consecutive_losses']}")
+        print(f"Final Balance:         ${metrics['balance']:.3f}")
+        print(f"{'='*70}")
+        print(f"Report saved to: {report_path}\n")
         
+        # Return result summary
         return {
-            'symbol': self.symbol, 'tf': self.timeframe, 
-            'trades': len(df), 'win_rate': round(win_rate, 1), 
-            'pnl': round(total_pnl, 3), 'balance': round(self.balance, 3)
+            'symbol': self.symbol, 
+            'tf': self.timeframe, 
+            'trades': metrics['trades'],
+            'win_rate': round(metrics['win_rate'], 1),
+            'pnl': round(metrics['total_pnl'], 3),
+            'avg_trade': round(metrics['avg_trade'], 3),
+            'largest_win': round(metrics['largest_win'], 3),
+            'largest_loss': round(metrics['largest_loss'], 3),
+            'profit_factor': round(metrics['profit_factor'], 2),
+            'roi': round(metrics['roi'], 2),
+            'max_drawdown': round(metrics['max_drawdown'], 2),
+            'sharpe_ratio': round(metrics['sharpe_ratio'], 2),
+            'balance': round(metrics['balance'], 3)
         }
 
 async def main():
-    print("🚀 Starting Global Backtest Session...")
+    print("[*] Starting Global Backtest Session (ENABLED CONFIGS ONLY)...")
     from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES
+    import json
+    
+    # Load strategy config to get ENABLED status
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
+    try:
+        with open(config_path, 'r') as f:
+            strategy_config = json.load(f)
+    except:
+        strategy_config = {}
     
     all_results = []
+    enabled_results = []
+    watched_results = []
+    
     for s in TRADING_SYMBOLS:
         for tf in TRADING_TIMEFRAMES:
+            key = f"{s}_{tf}"
+            config = strategy_config.get(key, {})
+            is_enabled = config.get('enabled', False)
+            status = config.get('status', 'UNKNOWN')
+            
+            # Skip if neither ENABLED nor WATCHED
+            if not is_enabled and 'WATCH' not in status:
+                continue
+            
             bt = Backtester(s, tf)
             res = await bt.run()
             if res:
+                res['status'] = status.split('(')[0].strip() if '(' in status else 'N/A'  # Extract status
                 all_results.append(res)
+                
+                if is_enabled:
+                    enabled_results.append(res)
+                else:
+                    watched_results.append(res)
     
-    # Print Final Summary Table
+    # Print ENABLED Results First
+    if enabled_results:
+        print("\n" + "="*140)
+        print("[OK] ENABLED CONFIGS (DEPLOYING)")
+        print("="*140)
+        print(f"{'SYMBOL':<15} {'TF':<6} {'TRADES':<8} {'WIN%':<8} {'PROFIT':<12} {'AVG':<10} {'ROI':<8} {'SHARPE':<8} {'MAXDD%':<8} {'PF':<8}")
+        print("-" * 140)
+        total_pnl = 0
+        total_roi = 0
+        for r in enabled_results:
+            avg_display = f"${r['avg_trade']:.3f}" if r['avg_trade'] else "$0.000"
+            print(f"{r['symbol']:<15} {r['tf']:<6} {r['trades']:<8} {r['win_rate']:<8} ${r['pnl']:<11} {avg_display:<10} {r['roi']:<8} {r['sharpe_ratio']:<8} {r['max_drawdown']:<8} {r['profit_factor']:<8}")
+            total_pnl += r['pnl']
+            total_roi += r['roi']
+        print("="*140)
+        avg_roi = (total_roi / len(enabled_results)) if enabled_results else 0
+        print(f"{'TOTAL (ENABLED)':<15} {'-':<6} {sum([r['trades'] for r in enabled_results]):<8} {'-':<8} ${total_pnl:<11} {'-':<10} {avg_roi:<8}")
+        print("="*140)
+    
+    # Print WATCHED Results (Optional)
+    if watched_results:
+        print("\n" + "="*140)
+        print("[WATCH] CONFIGS (SINGLE TF, NEEDS REVIEW)")
+        print("="*140)
+        print(f"{'SYMBOL':<15} {'TF':<6} {'TRADES':<8} {'WIN%':<8} {'PROFIT':<12} {'AVG':<10} {'ROI':<8} {'SHARPE':<8} {'MAXDD%':<8} {'PF':<8}")
+        print("-" * 140)
+        for r in watched_results:
+            avg_display = f"${r['avg_trade']:.3f}" if r['avg_trade'] else "$0.000"
+            print(f"{r['symbol']:<15} {r['tf']:<6} {r['trades']:<8} {r['win_rate']:<8} ${r['pnl']:<11} {avg_display:<10} {r['roi']:<8} {r['sharpe_ratio']:<8} {r['max_drawdown']:<8} {r['profit_factor']:<8}")
+        print("="*140)
+    
+    # Save Global Summary (ENABLED + WATCHED)
     if all_results:
-        print("\n" + "="*80)
-        print(f"{'SYMBOL':<15} {'TF':<6} {'TRADES':<8} {'WIN%':<8} {'PNL':<10} {'BALANCE':<10}")
-        print("-" * 80)
-        for r in all_results:
-            print(f"{r['symbol']:<15} {r['tf']:<6} {r['trades']:<8} {r['win_rate']:<8} ${r['pnl']:<9} ${r['balance']:<9}")
-        print("="*80)
-        
-        # Save Global Summary
         summary_df = pd.DataFrame(all_results)
         summary_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'reports', 'global_backtest_summary.csv')
         summary_df.to_csv(summary_path, index=False)
-        print(f"Global summary saved to: {summary_path}")
+        print(f"\n[OK] Summary: {len(enabled_results)} ENABLED + {len(watched_results)} WATCHED")
+        print(f"[OK] Report: {summary_path}\n")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -82,4 +82,85 @@ class FeatureEngineer:
         df['Vol_Spike'] = df['volume'] / df['Vol_MA']
         df['signal_Vol_Spike'] = df['Vol_Spike'] > 2.0
 
+        # --- ADVANCED INDICATORS ---
+        
+        # 7. ADX (Average Directional Index) - Trend Strength
+        high_low = df['high'] - df['low']
+        high_close = abs(df['high'] - df['close'].shift(1))
+        low_close = abs(df['low'] - df['close'].shift(1))
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        
+        up_move = df['high'].diff()
+        down_move = -df['low'].diff()
+        
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        
+        tr_14 = tr.rolling(14).sum()
+        plus_dm_14 = pd.Series(plus_dm).rolling(14).sum()
+        minus_dm_14 = pd.Series(minus_dm).rolling(14).sum()
+        
+        plus_di = 100 * (plus_dm_14 / tr_14)
+        minus_di = 100 * (minus_dm_14 / tr_14)
+        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        
+        df['ADX'] = dx.rolling(14).mean()
+        df['signal_ADX_Strong'] = df['ADX'] > 25  # Strong trend
+        df['signal_ADX_Weak'] = df['ADX'] < 20    # Weak/sideways
+        df['signal_DI_Plus_Above'] = plus_di > minus_di  # Uptrend
+        df['signal_DI_Minus_Above'] = minus_di > plus_di # Downtrend
+
+        # 8. Stochastic Oscillator
+        high_14 = df['high'].rolling(14).max()
+        low_14 = df['low'].rolling(14).min()
+        fastk = 100 * (df['close'] - low_14) / (high_14 - low_14)
+        fastd = fastk.rolling(3).mean()
+        fastk_smooth = fastk.rolling(3).mean()
+        
+        df['Stoch_K'] = fastk_smooth
+        df['Stoch_D'] = fastd
+        
+        df['signal_Stoch_Oversold'] = df['Stoch_K'] < 20
+        df['signal_Stoch_Overbought'] = df['Stoch_K'] > 80
+        df['signal_Stoch_K_Cross_Up'] = (df['Stoch_K'] > df['Stoch_D']) & (df['Stoch_K'].shift(1) <= df['Stoch_D'].shift(1))
+        df['signal_Stoch_K_Cross_Down'] = (df['Stoch_K'] < df['Stoch_D']) & (df['Stoch_K'].shift(1) >= df['Stoch_D'].shift(1))
+
+        # 9. ATR (Average True Range) - Volatility
+        df['ATR_14'] = tr.rolling(14).mean()
+        df['ATR_MA20'] = df['ATR_14'].rolling(20).mean()
+        df['signal_High_Volatility'] = df['ATR_14'] > df['ATR_MA20']
+        df['signal_Low_Volatility'] = df['ATR_14'] < df['ATR_MA20']
+
+        # 10. VWAP (Volume Weighted Average Price)
+        df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
+        df['signal_Price_Above_VWAP'] = df['close'] > df['vwap']
+        df['signal_Price_Below_VWAP'] = df['close'] < df['vwap']
+
+        # 11. Divergence Detection (RSI)
+        # Look for RSI making lower highs while price makes higher highs (bearish)
+        # or RSI making higher lows while price makes lower lows (bullish)
+        for rsi_period in [14]:
+            rsi_col = f'RSI_{rsi_period}'
+            if rsi_col in df.columns:
+                # Simple divergence: compare peaks/troughs
+                rsi_high = df[rsi_col].rolling(5).max()
+                rsi_low = df[rsi_col].rolling(5).min()
+                price_high = df['close'].rolling(5).max()
+                price_low = df['close'].rolling(5).min()
+                
+                # Bearish: Price higher, RSI lower
+                df[f'signal_RSI_Bearish_Div'] = (price_high > price_high.shift(5)) & (rsi_high < rsi_high.shift(5))
+                # Bullish: Price lower, RSI higher
+                df[f'signal_RSI_Bullish_Div'] = (price_low < price_low.shift(5)) & (rsi_low > rsi_low.shift(5))
+
+        # 12. Divergence Detection (MACD)
+        if 'MACD' in df.columns:
+            macd_high = df['MACD'].rolling(5).max()
+            macd_low = df['MACD'].rolling(5).min()
+            
+            # Bearish: Price higher, MACD lower
+            df['signal_MACD_Bearish_Div'] = (price_high > price_high.shift(5)) & (macd_high < macd_high.shift(5))
+            # Bullish: Price lower, MACD higher
+            df['signal_MACD_Bullish_Div'] = (price_low < price_low.shift(5)) & (macd_low > macd_low.shift(5))
+
         return df

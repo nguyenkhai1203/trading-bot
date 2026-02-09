@@ -86,13 +86,28 @@ class TradingBot:
                         exit_reason = f"TAKE PROFIT hit at {current_price}"
 
                 if exit_hit:
-                    mode_label = "✅ REAL RUNNING" if not self.trader.dry_run else "🧪 TEST"
-                    msg = f"{mode_label} CLOSED: [{self.symbol}] {exit_reason}"
+                    # Calculate PnL
+                    entry_price = existing_pos.get('entry_price', current_price)
+                    qty = existing_pos.get('qty', 0)
+                    leverage = existing_pos.get('leverage', 3)
+                    
+                    if side == 'BUY':
+                        pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                    else:
+                        pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                    
+                    pnl_usd = (pnl_pct / 100) * qty * entry_price
+                    pnl_icon = "🟢" if pnl_pct > 0 else "🔴"
+                    
+                    mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
+                    msg = (
+                        f"{mode_label} CLOSED {pnl_icon}\n"
+                        f"**[{self.symbol}]** {exit_reason}\n"
+                        f"PnL: {pnl_pct:+.2f}% | ${pnl_usd:+.2f}"
+                    )
                     print(msg)
                     await send_telegram_message(msg)
                     await self.trader.remove_position(self.symbol, timeframe=self.timeframe, exit_price=current_price, exit_reason=exit_reason)
-                    # Don't return, allow it to check for new signals in the same step if desired,
-                    # but usually better to wait for next heartbeat. 
                     return 
 
                 # 2. In Live mode, sync with exchange
@@ -122,6 +137,13 @@ class TradingBot:
                 conf = signal_data['confidence']
 
                 if side in ['BUY', 'SELL']:
+                    # === OPTION 3: Check if config is enabled before opening NEW positions ===
+                    # Existing positions can still close, but NEW entries blocked if disabled
+                    if hasattr(self.strategy, 'is_enabled') and not self.strategy.is_enabled():
+                        self.logger.warning(f"[{self.symbol} {self.timeframe}] Config DISABLED - Skipping new entry")
+                        print(f"⛔ [{self.symbol} {self.timeframe}] Config disabled, blocking new position (existing can close)")
+                        return
+                    
                     self.logger.info(f"[{self.symbol} {self.timeframe}] Signal: {side} ({conf})")
                     print(f"🎯 [{self.symbol} {self.timeframe}] SIGNAL FOUND: {side} | Conf: {conf:.2f} | Price: {current_price:.3f}")
                     
@@ -181,28 +203,48 @@ import time
 from analyzer import run_global_optimization
 from notification import send_telegram_message, send_telegram_chunked
 
-async def send_periodic_status_report(trader):
+async def send_periodic_status_report(trader, data_manager):
     """Aggregates all active positions and sends a summary to Telegram."""
     positions = trader.active_positions
     if not positions:
-        # await send_telegram_message("📊 **Status Update**: No open positions.")
         return
 
-    msg = "📊 **Active Positions Summary** 📊\n\n"
+    msg = "📊 **Active Positions** 📊\n\n"
+    total_pnl_usd = 0
+    
     for key, pos in positions.items():
         symbol = pos.get('symbol', key.split('_')[0])
+        tf = key.split('_')[-1] if '_' in key else '1h'
         side = pos.get('side', 'N/A').upper()
-        entry = pos['entry_price']
-        qty = pos['qty']
+        entry = pos.get('entry_price', 0)
+        qty = pos.get('qty', 0)
+        sl = pos.get('sl', 0)
+        tp = pos.get('tp', 0)
         
-        # PnL Calculation (Approximate using entry vs current if we had current, 
-        # but for simplicity we report entry and size)
+        # Get current price from data store
+        df = data_manager.get_data(symbol, tf)
+        current_price = df.iloc[-1]['close'] if df is not None and not df.empty else entry
+        
+        # Calculate PnL
+        if side == 'BUY':
+            pnl_pct = ((current_price - entry) / entry) * 100 if entry > 0 else 0
+        else:
+            pnl_pct = ((entry - current_price) / entry) * 100 if entry > 0 else 0
+        
+        pnl_usd = (pnl_pct / 100) * qty * entry
+        total_pnl_usd += pnl_usd
+        pnl_icon = "🟢" if pnl_pct > 0 else "🔴"
+        
         msg += (
-            f"**{symbol}** ({side})\n"
-            f"Size: {qty:.3f}\n"
-            f"Entry: {entry:.3f}\n"
-            f"-------------------\n"
+            f"{pnl_icon} **{symbol}** ({side})\n"
+            f"Entry: {entry:.4f} | Now: {current_price:.4f}\n"
+            f"PnL: {pnl_pct:+.2f}% | ${pnl_usd:+.2f}\n"
+            f"SL: {sl:.4f} | TP: {tp:.4f}\n"
+            f"---\n"
         )
+    
+    total_icon = "🟢" if total_pnl_usd > 0 else "🔴"
+    msg += f"\n{total_icon} **Total PnL: ${total_pnl_usd:+.2f}**"
     
     await send_telegram_chunked(msg)
 
@@ -254,7 +296,7 @@ async def main():
             if curr_time - last_status_update >= status_interval:
                 print("📊 Sending periodic status update...")
                 try:
-                    await send_periodic_status_report(trader)
+                    await send_periodic_status_report(trader, manager)
                     last_status_update = curr_time
                 except Exception as status_err:
                     print(f"Error sending status update: {status_err}")
@@ -262,6 +304,11 @@ async def main():
             # 1. Centralized Data Fetch
             print(f"🔄 Heartbeat: Updating data for {len(TRADING_SYMBOLS)} symbols...")
             await manager.update_data(TRADING_SYMBOLS, TRADING_TIMEFRAMES)
+            
+            # 1.5. Reload config if changed (no restart needed)
+            for bot in bots:
+                if hasattr(bot.strategy, 'reload_weights_if_changed'):
+                    bot.strategy.reload_weights_if_changed()
             
             # 2. Run Logic for all bots
             tasks = [bot.run_step(initial_balance) for bot in bots if bot.running]

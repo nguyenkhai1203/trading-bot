@@ -44,8 +44,11 @@ TRADING_SYMBOLS = [
 ]
 
 # Timeframes to run (Concurrent execution)
-# 15m, 1h, 4h
+# 5 core timeframes with complete data across all 32 symbols
 TRADING_TIMEFRAMES = ['15m', '30m', '1h', '4h', '1d']
+
+# Parallel Processing
+MAX_WORKERS = 8  # ThreadPoolExecutor workers for symbol-level parallelism
 
 LEVERAGE = 3
 RISK_PER_TRADE = 0.05
