@@ -268,7 +268,7 @@ async def main():
             if tasks:
                 await asyncio.gather(*tasks)
             
-            await asyncio.sleep(10) # Reduced polling to avoid rate limits and too much noise
+            await asyncio.sleep(60) # 60s interval - SL/TP is set on entry, no need for frequent polling
             
     except KeyboardInterrupt:
         print("Stopping...")

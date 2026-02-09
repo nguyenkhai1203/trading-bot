@@ -100,6 +100,10 @@ class WeightedScoringStrategy(Strategy):
         Calculates LONG/SHORT score based on DYNAMIC signals from config.
         Checks if 'signal_{key}' exists in row and is True.
         """
+        # Skip if explicitly disabled in config
+        if not self.config_data.get('enabled', True):
+            return {'side': 'SKIP', 'confidence': 0.0, 'comment': 'Disabled in config'}
+
         score_long = 0.0
         score_short = 0.0
         reasons_long = []

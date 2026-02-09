@@ -44,29 +44,47 @@ class MarketDataManager:
 
     async def update_data(self, symbols, timeframes):
         """
-        Fetch data for all symbol/timeframe combinations sequentially (or semi-parallel)
-        to respect rate limits.
+        Fetch latest candles and merge with historical data.
+        Keeps a rolling window of MAX_CANDLES for backtesting.
         """
+        import os
+        MAX_CANDLES = 1000  # Enough for EMA 200 and 70/30 split
+        
         for symbol in symbols:
             for tf in timeframes:
                 key = f"{symbol}_{tf}"
                 try:
-                    ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe=tf, limit=100)
-                    if ohlcv:
-                        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                        self.data_store[key] = df
+                    # Fetch only 50 latest candles (enough for signals)
+                    ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
+                    if not ohlcv:
+                        continue
                         
-                        # SAVE TO DISK for Analyzer (Layer 2)
-                        import os
-                        os.makedirs('data', exist_ok=True)
-                        safe_symbol = symbol.replace('/', '').replace(':', '')
-                        file_path = os.path.join('data', f"{safe_symbol}_{tf}.csv")
-                        df.to_csv(file_path, index=False)
+                    new_df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
+                    
+                    # Load existing historical data
+                    safe_symbol = symbol.replace('/', '').replace(':', '')
+                    file_path = os.path.join('data', f"{safe_symbol}_{tf}.csv")
+                    
+                    if os.path.exists(file_path):
+                        old_df = pd.read_csv(file_path)
+                        old_df['timestamp'] = pd.to_datetime(old_df['timestamp'])
+                        
+                        # Merge: keep old + add new, remove duplicates
+                        combined = pd.concat([old_df, new_df]).drop_duplicates(subset='timestamp', keep='last')
+                        combined = combined.sort_values('timestamp').tail(MAX_CANDLES)
+                    else:
+                        combined = new_df
+                    
+                    self.data_store[key] = combined
+                    
+                    # Save back to disk
+                    os.makedirs('data', exist_ok=True)
+                    combined.to_csv(file_path, index=False)
+                    
                 except Exception as e:
                     print(f"Fetch error {key}: {e}")
                 
-                # Small sleep between requests to avoid 429
                 await asyncio.sleep(0.1) 
 
     def get_data(self, symbol, timeframe):
