@@ -1,8 +1,38 @@
+# Python
 .venv
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment
 .env
+.env.local
+
+# Logs
 *.log
-data
-src/__pycache__
+
+# Data & Cache
+data/
+*.tmp
+
+# Trading State
+src/__pycache__/
+src/positions.json
+src/trade_history.json
 positions.json
 trade_history.json
-reports
+
+# Reports
+reports/
+*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

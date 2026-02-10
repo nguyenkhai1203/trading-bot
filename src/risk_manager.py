@@ -1,3 +1,5 @@
+from datetime import datetime
+
 class RiskManager:
     def __init__(self, risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.03):
         self.risk_per_trade = risk_per_trade
@@ -7,14 +9,21 @@ class RiskManager:
         
         self.starting_balance_day = None
         self.peak_balance = 0
+        self._last_reset_date = None  # Track daily reset
 
     def check_circuit_breaker(self, current_balance):
         """
         Returns: True if trading should STOP, False otherwise.
         """
-        # Init trackers if needed
-        if self.starting_balance_day is None:
+        today = datetime.now().date()
+        
+        # Reset daily tracker at midnight
+        if self._last_reset_date != today:
             self.starting_balance_day = current_balance
+            self._last_reset_date = today
+        
+        # Init peak tracker if needed
+        if self.peak_balance == 0:
             self.peak_balance = current_balance
             
         # Update Peak

@@ -100,9 +100,10 @@ class FeatureEngineer:
         plus_dm_14 = pd.Series(plus_dm).rolling(14).sum()
         minus_dm_14 = pd.Series(minus_dm).rolling(14).sum()
         
-        plus_di = 100 * (plus_dm_14 / tr_14)
-        minus_di = 100 * (minus_dm_14 / tr_14)
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+        plus_di = 100 * (plus_dm_14 / tr_14.replace(0, np.nan))
+        minus_di = 100 * (minus_dm_14 / tr_14.replace(0, np.nan))
+        di_sum = plus_di + minus_di
+        dx = 100 * abs(plus_di - minus_di) / di_sum.replace(0, np.nan)
         
         df['ADX'] = dx.rolling(14).mean()
         df['signal_ADX_Strong'] = df['ADX'] > 25  # Strong trend
@@ -113,7 +114,8 @@ class FeatureEngineer:
         # 8. Stochastic Oscillator
         high_14 = df['high'].rolling(14).max()
         low_14 = df['low'].rolling(14).min()
-        fastk = 100 * (df['close'] - low_14) / (high_14 - low_14)
+        stoch_range = (high_14 - low_14).replace(0, np.nan)  # Avoid division by zero
+        fastk = 100 * (df['close'] - low_14) / stoch_range
         fastd = fastk.rolling(3).mean()
         fastk_smooth = fastk.rolling(3).mean()
         
@@ -162,5 +164,91 @@ class FeatureEngineer:
             df['signal_MACD_Bearish_Div'] = (price_high > price_high.shift(5)) & (macd_high < macd_high.shift(5))
             # Bullish: Price lower, MACD higher
             df['signal_MACD_Bullish_Div'] = (price_low < price_low.shift(5)) & (macd_low > macd_low.shift(5))
+
+        # 13. Fibonacci Retracement Levels
+        lookback_fibo = 50
+        df['swing_high'] = df['high'].rolling(lookback_fibo).max()
+        df['swing_low'] = df['low'].rolling(lookback_fibo).min()
+        
+        # Calculate Fibonacci levels
+        fibo_range = df['swing_high'] - df['swing_low']
+        df['fibo_0'] = df['swing_high']      # 0% (top)
+        df['fibo_236'] = df['swing_high'] - (fibo_range * 0.236)
+        df['fibo_382'] = df['swing_high'] - (fibo_range * 0.382)
+        df['fibo_50'] = df['swing_high'] - (fibo_range * 0.5)
+        df['fibo_618'] = df['swing_high'] - (fibo_range * 0.618)
+        df['fibo_100'] = df['swing_low']     # 100% (bottom)
+        
+        # Signals: Price near key Fibonacci levels (within 0.5% threshold)
+        fibo_threshold = 0.005
+        df['signal_price_at_fibo_236'] = (df['close'] >= df['fibo_236'] * (1 - fibo_threshold)) & (df['close'] <= df['fibo_236'] * (1 + fibo_threshold))
+        df['signal_price_at_fibo_382'] = (df['close'] >= df['fibo_382'] * (1 - fibo_threshold)) & (df['close'] <= df['fibo_382'] * (1 + fibo_threshold))
+        df['signal_price_at_fibo_50'] = (df['close'] >= df['fibo_50'] * (1 - fibo_threshold)) & (df['close'] <= df['fibo_50'] * (1 + fibo_threshold))
+        df['signal_price_at_fibo_618'] = (df['close'] >= df['fibo_618'] * (1 - fibo_threshold)) & (df['close'] <= df['fibo_618'] * (1 + fibo_threshold))
+        
+        # Combined signal: price at any key Fibonacci level
+        df['signal_at_fibo_key_level'] = (
+            df['signal_price_at_fibo_236'] | 
+            df['signal_price_at_fibo_382'] | 
+            df['signal_price_at_fibo_50'] | 
+            df['signal_price_at_fibo_618']
+        )
+
+        # 14. Support/Resistance Detection
+        lookback_sr = 20
+        
+        # Detect swing highs (potential resistance)
+        df['is_swing_high'] = (
+            (df['high'] == df['high'].rolling(window=lookback_sr, center=True).max()) &
+            (df['high'] > df['high'].shift(1)) &
+            (df['high'] > df['high'].shift(-1))
+        )
+        
+        # Detect swing lows (potential support)
+        df['is_swing_low'] = (
+            (df['low'] == df['low'].rolling(window=lookback_sr, center=True).min()) &
+            (df['low'] < df['low'].shift(1)) &
+            (df['low'] < df['low'].shift(-1))
+        )
+        
+        # Get most recent swing high/low levels
+        df['resistance_level'] = np.where(df['is_swing_high'], df['high'], np.nan)
+        df['resistance_level'] = df['resistance_level'].ffill()
+        
+        df['support_level'] = np.where(df['is_swing_low'], df['low'], np.nan)
+        df['support_level'] = df['support_level'].ffill()
+        
+        # Signals: Price near support/resistance (within 1% threshold)
+        sr_threshold = 0.01
+        df['signal_price_at_resistance'] = (
+            (df['close'] >= df['resistance_level'] * (1 - sr_threshold)) & 
+            (df['close'] <= df['resistance_level'] * (1 + sr_threshold))
+        )
+        df['signal_price_at_support'] = (
+            (df['close'] >= df['support_level'] * (1 - sr_threshold)) & 
+            (df['close'] <= df['support_level'] * (1 + sr_threshold))
+        )
+        
+        # Bounce signals: Price bouncing off support (upward) or resistance (downward)
+        df['signal_bounce_from_support'] = (
+            df['signal_price_at_support'] & 
+            (df['close'] > df['open']) &  # Bullish candle
+            (df['low'] <= df['support_level'] * (1 + sr_threshold))
+        )
+        df['signal_bounce_from_resistance'] = (
+            df['signal_price_at_resistance'] & 
+            (df['close'] < df['open']) &  # Bearish candle
+            (df['high'] >= df['resistance_level'] * (1 - sr_threshold))
+        )
+        
+        # Breakout signals: Price breaking through S/R levels
+        df['signal_breakout_above_resistance'] = (
+            (df['close'] > df['resistance_level']) & 
+            (df['close'].shift(1) <= df['resistance_level'].shift(1))
+        )
+        df['signal_breakout_below_support'] = (
+            (df['close'] < df['support_level']) & 
+            (df['close'].shift(1) >= df['support_level'].shift(1))
+        )
 
         return df

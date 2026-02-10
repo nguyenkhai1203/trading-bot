@@ -50,7 +50,13 @@ TRADING_TIMEFRAMES = ['15m', '30m', '1h', '4h', '1d']
 # Parallel Processing
 MAX_WORKERS = 8  # ThreadPoolExecutor workers for symbol-level parallelism
 
-LEVERAGE = 3
+LEVERAGE = 10  # Updated: 8-12x range (mid-point)
 RISK_PER_TRADE = 0.05
 STOP_LOSS_PCT = 0.017   # Updated: 5% ROE / 3x Lev ≈ 1.67%
 TAKE_PROFIT_PCT = 0.04  # Updated: 12% ROE / 3x Lev = 4.0%
+
+# Patience Entry Settings
+USE_LIMIT_ORDERS = True  # Use limit orders for better entry price
+PATIENCE_ENTRY_PCT = 0.015  # 1.5% better entry price target
+LIMIT_ORDER_TIMEOUT = 300  # 5 minutes timeout for limit orders (seconds)
+REQUIRE_TECHNICAL_CONFIRMATION = False  # Require Fibo/S/R alignment before entry (disabled for now)

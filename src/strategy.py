@@ -95,11 +95,14 @@ class WeightedScoringStrategy(Strategy):
             else: return { "leverage": 3, "cost_usdt": 3.0 }
             
         tiers = self.config_data['tiers']
-        # Check High first
-        if score >= tiers['high']['min_score']:
+        
+        # Check tiers in order: high -> low -> minimum (fallback)
+        if 'high' in tiers and score >= tiers['high'].get('min_score', 999):
             return tiers['high']
-        elif score >= tiers['low']['min_score']:
-             return tiers['low']
+        elif 'low' in tiers and score >= tiers['low'].get('min_score', 999):
+            return tiers['low']
+        elif 'minimum' in tiers and score >= tiers['minimum'].get('min_score', 0):
+            return tiers['minimum']
              
         return res
 
@@ -126,10 +129,14 @@ class WeightedScoringStrategy(Strategy):
             "Price_below_VWAP": 0.9
         }
 
-    def get_signal(self, row):
+    def get_signal(self, row, use_adaptive=True):
         """
         Calculates LONG/SHORT score based on DYNAMIC signals from config.
         Checks if 'signal_{key}' exists in row and is True.
+        
+        Args:
+            row: Single row of features (pandas Series or dict)
+            use_adaptive: If True, apply adaptive weight adjustments from signal tracker
         """
         # Skip if explicitly disabled in config
         if not self.config_data.get('enabled', True):
@@ -139,7 +146,16 @@ class WeightedScoringStrategy(Strategy):
         score_short = 0.0
         reasons_long = []
         reasons_short = []
-        w = self.weights
+        
+        # Get base weights, optionally adjusted by adaptive learning
+        w = self.weights.copy()
+        
+        if use_adaptive:
+            try:
+                from signal_tracker import tracker
+                w = tracker.adjust_weights(w)
+            except Exception:
+                pass  # Fallback to base weights if tracker unavailable
 
         # Iterate through all weights in config
         for signal_name, weight in w.items():

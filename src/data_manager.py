@@ -1,6 +1,7 @@
 import asyncio
 import ccxt.async_support as ccxt
 import pandas as pd
+import os
 from config import BINANCE_API_KEY, BINANCE_API_SECRET, USE_TESTNET
 
 class MarketDataManager:
@@ -16,7 +17,18 @@ class MarketDataManager:
         self.initialized = True
         self.exchange = self._initialize_exchange()
         self.data_store = {} # { 'symbol_timeframe': df }
+        self.features_cache = {}  # { 'symbol_timeframe': df_with_features }
         self.listeners = []
+        self._isolated_margin_set = False
+        self._update_counter = 0  # Track cycles for periodic disk save
+        self._feature_engineer = None  # Lazy init shared FeatureEngineer
+    
+    def _get_feature_engineer(self):
+        """Lazy load single shared FeatureEngineer."""
+        if self._feature_engineer is None:
+            from feature_engineering import FeatureEngineer
+            self._feature_engineer = FeatureEngineer()
+        return self._feature_engineer
 
     def _initialize_exchange(self):
         # ... logic similar to DataFetcher ...
@@ -42,13 +54,37 @@ class MarketDataManager:
             print(f"Error fetching ticker {symbol}: {e}")
             return None
 
+    async def set_isolated_margin_mode(self, symbols):
+        """Set isolated margin mode for each symbol (call once at bot startup)."""
+        if self._isolated_margin_set or not symbols:
+            return
+        
+        print(f"⚙️ Setting ISOLATED MARGIN mode for {len(symbols)} symbols...")
+        for symbol in symbols:
+            try:
+                # Binance: set_margin_type(type='isolated', symbol)
+                await self.exchange.set_margin_type('isolated', symbol)
+                print(f"  ✓ {symbol}: ISOLATED margin enabled")
+            except Exception as e:
+                # May already be in isolated mode or symbol doesn't support it
+                print(f"  ⚠️ {symbol}: {str(e)[:80]}")
+            await asyncio.sleep(0.1)  # Rate limit
+        
+        self._isolated_margin_set = True
+        print("✅ Isolated margin mode setup complete")
+
     async def update_data(self, symbols, timeframes):
         """
         Fetch latest candles and merge with historical data.
         Keeps a rolling window of MAX_CANDLES for backtesting.
+        OPTIMIZED: Only saves to disk every 10 cycles.
         """
-        import os
         MAX_CANDLES = 1000  # Enough for EMA 200 and 70/30 split
+        self._update_counter += 1
+        save_to_disk = (self._update_counter % 10 == 0)  # Save every 10 cycles
+        
+        # Clear features cache on data update (will be recomputed on demand)
+        self.features_cache.clear()
         
         for symbol in symbols:
             for tf in timeframes:
@@ -62,33 +98,86 @@ class MarketDataManager:
                     new_df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
                     
-                    # Load existing historical data
-                    safe_symbol = symbol.replace('/', '').replace(':', '')
-                    file_path = os.path.join('data', f"{safe_symbol}_{tf}.csv")
-                    
-                    if os.path.exists(file_path):
-                        old_df = pd.read_csv(file_path)
-                        old_df['timestamp'] = pd.to_datetime(old_df['timestamp'])
+                    # Check if we have in-memory data first
+                    if key in self.data_store:
+                        old_df = self.data_store[key]
+                    else:
+                        # Load from disk only on first run
+                        safe_symbol = symbol.replace('/', '').replace(':', '')
+                        file_path = os.path.join('data', f"{safe_symbol}_{tf}.csv")
                         
+                        if os.path.exists(file_path):
+                            old_df = pd.read_csv(file_path)
+                            old_df['timestamp'] = pd.to_datetime(old_df['timestamp'])
+                        else:
+                            old_df = None
+                    
+                    if old_df is not None:
                         # Merge: keep old + add new, remove duplicates
-                        combined = pd.concat([old_df, new_df]).drop_duplicates(subset='timestamp', keep='last')
-                        combined = combined.sort_values('timestamp').tail(MAX_CANDLES)
+                        combined = pd.concat([old_df, new_df]).drop_duplicates(subset='timestamp', keep='last').reset_index(drop=True)
+                        combined = combined.sort_values('timestamp').reset_index(drop=True).tail(MAX_CANDLES)
                     else:
                         combined = new_df
                     
                     self.data_store[key] = combined
                     
-                    # Save back to disk
-                    os.makedirs('data', exist_ok=True)
-                    combined.to_csv(file_path, index=False)
+                    # Save to disk periodically (not every cycle)
+                    if save_to_disk:
+                        safe_symbol = symbol.replace('/', '').replace(':', '')
+                        file_path = os.path.join('data', f"{safe_symbol}_{tf}.csv")
+                        os.makedirs('data', exist_ok=True)
+                        combined.to_csv(file_path, index=False)
                     
                 except Exception as e:
                     print(f"Fetch error {key}: {e}")
                 
-                await asyncio.sleep(0.1) 
+                await asyncio.sleep(0.1)
+        
+        if save_to_disk:
+            print(f"💾 Data saved to disk (cycle {self._update_counter})")
+
+    async def load_from_disk(self, symbols, timeframes):
+        """Load historical data from disk only (for dry_run mode)."""
+        loaded = 0
+        for symbol in symbols:
+            for tf in timeframes:
+                key = f"{symbol}_{tf}"
+                safe_symbol = symbol.replace('/', '').replace(':', '')
+                file_path = os.path.join('data', f"{safe_symbol}_{tf}.csv")
+                
+                if os.path.exists(file_path):
+                    try:
+                        df = pd.read_csv(file_path)
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                        self.data_store[key] = df
+                        loaded += 1
+                    except Exception as e:
+                        print(f"Error loading {file_path}: {e}")
+        
+        print(f"✅ Loaded {loaded} data files from disk")
 
     def get_data(self, symbol, timeframe):
         return self.data_store.get(f"{symbol}_{timeframe}")
+
+    def get_data_with_features(self, symbol, timeframe):
+        """Get data with features computed (cached per cycle)."""
+        key = f"{symbol}_{timeframe}"
+        
+        # Return cached features if available
+        if key in self.features_cache:
+            return self.features_cache[key]
+        
+        # Get raw data
+        df = self.data_store.get(key)
+        if df is None or df.empty:
+            return None
+        
+        # Compute features and cache
+        fe = self._get_feature_engineer()
+        df_with_features = fe.calculate_features(df.copy())
+        self.features_cache[key] = df_with_features
+        
+        return df_with_features
 
     async def close(self):
         await self.exchange.close()
