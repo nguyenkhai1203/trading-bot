@@ -106,6 +106,21 @@ class TradingBot:
                 if should_cancel:
                     print(f"⚠️ [{self.symbol} {self.timeframe}] Pending order technical invalidation: {cancel_reason}")
                     await self.trader.cancel_pending_order(pos_key, reason=cancel_reason)
+                    # Notify Telegram
+                    mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
+                    safe_symbol = self.symbol.replace('/', '-')
+                    # Get pending order info for message
+                    pending_entry = pending_order.get('price', 0)
+                    pending_pos = self.trader.active_positions.get(pos_key, {})
+                    pending_sl = pending_pos.get('sl', 0)
+                    pending_tp = pending_pos.get('tp', 0)
+                    await send_telegram_message(
+                        f"{mode_label} | ❌ CANCELLED\n"
+                        f"{safe_symbol} | {self.timeframe} | {pending_side}\n"
+                        f"Entry: {pending_entry:.3f}\n"
+                        f"SL: {pending_sl:.3f} | TP: {pending_tp:.3f}\n"
+                        f"Reason: {cancel_reason}"
+                    )
                     return
                 
                 # For LIVE mode: exchange handles fill, just monitor and return
@@ -128,21 +143,26 @@ class TradingBot:
                         limit_price = existing_pos.get('entry_price')
                         side = existing_pos.get('side')
                         
-                        # Show distance to fill
-                        dist_pct = ((limit_price - current_price) / current_price) * 100
-                        
-                        if side == 'BUY':
-                            # BUY limit: waiting for price to DROP
-                            status = f"Need ↓ {abs(dist_pct):.2f}%" if dist_pct < 0 else f"🎯 Ready to fill!"
-                        else:
-                            # SELL limit: waiting for price to RISE  
-                            status = f"Need ↑ {abs(dist_pct):.2f}%" if dist_pct > 0 else f"🎯 Ready to fill!"
-                        
-                        print(f"⏳ [{self.symbol} {self.timeframe}] PENDING {side} @ {limit_price:.3f} | Now: {current_price:.3f} | {status}")
+                        print(f"⏳ [{self.symbol} {self.timeframe}] PENDING {side} @ {limit_price:.3f} | Now: {current_price:.3f}")
                         return
-                    # If filled, reload position data
+                    # If filled, reload position data and notify
                     existing_pos = self.trader.active_positions.get(pos_key)
                     pos_status = existing_pos.get('status', 'filled')
+                    # Notify Telegram that limit order filled
+                    mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
+                    safe_symbol = self.symbol.replace('/', '-')
+                    side = existing_pos.get('side')
+                    leverage = existing_pos.get('leverage', 10)
+                    limit_price = existing_pos.get('entry_price')
+                    sl = existing_pos.get('sl')
+                    tp = existing_pos.get('tp')
+                    await send_telegram_message(
+                        f"{mode_label} | ✅ FILLED\n"
+                        f"{safe_symbol} | {self.timeframe} | {side} x{leverage}\n"
+                        f"Entry: {limit_price:.3f}\n"
+                        f"SL: {sl:.3f} | TP: {tp:.3f}\n"
+                        f"PnL: 0.00%"
+                    )
                 
                 # Skip SL/TP monitoring for pending orders
                 if pos_status == 'pending':
@@ -198,10 +218,12 @@ class TradingBot:
                     pnl_icon = "🟢" if pnl_pct > 0 else "🔴"
                     
                     mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
+                    safe_symbol = self.symbol.replace('/', '-')
                     msg = (
-                        f"{mode_label} CLOSED {pnl_icon}\n"
-                        f"**[{self.symbol}]** {side} x{leverage}\n"
-                        f"{exit_reason}\n"
+                        f"{mode_label} | {pnl_icon} CLOSED\n"
+                        f"{safe_symbol} | {self.timeframe} | {side} x{leverage}\n"
+                        f"Entry: {entry_price:.3f} → {current_price:.3f}\n"
+                        f"SL: {sl:.3f} | TP: {tp:.3f}\n"
                         f"PnL: {pnl_pct:+.2f}% | ${pnl_usd:+.2f}"
                     )
                     print(msg)
@@ -411,23 +433,19 @@ class TradingBot:
                         
                         if res:
                             mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
-                            order_label = "LIMIT" if order_type == 'limit' else "MARKET"
-                            # Format margin display
-                            if target_cost is not None:
-                                margin_display = f"${target_cost}"
+                            # Status: PENDING for limit, FILLED for market
+                            if order_type == 'limit':
+                                status_label = "📌 PENDING"
                             else:
-                                margin_display = f"{target_risk*100:.1f}% risk"
+                                status_label = "✅ FILLED"
                             # Escape symbol for Telegram (replace / with -)
                             safe_symbol = self.symbol.replace('/', '-')
-                            # Dynamic qty decimals based on price
-                            qty_fmt = f"{qty:.6f}" if entry_price > 1000 else f"{qty:.3f}"
                             msg = (
-                                f"{mode_label} 🚀 {order_label}\n"
-                                f"*{safe_symbol} {side} x{target_lev}*\n"
-                                f"Qty: {qty_fmt}\n"
+                                f"{mode_label} | {status_label}\n"
+                                f"{safe_symbol} | {self.timeframe} | {side} x{target_lev}\n"
                                 f"Entry: {entry_price:.3f}\n"
                                 f"SL: {sl:.3f} | TP: {tp:.3f}\n"
-                                f"Score: {score:.1f} | Margin: {margin_display}"
+                                f"PnL: 0.00%"
                             )
                             print(msg)
                             await send_telegram_message(msg)
