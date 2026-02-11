@@ -3,6 +3,8 @@
 This guide describes how to use the bot for different purposes and scenarios.
 
 ## 📋 Scenarios
+.\.venv\Scripts\Activate.ps1
+python .\src\bot.py
 
 ### 1. 🔍 Strategy Optimization (Daily/Weekly)
 Use this to find the best signal weights, Stop Loss, and Take Profit for every symbol.

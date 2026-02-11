@@ -596,6 +596,14 @@ class Trader:
         except Exception as e:
             self.logger.error(f"Failed to cancel orders: {e}")
 
+    def get_active_positions(self):
+        """Trả về dict của active positions."""
+        return self.active_positions
+
+    def get_pending_orders(self):
+        """Trả về dict của pending orders."""
+        return self.pending_orders
+
 if __name__ == "__main__":
     import asyncio
     class MockExchange:

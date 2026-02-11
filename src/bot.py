@@ -174,11 +174,11 @@ class TradingBot:
                 leverage = existing_pos.get('leverage', 10)
                 entry_price = existing_pos.get('entry_price', current_price)
                 
-                # Calculate unrealized PnL for monitoring
+                # Calculate unrealized PnL for monitoring (with leverage)
                 if side == 'BUY':
-                    unrealized_pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                    unrealized_pnl_pct = ((current_price - entry_price) / entry_price) * 100 * leverage
                 else:  # SELL
-                    unrealized_pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                    unrealized_pnl_pct = ((entry_price - current_price) / entry_price) * 100 * leverage
                 
                 pnl_color = "🟢" if unrealized_pnl_pct > 0 else "🔴"
                 status_icon = "📍" if pos_status == 'filled' else "⏳"
@@ -204,17 +204,19 @@ class TradingBot:
                         exit_reason = f"TAKE PROFIT hit at {current_price}"
 
                 if exit_hit:
-                    # Calculate PnL
+                    # Calculate PnL (with leverage)
                     entry_price = existing_pos.get('entry_price', current_price)
                     qty = existing_pos.get('qty', 0)
                     leverage = existing_pos.get('leverage', 3)
                     
                     if side == 'BUY':
-                        pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                        pnl_pct = ((current_price - entry_price) / entry_price) * 100 * leverage
                     else:
-                        pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                        pnl_pct = ((entry_price - current_price) / entry_price) * 100 * leverage
                     
-                    pnl_usd = (pnl_pct / 100) * qty * entry_price
+                    # USD P&L based on actual notional change (not multiplied by leverage again)
+                    notional = qty * entry_price
+                    pnl_usd = (pnl_pct / 100) * notional / leverage
                     pnl_icon = "🟢" if pnl_pct > 0 else "🔴"
                     
                     mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
