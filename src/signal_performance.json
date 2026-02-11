@@ -11,6 +11,343 @@
       ],
       "result": "LOSS",
       "pnl_pct": -1.2622956323228176
+    },
+    {
+      "timestamp": "2026-02-11T11:21:49.317113",
+      "symbol": "TAO/USDT",
+      "timeframe": "30m",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "EMA_9_lt_21"
+      ],
+      "result": "WIN",
+      "pnl_pct": 36.87560466418856
+    },
+    {
+      "timestamp": "2026-02-11T12:30:30.650088",
+      "symbol": "NEAR/USDT",
+      "timeframe": "1d",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "EMA_9_lt_21",
+        "MACD_lt_signal"
+      ],
+      "result": "WIN",
+      "pnl_pct": 20.000000000000018
+    },
+    {
+      "timestamp": "2026-02-11T12:45:32.973887",
+      "symbol": "JUP/USDT",
+      "timeframe": "1h",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "EMA_9_lt_21"
+      ],
+      "result": "WIN",
+      "pnl_pct": 22.068965517241402
+    },
+    {
+      "timestamp": "2026-02-11T12:52:15.276052",
+      "symbol": "SEI/USDT",
+      "timeframe": "1h",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "EMA_9_lt_21",
+        "RSI_7_lt_50"
+      ],
+      "result": "WIN",
+      "pnl_pct": 32.876712328767155
+    },
+    {
+      "timestamp": "2026-02-11T14:24:31.726644",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "RSI_14_oversold",
+        "EMA9_EMA21_cross_up"
+      ],
+      "result": "WIN",
+      "pnl_pct": 2.5
+    },
+    {
+      "timestamp": "2026-02-11T14:24:31.727207",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "RSI_14_overbought",
+        "MACD_cross_down"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.8
+    },
+    {
+      "timestamp": "2026-02-11T14:24:31.727869",
+      "symbol": "SOL/USDT",
+      "timeframe": "15m",
+      "side": "BUY",
+      "signals": [
+        "Stochastic_oversold",
+        "BB_lower_touch"
+      ],
+      "result": "WIN",
+      "pnl_pct": 1.9
+    },
+    {
+      "timestamp": "2026-02-11T14:24:31.737482",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -2.0
+    },
+    {
+      "timestamp": "2026-02-11T14:24:31.738186",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.5
+    },
+    {
+      "timestamp": "2026-02-11T14:24:42.463687",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "RSI_14_oversold",
+        "EMA9_EMA21_cross_up"
+      ],
+      "result": "WIN",
+      "pnl_pct": 2.5
+    },
+    {
+      "timestamp": "2026-02-11T14:24:42.464673",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "RSI_14_overbought",
+        "MACD_cross_down"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.8
+    },
+    {
+      "timestamp": "2026-02-11T14:24:42.466020",
+      "symbol": "SOL/USDT",
+      "timeframe": "15m",
+      "side": "BUY",
+      "signals": [
+        "Stochastic_oversold",
+        "BB_lower_touch"
+      ],
+      "result": "WIN",
+      "pnl_pct": 1.9
+    },
+    {
+      "timestamp": "2026-02-11T14:24:42.478227",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -2.0
+    },
+    {
+      "timestamp": "2026-02-11T14:24:42.479293",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.5
+    },
+    {
+      "timestamp": "2026-02-11T14:25:25.732042",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "RSI_14_oversold",
+        "EMA9_EMA21_cross_up"
+      ],
+      "result": "WIN",
+      "pnl_pct": 2.5
+    },
+    {
+      "timestamp": "2026-02-11T14:25:25.732969",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "RSI_14_overbought",
+        "MACD_cross_down"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.8
+    },
+    {
+      "timestamp": "2026-02-11T14:25:25.733832",
+      "symbol": "SOL/USDT",
+      "timeframe": "15m",
+      "side": "BUY",
+      "signals": [
+        "Stochastic_oversold",
+        "BB_lower_touch"
+      ],
+      "result": "WIN",
+      "pnl_pct": 1.9
+    },
+    {
+      "timestamp": "2026-02-11T14:25:25.744036",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -2.0
+    },
+    {
+      "timestamp": "2026-02-11T14:25:25.744925",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.5
+    },
+    {
+      "timestamp": "2026-02-11T14:25:25.745892",
+      "symbol": "SOL/USDT",
+      "timeframe": "15m",
+      "side": "BUY",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "WIN",
+      "pnl_pct": 3.0
+    },
+    {
+      "timestamp": "2026-02-11T14:25:25.746767",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "SELL",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.0
+    },
+    {
+      "timestamp": "2026-02-11T15:07:02.281600",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "RSI_14_oversold",
+        "EMA9_EMA21_cross_up"
+      ],
+      "result": "WIN",
+      "pnl_pct": 2.5
+    },
+    {
+      "timestamp": "2026-02-11T15:07:02.282533",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "RSI_14_overbought",
+        "MACD_cross_down"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.8
+    },
+    {
+      "timestamp": "2026-02-11T15:07:02.283448",
+      "symbol": "SOL/USDT",
+      "timeframe": "15m",
+      "side": "BUY",
+      "signals": [
+        "Stochastic_oversold",
+        "BB_lower_touch"
+      ],
+      "result": "WIN",
+      "pnl_pct": 1.9
+    },
+    {
+      "timestamp": "2026-02-11T15:07:02.292806",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -2.0
+    },
+    {
+      "timestamp": "2026-02-11T15:07:02.293867",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.5
+    },
+    {
+      "timestamp": "2026-02-11T15:07:02.294972",
+      "symbol": "SOL/USDT",
+      "timeframe": "15m",
+      "side": "BUY",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "WIN",
+      "pnl_pct": 3.0
+    },
+    {
+      "timestamp": "2026-02-11T15:07:02.295858",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "SELL",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.0
+    },
+    {
+      "timestamp": "2026-02-11T15:39:55.970114",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "WIN",
+      "pnl_pct": 338.3679999999999
     }
   ],
   "signal_stats": {
@@ -28,6 +365,130 @@
       "losses": 1,
       "recent_results": [
         0
+      ]
+    },
+    "EMA_50_lt_200": {
+      "total": 4,
+      "wins": 4,
+      "losses": 0,
+      "recent_results": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "EMA_9_lt_21": {
+      "total": 4,
+      "wins": 4,
+      "losses": 0,
+      "recent_results": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "MACD_lt_signal": {
+      "total": 1,
+      "wins": 1,
+      "losses": 0,
+      "recent_results": [
+        1
+      ]
+    },
+    "RSI_7_lt_50": {
+      "total": 1,
+      "wins": 1,
+      "losses": 0,
+      "recent_results": [
+        1
+      ]
+    },
+    "RSI_14_oversold": {
+      "total": 4,
+      "wins": 4,
+      "losses": 0,
+      "recent_results": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "EMA9_EMA21_cross_up": {
+      "total": 4,
+      "wins": 4,
+      "losses": 0,
+      "recent_results": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "RSI_14_overbought": {
+      "total": 4,
+      "wins": 0,
+      "losses": 4,
+      "recent_results": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "MACD_cross_down": {
+      "total": 4,
+      "wins": 0,
+      "losses": 4,
+      "recent_results": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "Stochastic_oversold": {
+      "total": 4,
+      "wins": 4,
+      "losses": 0,
+      "recent_results": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "BB_lower_touch": {
+      "total": 4,
+      "wins": 4,
+      "losses": 0,
+      "recent_results": [
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "test_signal": {
+      "total": 13,
+      "wins": 3,
+      "losses": 10,
+      "recent_results": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        1
       ]
     }
   }

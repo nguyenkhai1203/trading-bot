@@ -4,9 +4,10 @@ import time
 
 def main():
     print("🚀 Starting bots...")
-    trading = subprocess.Popen([sys.executable, 'src/bot.py'])
+    # Use 'py' launcher instead of sys.executable for better compatibility
+    trading = subprocess.Popen(['py', 'src/bot.py'])
     time.sleep(10)  # Wait longer for trading bot to initialize
-    subprocess.run([sys.executable, 'src/telegram_bot.py'])
+    subprocess.run(['py', 'src/telegram_bot.py'])
     trading.terminate()
 
 if __name__ == '__main__':

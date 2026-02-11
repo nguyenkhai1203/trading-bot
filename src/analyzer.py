@@ -390,7 +390,7 @@ class StrategyAnalyzer:
             Dict of updated configs {symbol_tf: new_config}
         """
         print(f"\n{'='*50}")
-        print(f"🔄 MINI-ANALYZER: Checking {len(symbols_to_check)} symbols")
+        print(f"[*] MINI-ANALYZER: Checking {len(symbols_to_check)} symbols")
         print(f"{'='*50}\n")
         
         start_time = time.time()
@@ -492,13 +492,13 @@ class StrategyAnalyzer:
                         enabled=True
                     )
                     
-                    print(f"    ✅ UPDATED: PnL ${current_pnl:.0f} → ${best_result['pnl']:.0f} (+{improvement*100:.0f}%)")
+                    print(f"    [OK] UPDATED: PnL ${current_pnl:.0f} -> ${best_result['pnl']:.0f} (+{improvement*100:.0f}%)")
                 else:
-                    print(f"    ⏸️ No significant improvement (current: ${current_pnl:.0f}, new: ${best_result['pnl']:.0f})")
+                    print(f"    [SKIP] No significant improvement (current: ${current_pnl:.0f}, new: ${best_result['pnl']:.0f})")
         
         elapsed = time.time() - start_time
         print(f"\n{'='*50}")
-        print(f"🔄 MINI-ANALYZER COMPLETE: {elapsed:.1f}s")
+        print(f"[COMPLETE] MINI-ANALYZER: {elapsed:.1f}s")
         print(f"   Updated: {len(updates)} configs")
         print(f"{'='*50}\n")
         
@@ -540,7 +540,7 @@ async def run_global_optimization():
                 print(f"  [{i+1}/{len(TRADING_SYMBOLS)}] symbols analyzed...")
     
     step1_time = time.time() - step1_start
-    print(f"  ✓ Step 1 complete: {step1_time:.1f}s")
+    print(f"  [OK] Step 1 complete: {step1_time:.1f}s")
     
     # ========== STEP 2: Parallel Validation ==========
     print("\n[STEP 2/3] Walk-Forward Validation (parallel)...")
@@ -573,7 +573,7 @@ async def run_global_optimization():
         validation_results = [r for r in futures if r is not None]
     
     step2_time = time.time() - step2_start
-    print(f"  ✓ Step 2 complete: {len(validation_results)} validated in {step2_time:.1f}s")
+    print(f"  [OK] Step 2 complete: {len(validation_results)} validated in {step2_time:.1f}s")
     
     # ========== STEP 3: Cross-TF Check & Config Update ==========
     print("\n[STEP 3/3] Cross-TF Validation & Config Update...")

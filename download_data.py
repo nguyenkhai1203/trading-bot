@@ -13,7 +13,7 @@ from datetime import datetime
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-from config import BINANCE_API_KEY, BINANCE_API_SECRET, USE_TESTNET
+from config import BINANCE_API_KEY, BINANCE_API_SECRET
 
 async def download_historical_data(symbol, timeframe, limit=5000):
     """Download OHLCV data for a symbol/timeframe pair."""
@@ -69,10 +69,11 @@ async def download_historical_data(symbol, timeframe, limit=5000):
 
 async def main():
     """Main download routine."""
-    # Major pairs that need data expansion
-    symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
+    # All 25 trading symbols
+    from config import TRADING_SYMBOLS
+    symbols = TRADING_SYMBOLS
     
-    # All timeframes including new 2h & 8h
+    # All 7 timeframes for comprehensive analysis
     timeframes = ['15m', '30m', '1h', '2h', '4h', '8h', '1d']
     
     print("=" * 80)

@@ -25,6 +25,45 @@ class Trader:
             self._locks[symbol] = asyncio.Lock()
         return self._locks[symbol]
 
+    async def _execute_with_timestamp_retry(self, api_call, *args, **kwargs):
+        """Execute exchange API call with timestamp error retry"""
+        max_retries = 3  # Increased from 2
+        for attempt in range(max_retries):
+            try:
+                return await api_call(*args, **kwargs)
+            except Exception as e:
+                error_msg = str(e).lower()
+                # Check for timestamp-related errors (-1021 is Binance timestamp error code)
+                is_timestamp_error = (
+                    "timestamp" in error_msg or 
+                    "-1021" in error_msg or
+                    "ahead of the server" in error_msg
+                )
+                
+                if is_timestamp_error and attempt < max_retries - 1:
+                    print(f"[TIMESTAMP ERROR] Attempt {attempt + 1}/{max_retries}: {str(e)[:100]}")
+                    # Try to resync time
+                    try:
+                        from data_manager import MarketDataManager
+                        manager = MarketDataManager()
+                        await manager.resync_time_if_needed(str(e))
+                        # Add delay before retry
+                        import asyncio
+                        await asyncio.sleep(1)  # 1 second delay
+                        print(f"[RETRY] Retrying API call after time sync...")
+                        continue
+                    except Exception as sync_error:
+                        print(f"[SYNC ERROR] Failed to resync time: {sync_error}")
+                        continue
+                else:
+                    # Log non-timestamp errors or max retries reached
+                    if not is_timestamp_error:
+                        print(f"[API ERROR] Non-timestamp error, not retrying: {str(e)[:100]}")
+                    else:
+                        print(f"[TIMESTAMP ERROR] Max retries reached, giving up: {str(e)[:100]}")
+                    # Re-raise the error
+                    raise e
+
     def _load_positions(self):
         """Loads positions from the JSON file."""
         if os.path.exists(self.positions_file):
@@ -154,7 +193,9 @@ class Trader:
         # 2. Check Exchange (Account Level)
         if not self.dry_run:
             try:
-                positions = await self.exchange.fetch_positions([symbol])
+                positions = await self._execute_with_timestamp_retry(
+                    self.exchange.fetch_positions, [symbol]
+                )
                 for pos in positions:
                     if pos['symbol'] == symbol and float(pos['contracts']) > 0:
                         return True
@@ -172,7 +213,9 @@ class Trader:
 
         try:
             # LIVE Mode: Always check exchange 
-            positions = await self.exchange.fetch_positions([symbol])
+            positions = await self._execute_with_timestamp_retry(
+                self.exchange.fetch_positions, [symbol]
+            )
             found_on_exchange = False
             for pos in positions:
                 if pos['symbol'] == symbol and float(pos['contracts']) > 0:
@@ -252,7 +295,9 @@ class Trader:
 
         try:
             if order_type == 'market':
-                order = await self.exchange.create_order(symbol, order_type, side, qty, params=params)
+                order = await self._execute_with_timestamp_retry(
+                    self.exchange.create_order, symbol, order_type, side, qty, params=params
+                )
                 
                 # Save filled position immediately
                 self.active_positions[pos_key] = {
@@ -274,7 +319,9 @@ class Trader:
                 
             else:
                 # Limit order - place and track as pending
-                order = await self.exchange.create_order(symbol, order_type, side, qty, price, params=params)
+                order = await self._execute_with_timestamp_retry(
+                    self.exchange.create_order, symbol, order_type, side, qty, price, params=params
+                )
                 order_id = order['id']
                 
                 # Save to pending orders (not in active_positions yet)
@@ -292,7 +339,23 @@ class Trader:
                     'entry_confidence': confidence,
                     'timestamp': order.get('timestamp', 0)
                 }
-                
+                # Also save to active_positions with status='pending'
+                self.active_positions[pos_key] = {
+                    "symbol": symbol,
+                    "side": side.upper(),
+                    "qty": round(qty, 3),
+                    "entry_price": round(price, 3) if isinstance(price, (int, float)) else price,
+                    "sl": round(sl, 3) if sl else None,
+                    "tp": round(tp, 3) if tp else None,
+                    "timeframe": timeframe,
+                    "order_type": "limit",
+                    "status": "pending",
+                    "leverage": leverage,
+                    "signals_used": signals,
+                    "entry_confidence": confidence,
+                    "timestamp": order.get('timestamp', 0)
+                }
+                self._save_positions()
                 print(f"📋 Limit order placed: {order_id} | {side} {symbol} @ {price:.3f} (waiting for fill...)")
                 self.logger.info(f"Limit order {order_id} placed, monitoring for fill")
                 
@@ -321,7 +384,9 @@ class Trader:
                 
                 # Fetch order status
                 try:
-                    order_status = await self.exchange.fetch_order(order_id, symbol)
+                    order_status = await self._execute_with_timestamp_retry(
+                        self.exchange.fetch_order, order_id, symbol
+                    )
                     
                     if order_status['status'] == 'closed' or order_status['filled'] == self.pending_orders[pos_key]['qty']:
                         # Order filled!
@@ -385,7 +450,9 @@ class Trader:
         
         try:
             if not self.dry_run and pending:
-                await self.exchange.cancel_order(order_id, symbol)
+                await self._execute_with_timestamp_retry(
+                    self.exchange.cancel_order, order_id, symbol
+                )
             
             # Clean up from both sources
             if pos_key in self.pending_orders:
@@ -541,8 +608,8 @@ class Trader:
         # Live: Close at market
         try:
             close_side = 'sell' if side == 'BUY' else 'buy'
-            order = await self.exchange.create_order(
-                symbol, 'market', close_side, qty,
+            order = await self._execute_with_timestamp_retry(
+                self.exchange.create_order, symbol, 'market', close_side, qty,
                 params={'reduceOnly': True}
             )
             
@@ -579,9 +646,9 @@ class Trader:
         """Sets leverage and margin mode."""
         if self.dry_run: return
         try:
-            await self.exchange.set_leverage(leverage, symbol)
+            await self._execute_with_timestamp_retry(self.exchange.set_leverage, leverage, symbol)
             try:
-                await self.exchange.set_margin_mode('isolated', symbol)
+                await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, 'isolated', symbol)
             except Exception: pass
         except Exception as e:
             self.logger.warning(f"Failed to set mode for {symbol}: {e}")
@@ -592,7 +659,7 @@ class Trader:
             self.logger.info(f"[DRY RUN] Cancelling all orders for {symbol}")
             return
         try:
-            await self.exchange.cancel_all_orders(symbol)
+            await self._execute_with_timestamp_retry(self.exchange.cancel_all_orders, symbol)
         except Exception as e:
             self.logger.error(f"Failed to cancel orders: {e}")
 
@@ -603,6 +670,110 @@ class Trader:
     def get_pending_orders(self):
         """Trả về dict của pending orders."""
         return self.pending_orders
+
+    async def setup_sl_tp_for_pending(self, symbol, timeframe=None):
+        """
+        For all pending limit orders, setup SL/TP conditional orders (Binance Futures).
+        """
+        pos_key = f"{symbol}_{timeframe}" if timeframe else symbol
+        pending = self.pending_orders.get(pos_key)
+        if not pending:
+            print(f"[WARN] No pending order found for {pos_key}")
+            return False
+        
+        qty = pending['qty']
+        side = pending['side']
+        sl = pending['sl']
+        tp = pending['tp']
+        price = pending['price']
+        # Only setup if both SL/TP exist
+        if not sl and not tp:
+            print(f"[WARN] No SL/TP to setup for {pos_key}")
+            return False
+        
+        # Determine close side
+        close_side = 'sell' if side == 'BUY' else 'buy'
+        results = {}
+        try:
+            if sl:
+                sl_order = await self._execute_with_timestamp_retry(
+                    self.exchange.create_order, symbol, 'STOP_MARKET', close_side, qty,
+                    params={
+                        'stopPrice': sl,
+                        'reduceOnly': True
+                    }
+                )
+                results['sl_order'] = sl_order
+                print(f"[SETUP] SL order placed for {symbol} at {sl}")
+            if tp:
+                tp_order = await self._execute_with_timestamp_retry(
+                    self.exchange.create_order, symbol, 'TAKE_PROFIT_MARKET', close_side, qty,
+                    params={
+                        'stopPrice': tp,
+                        'reduceOnly': True
+                    }
+                )
+                results['tp_order'] = tp_order
+                print(f"[SETUP] TP order placed for {symbol} at {tp}")
+            return results
+        except Exception as e:
+            print(f"[ERROR] Failed to setup SL/TP for {pos_key}: {e}")
+            return False
+
+    async def modify_sl_tp(self, symbol, timeframe=None, new_sl=None, new_tp=None):
+        """
+        Modify SL/TP for an existing position by canceling old orders and creating new ones.
+        """
+        pos_key = f"{symbol}_{timeframe}" if timeframe else symbol
+        position = self.active_positions.get(pos_key)
+        if not position:
+            print(f"[WARN] No active position found for {pos_key} to modify SL/TP")
+            return False
+
+        try:
+            # Cancel existing SL/TP orders for this symbol
+            await self.cancel_all_orders(symbol)
+            print(f"[MODIFY] Canceled existing orders for {symbol}")
+
+            # Get position details
+            qty = position['qty']
+            side = position['side']
+            close_side = 'sell' if side == 'BUY' else 'buy'
+
+            # Place new SL order if provided
+            if new_sl:
+                sl_order = await self._execute_with_timestamp_retry(
+                    self.exchange.create_order, symbol, 'STOP_MARKET', close_side, qty,
+                    params={
+                        'stopPrice': new_sl,
+                        'reduceOnly': True
+                    }
+                )
+                print(f"[MODIFY] New SL order placed for {symbol} at {new_sl}")
+
+            # Place new TP order if provided
+            if new_tp:
+                tp_order = await self._execute_with_timestamp_retry(
+                    self.exchange.create_order, symbol, 'TAKE_PROFIT_MARKET', close_side, qty,
+                    params={
+                        'stopPrice': new_tp,
+                        'reduceOnly': True
+                    }
+                )
+                print(f"[MODIFY] New TP order placed for {symbol} at {new_tp}")
+
+            # Update position data
+            if new_sl:
+                position['sl'] = new_sl
+            if new_tp:
+                position['tp'] = new_tp
+            self.active_positions[pos_key] = position
+
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] Failed to modify SL/TP for {pos_key}: {e}")
+            return False
 
 if __name__ == "__main__":
     import asyncio

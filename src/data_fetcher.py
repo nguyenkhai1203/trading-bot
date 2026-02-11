@@ -3,7 +3,7 @@ import asyncio
 import pandas as pd
 import os
 import time
-from config import BINANCE_API_KEY, BINANCE_API_SECRET, USE_TESTNET
+from config import BINANCE_API_KEY, BINANCE_API_SECRET
 
 class DataFetcher:
     def __init__(self, exchange_id='binance', symbol='BTC/USDT', timeframe='1h'):
@@ -35,8 +35,7 @@ class DataFetcher:
 
         exchange = exchange_class(config)
         
-        if USE_TESTNET:
-            exchange.set_sandbox_mode(True)
+        # NOTE: Testnet support is DEPRECATED for Binance Futures - removed sandbox mode
         return exchange
 
     async def fetch_ticker(self):

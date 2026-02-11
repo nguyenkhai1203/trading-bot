@@ -11,7 +11,9 @@ BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
 # Configuration
-USE_TESTNET = os.getenv('USE_TESTNET', 'True').lower() in ('true', '1', 't')
+# NOTE: USE_TESTNET is DEPRECATED - Binance removed Testnet Futures support
+# Bot will now ALWAYS use LIVE exchange (set dry_run=True in bot.py for simulation)
+USE_TESTNET = False  # Deprecated - keep False for Live trading
 
 # Trading Settings
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
@@ -44,13 +46,13 @@ TRADING_SYMBOLS = [
 ]
 
 # Timeframes to run (Concurrent execution)
-# 5 core timeframes with complete data across all 32 symbols
-TRADING_TIMEFRAMES = ['15m', '30m', '1h', '4h', '1d']
+# 7 timeframes for comprehensive multi-timeframe analysis
+TRADING_TIMEFRAMES = ['15m', '30m', '1h', '2h', '4h', '8h', '1d']
 
 # Parallel Processing
 MAX_WORKERS = 8  # ThreadPoolExecutor workers for symbol-level parallelism
 
-LEVERAGE = 10  # Updated: 8-12x range (mid-point)
+LEVERAGE = 8  # Updated: 8-12x range (mid-point)
 RISK_PER_TRADE = 0.05
 STOP_LOSS_PCT = 0.017   # Updated: 5% ROE / 3x Lev ≈ 1.67%
 TAKE_PROFIT_PCT = 0.04  # Updated: 12% ROE / 3x Lev = 4.0%

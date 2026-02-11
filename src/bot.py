@@ -173,7 +173,29 @@ class TradingBot:
                 side = existing_pos.get('side')
                 leverage = existing_pos.get('leverage', 10)
                 entry_price = existing_pos.get('entry_price', current_price)
-                
+
+                # --- AUTO CHECK & UPDATE SL/TP FOR FILLED POSITIONS (LIVE) ---
+                if pos_status == 'filled' and not self.trader.dry_run:
+                    # Calculate expected SL/TP
+                    expected_sl, expected_tp = self.risk_manager.calculate_sl_tp(
+                        entry_price, side,
+                        sl_pct=self.strategy.sl_pct,
+                        tp_pct=self.strategy.tp_pct
+                    )
+                    # If SL/TP missing or different, update
+                    if (not sl or abs(sl - expected_sl) > 1e-6) or (not tp or abs(tp - expected_tp) > 1e-6):
+                        print(f"🛠️ [{self.symbol} {self.timeframe}] Updating SL/TP: SL {sl}→{expected_sl}, TP {tp}→{expected_tp}")
+                        await self.trader.modify_sl_tp(
+                            self.symbol,
+                            timeframe=self.timeframe,
+                            new_sl=expected_sl,
+                            new_tp=expected_tp
+                        )
+                        # Update local position
+                        existing_pos['sl'] = expected_sl
+                        existing_pos['tp'] = expected_tp
+                        self.trader.active_positions[pos_key] = existing_pos
+
                 # Calculate unrealized PnL for monitoring (with leverage)
                 if side == 'BUY':
                     unrealized_pnl_pct = ((current_price - entry_price) / entry_price) * 100 * leverage
@@ -452,6 +474,9 @@ class TradingBot:
                             print(msg)
                             await send_telegram_message(msg)
 
+                        # Setup SL/TP for limit order (LIVE only)
+                        if order_type == 'limit' and not self.trader.dry_run:
+                            await self.trader.setup_sl_tp_for_pending(self.symbol, timeframe=self.timeframe)
 
         except Exception as e:
             self.logger.error(f"Error in bot step {self.symbol}: {e}")
@@ -507,11 +532,16 @@ async def send_periodic_status_report(trader, data_manager):
 
 async def main():
     manager = MarketDataManager()
+    
+    # Sync server time to fix timestamp offset issues
+    print("⏰ Synchronizing with Binance server time...")
+    await manager.sync_server_time()
+    
     bots = []
     
     print("Initializing Bots...")
     # 0. Shared Trader (One instance for all bots to sync positions)
-    trader = Trader(manager.exchange, dry_run=True)
+    trader = Trader(manager.exchange, dry_run=False)  # LIVE MODE ENABLED
 
     # 0.5 Set Isolated Margin Mode (one-time setup)
     if not trader.dry_run:
@@ -660,9 +690,23 @@ async def main():
                         
             return current_bal
         
+        # Track time sync (every 1 hour = 3600 seconds)
+        last_time_sync = 0
+        time_sync_interval = 3600  # 1 hour
+        
         while True:
-            # 0. Check for Auto-Optimization (Twice a day)
             curr_time = time.time()
+            
+            # 0. Periodic Time Sync (every 1 hour)
+            if curr_time - last_time_sync >= time_sync_interval:
+                print("⏰ Periodic time sync with Binance server...")
+                try:
+                    await manager.sync_server_time()
+                    last_time_sync = curr_time
+                except Exception as sync_err:
+                    print(f"Error during time sync: {sync_err}")
+            
+            # 0. Check for Auto-Optimization (Twice a day)
             if curr_time - last_auto_opt >= opt_interval:
                 print("⏰ Scheduled Auto-Optimization triggered...")
                 try:

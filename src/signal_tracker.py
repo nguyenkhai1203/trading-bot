@@ -100,14 +100,14 @@ class SignalTracker:
         self._save()
         
         # Log learning update
-        result_icon = "✅" if result == 'WIN' else "❌"
-        print(f"📊 [LEARN] {result_icon} {symbol} {side}: {', '.join(signals_used[:3]) if signals_used else 'N/A'}... → {result}")
+        result_icon = "[WIN]" if result == 'WIN' else "[LOSS]"
+        print(f"[LEARN] {result_icon} {symbol} {side}: {', '.join(signals_used[:3]) if signals_used else 'N/A'}... -> {result}")
         
         # === ADAPTIVE LEARNING v2.0 ===
         if result == 'WIN':
             # Reset counter on win
             if self.consecutive_losses > 0:
-                print(f"🔄 [LEARN] Win detected, resetting loss counter (was {self.consecutive_losses})")
+                print(f"[LEARN] Win detected, resetting loss counter (was {self.consecutive_losses})")
             self.consecutive_losses = 0
             self.recent_loss_symbols = []
         else:
@@ -116,7 +116,7 @@ class SignalTracker:
             if symbol not in self.recent_loss_symbols:
                 self.recent_loss_symbols.append(symbol)
             
-            print(f"📉 [LEARN] Loss #{self.consecutive_losses} | Symbols: {', '.join(self.recent_loss_symbols)}")
+            print(f"[LEARN] Loss #{self.consecutive_losses} | Symbols: {', '.join(self.recent_loss_symbols)}")
             
             # Trigger analysis if threshold reached
             if self.consecutive_losses >= LOSS_TRIGGER_COUNT:
@@ -125,50 +125,53 @@ class SignalTracker:
     def _trigger_adaptive_check(self, btc_change=None):
         """Trigger adaptive analysis after consecutive losses."""
         print(f"\n{'='*60}")
-        print(f"🔍 [ADAPTIVE] Triggered after {self.consecutive_losses} consecutive losses")
+        print(f"[ADAPTIVE] Triggered after {self.consecutive_losses} consecutive losses")
         print(f"{'='*60}")
         
         # Step 1: Check market condition
         market_status = self.check_market_condition(btc_change)
         
         if market_status == 'crash':
-            print(f"📉 [MARKET] BTC CRASH detected ({btc_change*100:.1f}%)")
-            print(f"⏭️ Skipping analysis - market volatility, not signal fault")
+            print(f"[MARKET] BTC CRASH detected ({btc_change*100:.1f}%)")
+            print(f"[SKIP] Skipping analysis - market volatility, not signal fault")
             self._reset_loss_counter()
             return
         elif market_status == 'pump':
-            print(f"📈 [MARKET] BTC PUMP detected ({btc_change*100:.1f}%)")
-            print(f"⏭️ Skipping analysis - market volatility, not signal fault")
+            print(f"[MARKET] BTC PUMP detected ({btc_change*100:.1f}%)")
+            print(f"[SKIP] Skipping analysis - market volatility, not signal fault")
             self._reset_loss_counter()
             return
         else:
-            print(f"📊 [MARKET] Normal conditions (BTC: {btc_change*100:.1f}% if known)")
+            if btc_change is not None:
+                print(f"[MARKET] Normal conditions (BTC: {btc_change*100:.1f}%)")
+            else:
+                print(f"[MARKET] Normal conditions (BTC change unknown)")
         
         # Step 2: Trigger callbacks for analysis and position adjustment
         symbols_to_analyze = list(self.recent_loss_symbols)
         
         callback_success = True
         if self._analysis_callback:
-            print(f"🔄 [ANALYZE] Running mini-analyzer for: {', '.join(symbols_to_analyze)}")
+            print(f"[ANALYZE] Running mini-analyzer for: {', '.join(symbols_to_analyze)}")
             try:
                 self._analysis_callback(symbols_to_analyze)
             except Exception as e:
-                print(f"❌ [ANALYZE] Error: {e}")
+                print(f"[ERROR] [ANALYZE] Error: {e}")
                 callback_success = False
         
         if self._position_adjust_callback:
-            print(f"⚙️ [ADJUST] Checking open positions...")
+            print(f"[ADJUST] Checking open positions...")
             try:
                 self._position_adjust_callback()
             except Exception as e:
-                print(f"❌ [ADJUST] Error: {e}")
+                print(f"[ERROR] [ADJUST] Error: {e}")
                 callback_success = False
         
         # Only reset if callbacks succeeded, otherwise keep tracking
         if callback_success:
             self._reset_loss_counter()
         else:
-            print(f"⚠️ [ADAPTIVE] Not resetting counter due to callback error")
+            print(f"[WARN] [ADAPTIVE] Not resetting counter due to callback error")
         print(f"{'='*60}\n")
     
     def _reset_loss_counter(self):
@@ -270,10 +273,10 @@ class SignalTracker:
             adjusted[signal] = weight * multiplier
             
             if multiplier != 1.0:
-                changes.append(f"{signal}: {weight:.2f} → {adjusted[signal]:.2f}")
+                changes.append(f"{signal}: {weight:.2f} -> {adjusted[signal]:.2f}")
         
         if changes:
-            print(f"📈 [ADAPTIVE] Adjusted {len(changes)} weights based on performance")
+            print(f"[ADAPTIVE] Adjusted {len(changes)} weights based on performance")
         
         return adjusted
     
@@ -316,7 +319,7 @@ class SignalTracker:
     def print_summary(self):
         """Print performance summary."""
         print("\n" + "="*60)
-        print("📊 SIGNAL PERFORMANCE SUMMARY")
+        print("SIGNAL PERFORMANCE SUMMARY")
         print("="*60)
         
         stats = self.data.get('signal_stats', {})
@@ -340,7 +343,7 @@ class SignalTracker:
             recent = data['recent_results']
             recent_wr = sum(recent) / len(recent) * 100 if recent else 0
             
-            icon = "🟢" if recent_wr >= 60 else "🔴" if recent_wr < 40 else "🟡"
+            icon = "[+]" if recent_wr >= 60 else "[-]" if recent_wr < 40 else "[=]"
             print(f"{signal:<30} {total:>6} {all_wr:>7.0f}% {icon}{recent_wr:>6.0f}%")
         
         print("="*60 + "\n")

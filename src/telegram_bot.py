@@ -18,7 +18,7 @@ import requests
 load_dotenv()
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from config import BINANCE_API_KEY, BINANCE_API_SECRET, USE_TESTNET
+from config import BINANCE_API_KEY, BINANCE_API_SECRET
 from execution import Trader
 from data_manager import MarketDataManager
 
@@ -34,8 +34,7 @@ exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY else None,
     'secret': BINANCE_API_SECRET if BINANCE_API_SECRET and 'your_' not in BINANCE_API_SECRET else None,
 })
-if USE_TESTNET:
-    exchange.set_sandbox_mode(True)
+# NOTE: Testnet support is DEPRECATED for Binance Futures - removed sandbox mode
 
 trader = Trader(exchange, dry_run=True)
 data_manager = MarketDataManager()
@@ -43,12 +42,50 @@ data_manager = MarketDataManager()
 # ============== STATUS MESSAGE ==============
 async def get_status_message() -> str:
     """Generate beautiful status message with P&L"""
-    positions = trader.get_active_positions()
-    pending = trader.get_pending_orders()
+    # Read positions from the shared JSON file - use absolute path for reliability
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    positions_file = os.path.join(script_dir, 'positions.json')
     
-    active = {k: v for k, v in positions.items() if v.get('status') == 'filled'}
-    pending_pos = {k: v for k, v in positions.items() if v.get('status') == 'pending'}
-    pending_pos.update(pending)
+    # Try multiple times in case of file access conflicts
+    all_positions = {}
+    max_retries = 5
+    
+    # Log to file for debugging
+    log_file = os.path.join(script_dir, 'telegram_debug.log')
+    with open(log_file, 'a', encoding='utf-8') as log:
+        log.write(f"{datetime.now()}: Starting position read attempt\n")
+    
+    for attempt in range(max_retries):
+        try:
+            if os.path.exists(positions_file) and os.path.getsize(positions_file) > 0:
+                with open(positions_file, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if content:  # Check if file has content
+                        all_positions = json.loads(content)
+                        
+                        with open(log_file, 'a', encoding='utf-8') as log:
+                            log.write(f"{datetime.now()}: SUCCESS - Loaded {len(all_positions)} positions\n")
+                        break  # Success, exit retry loop
+            else:
+                # File doesn't exist or is empty
+                all_positions = {}
+                with open(log_file, 'a', encoding='utf-8') as log:
+                    log.write(f"{datetime.now()}: File empty or missing\n")
+                break
+        except (FileNotFoundError, json.JSONDecodeError, IOError, UnicodeDecodeError) as e:
+            if attempt == max_retries - 1:  # Last attempt
+                with open(log_file, 'a', encoding='utf-8') as log:
+                    log.write(f"{datetime.now()}: FAILED after {max_retries} attempts: {e}\n")
+                all_positions = {}  # Use empty dict as fallback
+            else:
+                with open(log_file, 'a', encoding='utf-8') as log:
+                    log.write(f"{datetime.now()}: Attempt {attempt + 1} failed: {e}\n")
+                import asyncio
+                await asyncio.sleep(0.2)  # Longer pause before retry
+    
+    # Separate active and pending positions
+    active = {k: v for k, v in all_positions.items() if v.get('status') == 'filled'}
+    pending_pos = {k: v for k, v in all_positions.items() if v.get('status') == 'pending'}
     
     now = datetime.now().strftime('%d/%m %H:%M')
     lines = [f"📊 *TRADING STATUS* - {now}", ""]
