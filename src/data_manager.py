@@ -42,9 +42,10 @@ class MarketDataManager(BaseExchangeClient):
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'future', 
-                'adjustForTimeDifference': True, # Re-enable CCXT native adjustment
+                'adjustForTimeDifference': False, # Disabled: Using manual offset in BaseExchangeClient
                 'recvWindow': 60000,             # 60s max safety window
-                'fetchMarkets': True
+                'fetchMarkets': True,
+                'warnOnFetchOpenOrdersWithoutSymbol': False # Suppress warning for global fetch
             }
         }
         if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY and len(BINANCE_API_KEY) > 10:

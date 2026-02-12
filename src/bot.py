@@ -60,30 +60,15 @@ class TradingBot:
             current_price = df.iloc[-1]['close']
 
             # 0. GLOBAL CONFLICT CHECK (Single Position Rule)
-            # Check if this symbol already has an active position/order in ANY timeframe
-            # ex: if LINK/USDT_8h exists, LINK/USDT_30m should not trade
-            active_timeframe = None
-            for key, pos in self.trader.active_positions.items():
-                if pos.get('symbol') == self.symbol:
-                     # Identify if it's a different timeframe
-                     tf = pos.get('timeframe')
-                     if tf != self.timeframe:
-                         active_timeframe = tf
-                         break
-            
-            # Also check pending orders (in-memory)
-            if not active_timeframe:
-                for key, pending in self.trader.pending_orders.items():
-                    if pending.get('symbol') == self.symbol:
-                        tf = pending.get('timeframe')
-                        if tf != self.timeframe:
-                            active_timeframe = tf
-                            break
-            
-            if active_timeframe:
-                # Log usage (debug level to avoid spam) but DO NOT PROCESS signal
-                # self.logger.debug(f"Skipping {self.symbol} {self.timeframe}: Active position in {active_timeframe}")
-                return
+            # Check if this symbol already has an active position/order on exchange or locally
+            pos_key = f"{self.symbol}_{self.timeframe}"
+            already_in_symbol = await self.trader.has_any_symbol_position(self.symbol)
+            if already_in_symbol:
+                # If we have a position/order for THIS timeframe, we proceed to regular logic
+                # If we DON'T have a record for this timeframe, but has_any_symbol_position is True, 
+                # then it belongs to another timeframe. Block it.
+                if pos_key not in self.trader.active_positions and pos_key not in self.trader.pending_orders:
+                    return
 
             # Check if we already have a position for this symbol/timeframe
             pos_key = f"{self.symbol}_{self.timeframe}"
@@ -644,6 +629,10 @@ async def main():
         await manager.set_isolated_margin_mode(TRADING_SYMBOLS)
         # Also ensure trader enforces isolated/leverage for configured symbols
         await trader.enforce_isolated_on_startup(TRADING_SYMBOLS)
+        
+        # 0.6 DEEP SYNC: Initial reconciliation before bots start
+        print("🔄 [LIVE] Synchronizing all positions with exchange...")
+        await trader.reconcile_positions()
     else:
         print("🧪 [SIMULATION] Dry Run Mode active. Private API calls skipped.")
 

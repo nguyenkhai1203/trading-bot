@@ -16,20 +16,28 @@ class BaseExchangeClient:
     def __init__(self, exchange):
         self.exchange = exchange
         self._time_synced = False
+        self._server_offset_ms = 0 # Manual offset: serverTime - localTime
         
     async def sync_server_time(self) -> bool:
-        """Sync local time with exchange server using CCXT native method."""
+        """Sync local time with exchange server manually to ensure absolute accuracy."""
         try:
-            print(f"[TIME SYNC] Synchronizing via CCXT load_time_difference()...")
-            # CCXT's load_time_difference handles server_time - local_time internally
-            # It also sets exchange.options['timeDifference']
+            print(f"[TIME SYNC] Fetching raw server time from exchange...")
+            server_time = await self.exchange.fetch_time()
+            local_time = int(time.time() * 1000)
+            
+            # Calculate manual offset
+            self._server_offset_ms = server_time - local_time
+            
+            # Also sync CCXT for its internal methods
             await self.exchange.load_time_difference()
             
             # Ensure recvWindow is large (60s is Binance max)
             self.exchange.options['recvWindow'] = 60000 
             
-            print(f"[OK] CCXT Time Sync Complete!")
-            print(f"     Calculated Offset: {self.exchange.options.get('timeDifference', 0)}ms | recvWindow: 60000ms")
+            print(f"[OK] Time Sync Complete!")
+            print(f"     Manual Offset: {self._server_offset_ms}ms | CCXT Offset: {self.exchange.options.get('timeDifference', 0)}ms")
+            print(f"     Safety Window (recvWindow): 60000ms")
+            
             self._time_synced = True
             return True
         except Exception as e:
@@ -37,9 +45,12 @@ class BaseExchangeClient:
             return False
 
     def get_synced_timestamp(self) -> int:
-        """Get current timestamp synchronized with exchange."""
-        # CCXT's milliseconds() already includes the timeDifference if adjustForTimeDifference is True
-        return self.exchange.milliseconds()
+        """Get current timestamp synchronized with exchange with safety padding."""
+        # Use manual offset for absolute control
+        local_now = int(time.time() * 1000)
+        # We subtract 5000ms safety padding to ensure we are NEVER "ahead" of server
+        # (Binance is strict about future timestamps). recvWindow (60s) handles the lag.
+        return local_now + self._server_offset_ms - 5000
     
     async def resync_time_if_needed(self, error_msg: str = "") -> bool:
         """Re-sync time if timestamp error detected."""

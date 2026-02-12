@@ -37,6 +37,21 @@ class Trader:
         self._position_locks = {}  # Per-position locks for SL/TP recreation
         self._sl_cooldowns = self._load_cooldowns()  # Persist cooldowns across restarts
         self.default_leverage = LEVERAGE
+        self._missing_order_counts = {} # { order_id: missing_cycle_count }
+        self._pos_action_timestamps = {} # { pos_key_action: timestamp_ms } to prevent rapid spam
+        
+        # CLEANUP LEGACY KEYS: Remove or migrate keys with special suffixes
+        legacy_keys = [k for k in self.active_positions.keys() if '_sync' in k or '_adopted' in k]
+        if legacy_keys:
+            self.logger.info(f"[CLEANUP] Found {len(legacy_keys)} legacy position keys. Migrating...")
+            for old_key in legacy_keys:
+                pos = self.active_positions.pop(old_key)
+                symbol = pos.get('symbol')
+                if symbol:
+                    # Rename to standard _adopted for consistency
+                    new_key = f"{symbol}_adopted"
+                    self.active_positions[new_key] = pos
+            self._save_positions()
 
     def _get_lock(self, symbol):
         """Get or create a lock for a given symbol (for entry operations)."""
@@ -136,6 +151,61 @@ class Trader:
                             os.remove(tmp)
                     except:
                         pass
+
+    async def _verify_or_clear_id(self, pos_key, order_id, symbol, orders_in_snap):
+        """Authoritative check for order existence with indexing grace period."""
+        if not order_id: return None
+        
+        # 1. Fast path: Check global snapshot
+        # Check ALL possible ID fields: id, orderId, algoId, clientAlgoId
+        if any(str(o.get('id') or o.get('orderId') or o.get('algoId') or o.get('clientAlgoId')) == str(order_id) for o in orders_in_snap or []):
+            self._missing_order_counts[order_id] = 0
+            return order_id
+            
+        # 2. Authoritative path: Targeted fetch
+        try:
+            o_info = await self._execute_with_timestamp_retry(self.exchange.fetch_order, order_id, symbol)
+            status = o_info.get('status', '').lower()
+            if status in ['open', 'untouched', 'new', 'partially_filled']:
+                self._missing_order_counts[order_id] = 0
+                return order_id
+            else:
+                self.logger.info(f"[SYNC] Order {order_id} is {status}. Clearing from local state.")
+                if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
+                return None
+        except Exception as e:
+            err_str = str(e).lower()
+            
+            # FALLBACK: If standard fetch failed, try Algo Orders endpoint if it's a conditional order
+            if 'not found' in err_str or 'order does not exist' in err_str:
+                try:
+                    # Check Algo orders directly for this symbol
+                    algo_orders = await self._execute_with_timestamp_retry(self.exchange.fapiPrivateGetOpenAlgoOrders, {'symbol': self._normalize_symbol(symbol)})
+                    if any(str(o.get('id')) == str(order_id) for o in algo_orders):
+                        self._missing_order_counts[order_id] = 0
+                        return order_id
+                except Exception: pass # If algo check fails, proceed to grace period
+
+                # 3. Grace Period path: Handle exchange indexing lag
+                count = self._missing_order_counts.get(order_id, 0) + 1
+                self._missing_order_counts[order_id] = count
+                if count < 3:
+                     self.logger.warning(f"[SYNC] {symbol} order {order_id} NOT FOUND (Cycle {count}/3). Keeping in Grace Period...")
+                     return order_id # Assume ALIVE during grace period
+                else:
+                     self.logger.warning(f"[SYNC] {symbol} order {order_id} NOT FOUND after 3 cycles. Wiping ID.")
+                     if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
+                     return None
+            else:
+                # Network error or other API issue: Keep for safety
+                self.logger.warning(f"[SYNC] Transient error verifying {order_id} for {symbol}: {e}")
+                return order_id 
+
+    def _normalize_symbol(self, symbol):
+        """Standardize symbol format for reliable comparison (ARBUSDT style)."""
+        if not symbol: return ""
+        # Remove :USDT suffix (CCXT linear) then remove slashes
+        return symbol.split(':')[0].replace('/', '').upper()
 
     def _clamp_leverage(self, lev):
         """Clamp leverage to allowed range (default 8-12)."""
@@ -256,19 +326,20 @@ class Trader:
 
     async def has_any_symbol_position(self, symbol):
         """Checks if ANY position for the symbol exists (across any timeframe)."""
-        # 1. Check local storage for any key starting with symbol_
-        for key in self.active_positions.keys():
-            if key.startswith(f"{symbol}_"):
+        norm_target = self._normalize_symbol(symbol)
+        
+        # 1. Check local storage (normalized)
+        for p in self.active_positions.values():
+            if self._normalize_symbol(p.get('symbol')) == norm_target:
                 return True
         
         # 2. Check Exchange (Account Level)
         if not self.dry_run:
             try:
-                positions = await self._execute_with_timestamp_retry(
-                    self.exchange.fetch_positions, [symbol]
-                )
+                # Use standard fetch_positions and filter locally for robustness
+                positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
                 for pos in positions:
-                    if pos['symbol'] == symbol and float(pos['contracts']) > 0:
+                    if self._normalize_symbol(pos.get('symbol')) == norm_target and float(pos.get('contracts', 0)) > 0:
                         return True
             except Exception as e:
                 self.logger.error(f"Error checking exchange for symbol {symbol}: {e}")
@@ -1101,7 +1172,7 @@ class Trader:
         try:
             # Try REST calls to Binance Futures first (signed requests)
             try:
-                await self._set_margin_type_rest(symbol, 'ISOLATED')
+                await self._execute_with_timestamp_retry(self._set_margin_type_rest, symbol, 'ISOLATED')
             except Exception as e:
                 self.logger.debug(f"REST set_margin_type failed for {symbol}: {e}")
                 # Fallback to CCXT
@@ -1119,29 +1190,19 @@ class Trader:
 
             try:
                 safe_lev = self._safe_int(leverage, default=10)
-                await self._set_leverage_rest(symbol, safe_lev)
+                await self._execute_with_timestamp_retry(self._set_leverage_rest, symbol, safe_lev)
             except Exception as e:
                 err_str = str(e).lower()
                 # Handle Binance Error -4161: Leverage reduction not supported with open positions
                 if "-4161" in err_str or "leverage reduction is not supported" in err_str:
-                     # Fetch ACTUAL leverage and use it
+                    server_lev = 0
                     try:
                         lev_info = await self.exchange.fetch_leverage(symbol)
-                        actual_lev = int(lev_info.get('leverage', safe_lev))
-                        print(f"ℹ️  {symbol}: Using existing leverage {actual_lev}x (Cannot reduce while position open)")
-                        self.logger.info(f"{symbol} leverage stuck at {actual_lev}x due to open position")
-                        # You might want to update local state here if possible, 
-                        # but this method is usually called during setup.
-                        return 
-                    except Exception as fetch_err:
-                        self.logger.warning(f"Failed to fetch actual leverage for {symbol} after set failure: {fetch_err}")
-                
-                self.logger.debug(f"REST set_leverage failed for {symbol}: {e}")
-                
-                try:
-                    await self._execute_with_timestamp_retry(self.exchange.set_leverage, leverage, symbol)
-                except Exception as e:
-                    self.logger.warning(f"Failed to set leverage {leverage}x for {symbol}: {e}")
+                        server_lev = int(lev_info.get('leverage', 0))
+                    except: pass
+                    print(f"⚠️  {symbol}: Leverage reduction blocked (Open Position). Kept at {server_lev}x")
+                else:
+                    self.logger.warning(f"Failed to set leverage for {symbol}: {e}")
         except Exception as e:
             self.logger.error(f"Error ensuring isolated/leverage for {symbol}: {e}")
 
@@ -1155,6 +1216,7 @@ class Trader:
         params = {
             'symbol': symbol.replace('/', ''),
             'marginType': margin_type,
+            'recvWindow': 60000,
             'timestamp': self.data_manager.get_synced_timestamp()
         }
         return await self._binance_signed_post(base + path, params)
@@ -1169,6 +1231,7 @@ class Trader:
         params = {
             'symbol': symbol.replace('/', ''),
             'leverage': self._safe_int(leverage, default=10),
+            'recvWindow': 60000,
             'timestamp': self.data_manager.get_synced_timestamp()
         }
         return await self._binance_signed_post(base + path, params)
@@ -1185,7 +1248,8 @@ class Trader:
             headers = {'X-MBX-APIKEY': BINANCE_API_KEY}
             full = f"{u}?{query}&signature={signature}"
             r = requests.post(full, headers=headers, timeout=10)
-            r.raise_for_status()
+            if r.status_code >= 400:
+                raise Exception(f"Binance API Error {r.status_code}: {r.text}")
             return r.json()
 
         import asyncio
@@ -1207,6 +1271,7 @@ class Trader:
 
         body = {
             'batchOrders': json.dumps(orders),
+            'recvWindow': 60000,
             'timestamp': self.data_manager.get_synced_timestamp()
         }
 
@@ -1216,7 +1281,8 @@ class Trader:
             headers = {'X-MBX-APIKEY': BINANCE_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded'}
             full = f"{u}?{query}&signature={signature}"
             r = requests.post(full, headers=headers, timeout=15)
-            r.raise_for_status()
+            if r.status_code >= 400:
+                raise Exception(f"Binance Batch API Error {r.status_code}: {r.text}")
             return r.json()
 
         import asyncio
@@ -1322,35 +1388,57 @@ class Trader:
         """
         summary = {'recovered_order_ids': 0, 'created_tp_sl': 0, 'errors': []}
         
-        # 1. FETCH ALL ACTIVE POSITIONS FROM EXCHANGE (Deep Sync)
+        # 1. FETCH GLOBAL EXCHANGE STATE (Atomic snapshot)
         fetch_success = False
         ex_positions = []
         active_ex_pos = {}
+        all_exchange_orders = [] # Shared global order book
         
         try:
+            # Fetch ALL positions
             ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
-            active_ex_pos = {p['symbol']: p for p in ex_positions if float(p.get('contracts', 0)) > 0}
+            active_ex_pos = {p['symbol']: p for p in ex_positions if self._safe_float(p.get('contracts'), 0) > 0}
+            
+            # 1. Fetch TOTAL Open Orders (Standard + Algo)
+            try:
+                # Parallel fetch for speed
+                std_orders_task = self._execute_with_timestamp_retry(self.exchange.fetch_open_orders)
+                algo_orders_task = self._execute_with_timestamp_retry(self.exchange.fapiPrivateGetOpenAlgoOrders)
+                
+                std_orders, algo_orders = await asyncio.gather(std_orders_task, algo_orders_task, return_exceptions=True)
+                
+                all_exchange_orders = []
+                if isinstance(std_orders, list): all_exchange_orders.extend(std_orders)
+                if isinstance(algo_orders, list): 
+                    self.logger.info(f"[SYNC] Found {len(algo_orders)} Algo orders")
+                    all_exchange_orders.extend(algo_orders)
+                
+                if all_exchange_orders:
+                    self.logger.info(f"[SYNC] Total visibility: {len(all_exchange_orders)} orders (Std + Algo)")
+            except Exception as e:
+                self.logger.warning(f"[SYNC] Total visibility fetch failed: {e}. Falling back to per-symbol fetch later.")
+                all_exchange_orders = None
+
             fetch_success = True
         except Exception as e:
-            self.logger.error(f"Failed to fetch positions from exchange during sync: {e}")
-            # CRITICAL: If fetch fails, we MUST NOT delete local positions.
-            active_ex_pos = {}
+            self.logger.error(f"[SYNC] Critical fetch failed: {e}")
             summary['errors'].append(f"Sync failed (fetch error): {e}")
-            # We continue to try recovering pending orders if possible, but skip removal logic
 
         # 2. ADOPT POSITIONS (Ex -> Local) - Only if fetch succeeded
         if fetch_success:
             for sym, p in active_ex_pos.items():
                 # Check if we have this symbol in any timeframe
+                norm_sym = self._normalize_symbol(sym)
                 found = False
                 for k, local_p in self.active_positions.items():
-                    if local_p.get('symbol') == sym and local_p.get('status') == 'filled':
+                    if self._normalize_symbol(local_p.get('symbol')) == norm_sym and local_p.get('status') == 'filled':
                         found = True
                         break
                 
                 if not found:
                     # Bot found a position it didn't know about - Adopt it!
-                    pos_key = f"{sym}_sync"
+                    # Use a cleaner key for adopted positions
+                    pos_key = f"{sym}_adopted"
                     self.logger.info(f"[ADOPT] Found unknown position for {sym} on exchange. Adopting as {pos_key}")
                     
                     # Fetch ACTUAL leverage setting from exchange
@@ -1373,23 +1461,31 @@ class Trader:
                     sl_order_id = None
                     tp_order_id = None
                     
-                    # CHECK EXISTING OPEN ORDERS FIRST
+                    # CHECK EXISTING OPEN ORDERS FIRST (Filter from global list)
                     try:
-                        open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, sym)
-                        for o in open_orders:
-                            o_type = o.get('type')
+                        symbol_orders = []
+                        if all_exchange_orders is not None:
+                            symbol_orders = [o for o in all_exchange_orders if o.get('symbol') == sym]
+                        else:
+                            # Fallback if global failed
+                            symbol_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, sym)
+                        
+                        for o in symbol_orders:
+                            o_type = str(o.get('type') or '').upper()
                             o_side = o.get('side').upper()
+                            # Use stopPrice for conditional, price for basic if stopPrice missing
                             o_price = float(o.get('stopPrice') or o.get('price') or 0)
                             o_id = str(o.get('id'))
                             
                             expected_close_side = 'SELL' if side == 'LONG' else 'BUY'
                             
                             if o_side == expected_close_side:
-                                if o_type == 'STOP_MARKET':
+                                # Logic from Gemini: STOP_MARKET or TAKE_PROFIT_MARKET
+                                if 'STOP' in o_type:
                                     auto_sl = o_price
                                     sl_order_id = o_id
                                     self.logger.info(f"[ADOPT] Found existing SL for {sym}: {o_id} @ {o_price}")
-                                elif o_type == 'TAKE_PROFIT_MARKET':
+                                elif 'TAKE' in o_type:
                                     auto_tp = o_price
                                     tp_order_id = o_id
                                     self.logger.info(f"[ADOPT] Found existing TP for {sym}: {o_id} @ {o_price}")
@@ -1443,30 +1539,46 @@ class Trader:
                         continue
                     else:
                         self.logger.warning(f"[SYNC] Fetch failed, preserving local position {pos_key} (Assume alive)")
-                        # Proceed checks? Probably safer to skip checks if API is bad
                         continue
 
                 # A) Recover missing order_id for pending
                 if status == 'pending':
                     if not pos.get('order_id'):
                         try:
-                            open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
-                        except Exception: open_orders = []
-                        for o in open_orders or []:
-                            o_amt = float(o.get('amount') or o.get('info', {}).get('origQty') or 0)
-                            if abs(o_amt - float(qty)) < max(1e-6, 0.01 * float(qty)):
-                                pos['order_id'] = o.get('id')
-                                self.active_positions[pos_key] = pos
-                                self._save_positions()
-                                summary['recovered_order_ids'] += 1
-                                break
+                            # Use global snapshot for recovery speed
+                            symbol_orders = []
+                            if all_exchange_orders is not None:
+                                norm_symbol = self._normalize_symbol(symbol)
+                                symbol_orders = [o for o in all_exchange_orders if self._normalize_symbol(o.get('symbol')) == norm_symbol]
+                            else:
+                                symbol_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
+                            
+                            for o in symbol_orders or []:
+                                o_id = str(o.get('id') or o.get('orderId'))
+                                o_amt = float(o.get('amount') or o.get('info', {}).get('origQty') or 0)
+                                if abs(o_amt - float(qty)) < max(1e-6, 0.01 * float(qty)):
+                                    pos['order_id'] = o_id
+                                    self.active_positions[pos_key] = pos
+                                    self._save_positions()
+                                    summary['recovered_order_ids'] += 1
+                                    break
+                        except Exception as e:
+                            self.logger.warning(f"[SYNC] Recovery failed for {pos_key}: {e}")
                     
                     # B) Verify if pending order still exists on exchange
                     order_id = pos.get('order_id')
                     if order_id:
                         try:
-                            open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
-                            found_in_open = any(str(o['id']) == str(order_id) for o in open_orders)
+                            # Use a focused list for verification
+                            symbol_orders = []
+                            if all_exchange_orders is not None:
+                                norm_symbol = self._normalize_symbol(symbol)
+                                symbol_orders = [o for o in all_exchange_orders if self._normalize_symbol(o.get('symbol')) == norm_symbol]
+                            else:
+                                symbol_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
+                            
+                            # Check both id and orderId
+                            found_in_open = any(str(o.get('id') or o.get('orderId')) == str(order_id) for o in symbol_orders)
                             
                             if not found_in_open:
                                 # Not open check if filled
@@ -1483,7 +1595,6 @@ class Trader:
                                 else:
                                     # CANCELLED
                                     self.logger.info(f"[SYNC] Pending order {order_id} gone. Removing.")
-                                    # Remove from memory and disk
                                     if pos_key in self.pending_orders:
                                         del self.pending_orders[pos_key]
                                     del self.active_positions[pos_key]
@@ -1491,76 +1602,121 @@ class Trader:
                                     continue
                         except Exception as e:
                             self.logger.warning(f"[SYNC] Failed to verify pending order {order_id}: {e}")
-                            break
 
                 # B) Fill Missing SL/TP IDs & Cleanup Orphans
                 if status == 'filled':
                     try:
-                        open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
-                    except Exception: open_orders = []
-                    
-                    found_sl = pos.get('sl_order_id')
-                    found_tp = pos.get('tp_order_id')
-                    
-                    VERIFIED_SL_ID = None
-                    VERIFIED_TP_ID = None
-
-                    # Match existing orders
-                    for o in open_orders or []:
-                        info = o.get('info', {})
-                        o_amt = float(o.get('amount') or info.get('origQty') or 0)
-                        # Relax qty check slightly for partial fills? 
+                        symbol_orders = []
+                        if all_exchange_orders is not None:
+                            norm_symbol = self._normalize_symbol(symbol)
+                            symbol_orders = [o for o in all_exchange_orders if self._normalize_symbol(o.get('symbol')) == norm_symbol]
+                        else:
+                            symbol_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
                         
-                        o_id = str(o.get('id'))
-                        o_type = str(o.get('type') or info.get('type')).upper()
+                        found_sl = pos.get('sl_order_id')
+                        found_tp = pos.get('tp_order_id')
+                    
+                        # 0. COOLDOWN CHECK: If we just recreated SL/TP for this position, SKIP verification
+                        # This prevents "Verification Lag" where we create verify fail create again instantly
+                        last_creation = self._pos_action_timestamps.get(f"{pos_key}_recreation", 0)
+                        if (self.exchange.milliseconds() - last_creation) < 20000: # 20 seconds trust period
+                            # self.logger.info(f"[SYNC] Skipping verification for {pos_key} (In Grace Period)")
+                            continue
+
+                        # 1. VERIFY SL (With Grace Period)
+                        found_sl = await self._verify_or_clear_id(pos_key, found_sl, symbol, symbol_orders)
                         
-                        if 'STOP' in o_type:
-                            VERIFIED_SL_ID = o_id
-                        elif 'TAKE' in o_type:
-                            VERIFIED_TP_ID = o_id
-                    
-                    # Updates IDs if changed
-                    if VERIFIED_SL_ID != found_sl or VERIFIED_TP_ID != found_tp:
-                         pos['sl_order_id'] = VERIFIED_SL_ID
-                         pos['tp_order_id'] = VERIFIED_TP_ID
-                         self.active_positions[pos_key] = pos
-                         self._save_positions()
-                         found_sl = VERIFIED_SL_ID
-                         found_tp = VERIFIED_TP_ID
+                        # 2. VERIFY TP (With Grace Period)
+                        found_tp = await self._verify_or_clear_id(pos_key, found_tp, symbol, symbol_orders)
 
-                    # C) AUTO-RECREATE IF TRULY MISSING
-                    if auto_fix and (not found_sl or not found_tp):
-                        print(f"🛠️ [REPAIR] {pos_key} is missing SL or TP on exchange. Recreating...")
-                        await self.recreate_missing_sl_tp(
-                            pos_key, 
-                            recreate_sl=not found_sl, 
-                            recreate_tp=not found_tp,
-                            recreate_sl_force=True, 
-                            recreate_tp_force=True
-                        )
-                        summary['created_tp_sl'] += 1
+                        # 3. DISCOVERY (If local missing, check sàn using normalized symbols)
+                        if not found_sl or not found_tp:
+                            for o in symbol_orders or []:
+                                # ROBUST Algo ID Matching
+                                o_id = str(o.get('algoId') or o.get('orderId') or o.get('id') or o.get('info', {}).get('orderId', ''))
+                                o_type = str(o.get('type') or o.get('info', {}).get('type', '') or o.get('algoType', '')).upper()
+                                o_symbol = self._normalize_symbol(o.get('symbol'))
+                                
+                                if not found_sl and ('STOP' in o_type or o.get('algoType') == 'STOP_LOSS'):
+                                    found_sl = o_id
+                                    self.logger.info(f"[SYNC] Discovered existing SL for {pos_key}: {o_id}")
+                                elif not found_tp and ('TAKE' in o_type or o.get('algoType') == 'TAKE_PROFIT'):
+                                    found_tp = o_id
+                                    self.logger.info(f"[SYNC] Discovered existing TP for {pos_key}: {o_id}")
 
-                    # D) Cleanup ORPHAN orders
-                    managed_ids = set()
-                    for p in self.active_positions.values():
-                        if p.get('symbol') == symbol:
-                            if p.get('sl_order_id'): managed_ids.add(str(p.get('sl_order_id')))
-                            if p.get('tp_order_id'): managed_ids.add(str(p.get('tp_order_id')))
-                    
-                    for o in open_orders or []:
-                        o_id = str(o.get('id'))
-                        info = o.get('info', {})
-                        is_reduce = o.get('reduceOnly') or info.get('reduceOnly') == 'true' or 'STOP' in str(info.get('type'))
-                        if is_reduce and o_id not in managed_ids:
-                            # Safely cancel orphans
-                            pass
+                        # Update persistence if changed
+                        if found_sl != pos.get('sl_order_id') or found_tp != pos.get('tp_order_id'):
+                            pos['sl_order_id'] = found_sl
+                            pos['tp_order_id'] = found_tp
+                            self.active_positions[pos_key] = pos
+                            self._save_positions()
+
+                        # C) AUTO-RECREATE IF TRULY MISSING
+                        if auto_fix and (not found_sl or not found_tp):
+                            print(f"🛠️ [REPAIR] {pos_key} is missing SL or TP on exchange. Recreating...")
+                            
+                            # MARK TIMESTAMP BEFORE ACTION to prevent immediate re-entry
+                            self._pos_action_timestamps[f"{pos_key}_recreation"] = self.exchange.milliseconds()
+                            
+                            await self.recreate_missing_sl_tp(
+                                pos_key, 
+                                recreate_sl=not found_sl, 
+                                recreate_tp=not found_tp,
+                                recreate_sl_force=True, 
+                                recreate_tp_force=True
+                            )
+                            summary['created_tp_sl'] += 1
+                    except Exception as e:
+                        self.logger.error(f"[SYNC] Error during SL/TP sync for {pos_key}: {e}")
+
             except Exception as e:
                 summary['errors'].append(str(e))
                 self.logger.error(f"Reconcile error for {pos_key}: {e}")
 
+        # 4. GLOBAL ORPHAN REAPER (Conditional Only)
+        # This scans ALL account orders and cancels SL/TP that aren't in active_positions
+        if all_exchange_orders is not None:
+            managed_ids = set()
+            for p in self.active_positions.values():
+                if p.get('sl_order_id'): managed_ids.add(str(p.get('sl_order_id')))
+                if p.get('tp_order_id'): managed_ids.add(str(p.get('tp_order_id')))
+            
+            # Also protect orders in Grace Period
+            for oid, count in self._missing_order_counts.items():
+                if count > 0: managed_ids.add(str(oid))
+
+            for o in all_exchange_orders:
+                o_id = str(o.get('id') or o.get('orderId'))
+                o_type = str(o.get('type') or o.get('info', {}).get('type', '')).upper()
+                o_symbol = o.get('symbol')
+                norm_symbol = self._normalize_symbol(o_symbol)
+                
+                # Check if this symbol belongs to our TRADING_SYMBOLS (normalized)
+                from config import TRADING_SYMBOLS
+                norm_trading_syms = [self._normalize_symbol(s) for s in TRADING_SYMBOLS]
+                
+                if norm_symbol not in norm_trading_syms:
+                    continue
+
+                # We only reaper STOP/TAKE orders (Conditional)
+                is_conditional = 'STOP' in o_type or 'TAKE' in o_type or o.get('algoType') in ('STOP_LOSS', 'TAKE_PROFIT')
+                
+                if is_conditional and o_id not in managed_ids:
+                    self.logger.warning(f"🧹 [REAPER] Cancelling orphaned {o_type} order {o_id} for {o_symbol}")
+                    try:
+                        # Use appropriate cancel method for Algo orders if necessary
+                        if o.get('algoType'):
+                            # fapiPrivateDeleteOrder for algo orders
+                            await self._execute_with_timestamp_retry(self.exchange.fapiPrivateDeleteOrder, {'symbol': o_symbol, 'orderId': o_id})
+                        else:
+                            await self._execute_with_timestamp_retry(self.exchange.cancel_order, o_id, o_symbol)
+                        summary['orphans_cancelled'] += 1
+                    except Exception as e:
+                        self.logger.warning(f"[REAPER] Failed to cancel {o_id}: {e}")
+
         return summary
 
-    async def check_missing_sl_tp(self, pos_key):
+    async def check_missing_sl_tp(self, pos_key, orders_in_snap=None):
         """Check whether SL/TP ids exist on-exchange for a given position.
         Returns a dict: {'sl_exists': bool, 'tp_exists': bool, 'errors': []}
         This method is non-destructive (does not recreate orders).
@@ -1575,21 +1731,23 @@ class Trader:
         sl_id = pos.get('sl_order_id')
         tp_id = pos.get('tp_order_id')
 
-        # Check SL
+        # Use helper for authoritative verification
         if sl_id:
-            try:
-                await self._execute_with_timestamp_retry(self.exchange.fetch_order, sl_id, symbol)
+            verified_sl = await self._verify_or_clear_id(pos_key, sl_id, symbol, orders_in_snap)
+            if verified_sl:
                 res['sl_exists'] = True
-            except Exception as e:
-                res['errors'].append(f'sl_fetch:{e}')
+            else:
+                pos['sl_order_id'] = None # Clear if definitively gone
 
-        # Check TP
         if tp_id:
-            try:
-                await self._execute_with_timestamp_retry(self.exchange.fetch_order, tp_id, symbol)
+            verified_tp = await self._verify_or_clear_id(pos_key, tp_id, symbol, orders_in_snap)
+            if verified_tp:
                 res['tp_exists'] = True
-            except Exception as e:
-                res['errors'].append(f'tp_fetch:{e}')
+            else:
+                pos['tp_order_id'] = None # Clear if definitively gone
+        
+        if not res['sl_exists'] or not res['tp_exists']:
+            self._save_positions()
 
         return res
 
@@ -1626,24 +1784,51 @@ class Trader:
             # SL Recreation
             try:
                 if recreate_sl and sl and (not pos.get('sl_order_id') or recreate_sl_force):
-                    try:
-                        stored_qty = float(pos.get('qty') or qty)
-                    except Exception:
-                        stored_qty = qty
-                    qty_to_use = min(float(qty), stored_qty)
-                    sl_order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, 'STOP_MARKET', close_side, qty_to_use,
-                        params={'stopPrice': sl, 'reduceOnly': True}
-                    )
-                    pos['sl_order_id'] = str(sl_order.get('id'))
-                    result['sl_recreated'] = True
-                    self._debug_log('recreated_sl', pos_key, pos['sl_order_id'])
+                    # SAFETY: Try to cancel old SL order "blindly" if ID exists in local state
+                    old_sl = pos.get('sl_order_id')
+                    if old_sl:
+                        try:
+                            await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_sl, symbol)
+                            self.logger.info(f"[RECREATE] Cancelled old SL {old_sl} before creating new one")
+                        except Exception: pass # Ignore if already gone
+
+                    # SL Validation
+                    current_price = (await self.exchange.fetch_ticker(symbol))['last']
+                    is_valid_sl = False
+                    if side == 'BUY': # Long: SL must be < Current
+                        is_valid_sl = sl < current_price
+                    else: # Short: SL must be > Current
+                        is_valid_sl = sl > current_price
+                    
+                    if not is_valid_sl:
+                        self.logger.warning(f"[SL SAFETY] Skipping SL for {pos_key}: SL {sl} vs Current {current_price} (Immediate Trigger Risk)")
+                        # Do not return, just skip SL creation to verify TP
+                    else:
+                        qty_to_use = min(float(qty), float(pos.get('qty') or qty))
+                        sl_order = await self._execute_with_timestamp_retry(
+                            self.exchange.create_order, symbol, 'STOP_MARKET', close_side, qty_to_use,
+                            params={'stopPrice': sl, 'reduceOnly': True}
+                        )
+                        pos['sl_order_id'] = str(sl_order.get('id'))
+                        self.active_positions[pos_key] = pos
+                        self._save_positions()
+                        result['sl_recreated'] = True
+                        self._debug_log('recreated_sl', pos_key, pos['sl_order_id'])
+
             except Exception as e:
                 result['errors'].append(f'sl_recreate:{e}')
 
             # TP Recreation with Safety Check
             try:
                 if recreate_tp and tp and (not pos.get('tp_order_id') or recreate_tp_force):
+                    # SAFETY: Try to cancel old TP order "blindly" if ID exists in local state
+                    old_tp = pos.get('tp_order_id')
+                    if old_tp:
+                        try:
+                            await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_tp, symbol)
+                            self.logger.info(f"[RECREATE] Cancelled old TP {old_tp} before creating new one")
+                        except Exception: pass # Ignore core errors if already gone
+
                     # Safety check: Verify TP price won't trigger immediately
                     try:
                         ticker = await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol)
@@ -1680,6 +1865,8 @@ class Trader:
                         params={'stopPrice': tp, 'reduceOnly': True}
                     )
                     pos['tp_order_id'] = str(tp_order.get('id'))
+                    self.active_positions[pos_key] = pos
+                    self._save_positions()
                     result['tp_recreated'] = True
                     self._debug_log('recreated_tp', pos_key, pos['tp_order_id'])
             except Exception as e:
@@ -1705,6 +1892,7 @@ class Trader:
             symbols = set(symbols)
 
         for sym in symbols:
+            await asyncio.sleep(0.5) # Reduction API pressure & jitter
             lev = self._safe_int(self.default_leverage, default=8)
             await self._ensure_isolated_and_leverage(sym, lev)
 

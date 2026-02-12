@@ -36,13 +36,31 @@ async def diagnose():
         # 2. Balances (only non-zero)
         print("\n--- [2] Open Positions (Positions with Risk) ---")
         try:
-            positions = await exchange.fetch_positions()
+            # Use V2 API for positions
+            positions = []
+            try:
+                raw = await exchange.fapiPrivateGetPositionRiskV2()
+                # Adapting raw response to CCXT structure for printing
+                for p in raw:
+                    amt = float(p.get('positionAmt', 0))
+                    if amt != 0:
+                        positions.append({
+                            'symbol': p['symbol'],
+                            'side': p['positionSide'], # 'BOTH' usually for One-way
+                            'contracts': abs(amt),
+                            'entryPrice': float(p['entryPrice']),
+                            'unrealizedPnl': p['unRealizedProfit']
+                        })
+            except AttributeError:
+                 positions = await exchange.fetch_positions()
+
             active_pos = [p for p in positions if float(p.get('contracts', 0)) > 0]
+            
             if not active_pos:
                 print("No active positions found.")
             for p in active_pos:
-                print(f"📍 {p['symbol']} | {p['side']} | Size: {p['contracts']} | Entry: {p['entryPrice']}")
-        except Exception as e: print(f"Error: {e}")
+                print(f"📍 {p['symbol']} | Size: {p['contracts']} | Entry: {p['entryPrice']} | PnL: {p.get('unrealizedPnl', 'N/A')}")
+        except Exception as e: print(f"Error fetching positions: {e}")
 
         # 3. Open Orders (Standard)
         print("\n--- [3] Open Orders (Global fetch) ---")
