@@ -52,24 +52,33 @@ py src/backtester.py --symbol BTC/USDT --timeframe 1h
 
 ### 5. 🤖 Run Trading Bot
 
-**Option A: Bot Only (No Telegram Commands)**
-```powershell
-# Demo Mode (Paper Trading)
-# Edit src/bot.py: set dry_run=True
-py src/bot.py
+#### Simulation Mode (Dry Run)
+You can test the bot without using real funds. This mode simulates orders locally.
 
-# Live Mode (Real Money)
-# Edit src/bot.py: set dry_run=False
-py src/bot.py
+**Using command-line arguments (Easiest):**
+```powershell
+py src/bot.py --dry-run
 ```
 
-**Option B: Bot + Telegram Control (Recommended)**
+**Using environment variables:**
 ```powershell
-# Runs both trading bot AND Telegram bot for remote control
+$env:DRY_RUN="True"; py src/bot.py
+```
+
+**In Command Prompt:**
+```cmd
+set DRY_RUN=True && py src/bot.py
+```
+
+#### Real Trading (Live Mode)
+To trade with real funds, ensuring your `.env` file contains valid Binance API keys.
+
+```powershell
+# Runs both trading bot AND Telegram bot (Recommended)
 py launcher.py
 ```
 
-> **Note:** `launcher.py` starts both `bot.py` and `telegram_bot.py` together. Use this for full functionality including Telegram commands like `/status`, `/balance`, `/positions`.
+> **Note:** launcher.py starts both bot.py and telegram_bot.py. By default, it runs in **Live Mode** (`DRY_RUN=False` in `src/config.py`).
 
 ---
 

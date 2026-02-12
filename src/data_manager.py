@@ -46,14 +46,47 @@ class MarketDataManager(BaseExchangeClient):
                 'fetchMarkets': True
             }
         }
-        if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY:
+        if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY and len(BINANCE_API_KEY) > 10:
             config['apiKey'] = BINANCE_API_KEY
             config['secret'] = BINANCE_API_SECRET
+        else:
+            # If no key, we assume dry run and only use public endpoints
+            print("⚠️ [WARN] No valid Binance API key found. Defaulting to public data only.")
             
         exchange = exchange_class(config)
-        # NOTE: Testnet support is DEPRECATED for Binance Futures - removed sandbox mode
         return exchange
 
+    async def sync_server_time(self):
+        """Sync with exchange server time to avoid timestamp errors."""
+        # Only sync if we have credentials OR if we want to ensure accurate public requests
+        # ccxt's adjustForTimeDifference also helps
+        try:
+            from config import DRY_RUN
+            # Even in dry run, public data fetching might benefit from time sync
+            # but we skip if it's causing issues without keys
+            server_time = await self.exchange.fetch_time()
+            local_time = int(time.time() * 1000)
+            self.exchange.options['timeDifference'] = server_time - local_time
+            print(f"⏰ Time synchronized. Offset: {self.exchange.options['timeDifference']}ms")
+        except Exception as e:
+            print(f"⚠️ [WARN] Failed to sync server time: {e}")
+
+    async def set_isolated_margin_mode(self, symbols):
+        """Sets margin mode to ISOLATED for given symbols (Live only)."""
+        from config import DRY_RUN
+        if DRY_RUN or not self.exchange.apiKey:
+            return
+            
+        for symbol in symbols:
+            try:
+                # CCXT unified method for margin mode
+                await self._execute_with_timestamp_retry(
+                    self.exchange.set_margin_mode, 'ISOLATED', symbol
+                )
+                print(f"✅ {symbol} set to ISOLATED margin")
+            except Exception as e:
+                # Often fails if already set, which is fine
+                pass
     async def fetch_ticker(self, symbol):
         try:
             ticker = await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol)

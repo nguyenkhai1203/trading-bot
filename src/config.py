@@ -9,8 +9,14 @@ BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
 # Configuration
+# DRY_RUN: Simulation vs Real Trading
+# True = Simulation/Testing (No real funds, paper trading)
+# False = Real Trading (Uses API keys, real funds)
+# Can be overridden by environment variable DRY_RUN=True
+DRY_RUN = os.getenv('DRY_RUN', 'False').lower() == 'true'
+
 # NOTE: USE_TESTNET is DEPRECATED - Binance removed Testnet Futures support
-# Bot will now ALWAYS use LIVE exchange (set dry_run=True in bot.py for simulation)
+# Bot will now ALWAYS use LIVE exchange (set DRY_RUN=True for simulation)
 USE_TESTNET = False  # Deprecated - keep False for Live trading
 
 # Trading Settings

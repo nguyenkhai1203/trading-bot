@@ -15,7 +15,8 @@ from config import (
     STOP_LOSS_PCT, 
     TAKE_PROFIT_PCT,
     USE_LIMIT_ORDERS,
-    PATIENCE_ENTRY_PCT
+    PATIENCE_ENTRY_PCT,
+    DRY_RUN
 )
 from data_manager import MarketDataManager
 from strategy import WeightedScoringStrategy 
@@ -542,6 +543,22 @@ async def send_periodic_status_report(trader, data_manager):
     await send_telegram_chunked(msg)
 
 async def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='Trading Bot')
+    parser.add_argument('--dry-run', action='store_true', help='Run in simulation mode')
+    parser.add_argument('--live', action='store_true', help='Run in live trading mode')
+    args, unknown = parser.parse_known_args()
+
+    # Override config DRY_RUN if argument provided
+    global DRY_RUN
+    import config
+    if args.dry_run:
+        config.DRY_RUN = True
+        print("🚩 Command-line override: Simulation Mode (--dry-run)")
+    elif args.live:
+        config.DRY_RUN = False
+        print("🚩 Command-line override: Live Mode (--live)")
+
     manager = MarketDataManager()
     
     # Sync server time to fix timestamp offset issues
@@ -552,13 +569,16 @@ async def main():
     
     print("Initializing Bots...")
     # 0. Shared Trader (One instance for all bots to sync positions)
-    trader = Trader(manager.exchange, dry_run=False)  # LIVE MODE ENABLED false = chạy thật
+    trader = Trader(manager.exchange, dry_run=DRY_RUN) 
 
     # 0.5 Set Isolated Margin Mode (one-time setup)
     if not trader.dry_run:
+        print("🔧 [LIVE] Setting up margin modes and leverage...")
         await manager.set_isolated_margin_mode(TRADING_SYMBOLS)
         # Also ensure trader enforces isolated/leverage for configured symbols
         await trader.enforce_isolated_on_startup(TRADING_SYMBOLS)
+    else:
+        print("🧪 [SIMULATION] Dry Run Mode active. Private API calls skipped.")
 
     # Initialize one bot per pair/tf
     for symbol in TRADING_SYMBOLS:
