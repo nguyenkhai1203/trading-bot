@@ -83,19 +83,31 @@ async def main():
     print("=" * 80)
     print()
     
-    tasks = []
+    # Download in batches to avoid rate limits
+    batch_size = 10
+    all_tasks = []
     for symbol in symbols:
         for timeframe in timeframes:
-            tasks.append(download_historical_data(symbol, timeframe, limit=5000))
-            await asyncio.sleep(0.1)  # Stagger requests
+            all_tasks.append((symbol, timeframe))
     
-    # Run downloads concurrently with rate limiting
-    results = await asyncio.gather(*tasks)
+    total = len(all_tasks)
+    success_count = 0
+    
+    for i in range(0, total, batch_size):
+        batch = all_tasks[i:i+batch_size]
+        print(f"\n[Batch {i//batch_size + 1}/{(total + batch_size - 1)//batch_size}] Processing {len(batch)} downloads...")
+        
+        tasks = [download_historical_data(symbol, timeframe, limit=5000) for symbol, timeframe in batch]
+        results = await asyncio.gather(*tasks)
+        success_count += sum(results)
+        
+        # Pause between batches
+        if i + batch_size < total:
+            await asyncio.sleep(2)
     
     print()
     print("=" * 80)
-    success_count = sum(results)
-    print(f"[OK] Download Complete: {success_count}/{len(results)} files successfully downloaded")
+    print(f"[OK] Download Complete: {success_count}/{total} files successfully downloaded")
     print(f"End: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 80)
 

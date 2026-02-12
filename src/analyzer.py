@@ -594,9 +594,12 @@ async def run_global_optimization():
         # Check cross-TF support using cached results
         cross_tf_support = analyzer.get_cross_tf_support(symbol, TRADING_TIMEFRAMES)
         
-        is_profitable = wr >= 0.52 and test_wr >= 0.51
-        is_consistent = consistency < 0.25
-        is_enabled = is_profitable and is_consistent and cross_tf_support >= 1
+        # Use configurable thresholds from config
+        from config import MIN_WIN_RATE_TRAIN, MIN_WIN_RATE_TEST, MAX_CONSISTENCY, MIN_CROSS_TF_SUPPORT
+        
+        is_profitable = wr >= MIN_WIN_RATE_TRAIN and test_wr >= MIN_WIN_RATE_TEST
+        is_consistent = consistency < MAX_CONSISTENCY
+        is_enabled = is_profitable and is_consistent and cross_tf_support >= MIN_CROSS_TF_SUPPORT
         
         if is_enabled:
             enabled_count += 1

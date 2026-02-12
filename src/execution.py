@@ -562,7 +562,7 @@ class Trader:
             self.logger.error(f"Error in limit order monitor for {pos_key}: {e}")
 
     async def cancel_pending_order(self, pos_key, reason="Technical invalidation"):
-        """Cancels a pending limit order."""
+        """Cancels a pending limit order AND its associated TP/SL orders."""
         if pos_key not in self.pending_orders and pos_key not in self.active_positions:
             return False
         
@@ -571,6 +571,8 @@ class Trader:
         if pending:
             order_id = pending['order_id']
             symbol = pending['symbol']
+            sl_order_id = pending.get('sl_order_id')
+            tp_order_id = pending.get('tp_order_id')
         else:
             # Dry run: position is in active_positions with status='pending'
             active_pos = self.active_positions.get(pos_key)
@@ -578,12 +580,35 @@ class Trader:
                 return False
             order_id = 'dry_run_id'
             symbol = active_pos['symbol']
+            sl_order_id = active_pos.get('sl_order_id')
+            tp_order_id = active_pos.get('tp_order_id')
         
         try:
             if not self.dry_run and pending:
+                # Cancel limit order
                 await self._execute_with_timestamp_retry(
                     self.exchange.cancel_order, order_id, symbol
                 )
+                
+                # Cancel SL order if exists
+                if sl_order_id:
+                    try:
+                        await self._execute_with_timestamp_retry(
+                            self.exchange.cancel_order, sl_order_id, symbol
+                        )
+                        print(f"  ✓ Cancelled SL order {sl_order_id}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to cancel SL {sl_order_id}: {e}")
+                
+                # Cancel TP order if exists
+                if tp_order_id:
+                    try:
+                        await self._execute_with_timestamp_retry(
+                            self.exchange.cancel_order, tp_order_id, symbol
+                        )
+                        print(f"  ✓ Cancelled TP order {tp_order_id}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to cancel TP {tp_order_id}: {e}")
             
             # Clean up from both sources
             if pos_key in self.pending_orders:

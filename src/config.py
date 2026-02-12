@@ -18,26 +18,26 @@ USE_TESTNET = False  # Deprecated - keep False for Live trading
 TRADING_SYMBOLS = [
     'ETH/USDT',
     # 'BTC/USDT',
-    # 'SOL/USDT',
-    # 'XRP/USDT',
-    # 'HYPE/USDT',
-    # 'BNB/USDT',
-    # 'BCH/USDT',
-    # 'ADA/USDT',
-    # 'SUI/USDT',
-    # 'LINK/USDT',
-    # 'AVAX/USDT',
-    # 'LTC/USDT',
-    # 'NEAR/USDT',
-    # 'FET/USDT',
-    # 'DOT/USDT',
-    # 'STX/USDT',
-    # 'TAO/USDT',
-    # 'FTM/USDT',
-    # 'OP/USDT',
-    # 'ARB/USDT',
-    # 'INJ/USDT',
-    # 'TIA/USDT',
+    'SOL/USDT',
+    'XRP/USDT',
+    'HYPE/USDT',
+    'BNB/USDT',
+    'BCH/USDT',
+    'ADA/USDT',
+    'SUI/USDT',
+    'LINK/USDT',
+    'AVAX/USDT',
+    'LTC/USDT',
+    'NEAR/USDT',
+    'FET/USDT',
+    'DOT/USDT',
+    'STX/USDT',
+    'TAO/USDT',
+    'FTM/USDT',
+    'OP/USDT',
+    'ARB/USDT',
+    'INJ/USDT',
+    'TIA/USDT',
     'JUP/USDT',
     'SEI/USDT',
     'FIL/USDT'
@@ -71,12 +71,12 @@ REQUIRE_TECHNICAL_CONFIRMATION = False  # Require Fibo/S/R alignment before entr
 
 TIER_CONFIG = {
     "minimum": {
-        "min_score": 2.0,      # Minimum score to enter trade
+        "min_score": 2.5,      # Minimum score to enter trade
         "leverage": 8,          # Leverage multiplier
         "cost_usdt": 3.0       # Margin per trade (USDT)
     },
     "low": {
-        "min_score": 3.0,      # Low confidence threshold
+        "min_score": 3.5,      # Low confidence threshold
         "leverage": 10,         # Medium leverage
         "cost_usdt": 4.0       # Medium margin
     },
@@ -86,6 +86,12 @@ TIER_CONFIG = {
         "cost_usdt": 5.0       # Maximum margin
     }
 }
+
+# Analyzer Thresholds
+MIN_WIN_RATE_TRAIN = 0.55      # Minimum win rate on training set to enable (55%)
+MIN_WIN_RATE_TEST = 0.55       # Minimum win rate on test set to enable (53%)
+MAX_CONSISTENCY = 0.25         # Maximum consistency (train/test difference)
+MIN_CROSS_TF_SUPPORT = 1       # Minimum number of other timeframes that must be profitable
 
 # Tier system notes:
 # - Each trade uses FIXED MARGIN (cost_usdt), not percentage of account
