@@ -39,6 +39,21 @@ exchange = ccxt.binance({
 trader = Trader(exchange, dry_run=True)
 data_manager = MarketDataManager()
 
+
+async def close():
+    """Close module-level exchange and data manager connectors."""
+    try:
+        if hasattr(exchange, 'close'):
+            await exchange.close()
+    except Exception:
+        pass
+    try:
+        # Ensure MarketDataManager's exchange is closed as well
+        if hasattr(data_manager, 'close'):
+            await data_manager.close()
+    except Exception:
+        pass
+
 # ============== STATUS MESSAGE ==============
 async def get_status_message() -> str:
     """Generate beautiful status message with P&L"""
@@ -59,29 +74,22 @@ async def get_status_message() -> str:
         try:
             if os.path.exists(positions_file) and os.path.getsize(positions_file) > 0:
                 with open(positions_file, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                    if content:  # Check if file has content
-                        all_positions = json.loads(content)
-                        
-                        with open(log_file, 'a', encoding='utf-8') as log:
-                            log.write(f"{datetime.now()}: SUCCESS - Loaded {len(all_positions)} positions\n")
-                        break  # Success, exit retry loop
+                    all_positions = json.load(f)
+                    with open(log_file, 'a', encoding='utf-8') as log:
+                        log.write(f"{datetime.now()}: SUCCESS - Loaded {len(all_positions)} positions\n")
+                    break
             else:
-                # File doesn't exist or is empty
                 all_positions = {}
                 with open(log_file, 'a', encoding='utf-8') as log:
                     log.write(f"{datetime.now()}: File empty or missing\n")
                 break
-        except (FileNotFoundError, json.JSONDecodeError, IOError, UnicodeDecodeError) as e:
-            if attempt == max_retries - 1:  # Last attempt
-                with open(log_file, 'a', encoding='utf-8') as log:
-                    log.write(f"{datetime.now()}: FAILED after {max_retries} attempts: {e}\n")
-                all_positions = {}  # Use empty dict as fallback
-            else:
-                with open(log_file, 'a', encoding='utf-8') as log:
-                    log.write(f"{datetime.now()}: Attempt {attempt + 1} failed: {e}\n")
-                import asyncio
-                await asyncio.sleep(0.2)  # Longer pause before retry
+        except (json.JSONDecodeError, IOError, UnicodeDecodeError) as e:
+            with open(log_file, 'a', encoding='utf-8') as log:
+                log.write(f"{datetime.now()}: Attempt {attempt + 1} failed: {e}\n")
+            import asyncio
+            await asyncio.sleep(0.25 * (attempt + 1))
+    else:
+        all_positions = {}
     
     # Separate active and pending positions
     active = {k: v for k, v in all_positions.items() if v.get('status') == 'filled'}
@@ -104,8 +112,8 @@ async def get_status_message() -> str:
             entry = float(pos.get('entry_price', 0))
             qty = float(pos.get('qty') or pos.get('amount', 0))
             leverage = int(pos.get('leverage', 10))
-            sl = float(pos.get('sl', 0))
-            tp = float(pos.get('tp', 0))
+            sl = float(pos.get('sl') or 0.0)
+            tp = float(pos.get('tp') or 0.0)
             
             try:
                 ticker = await data_manager.fetch_ticker(symbol)
@@ -227,6 +235,16 @@ async def summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     msg = await get_summary_message('month')
     await update.message.reply_text(msg, parse_mode='Markdown')
 
+async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Trigger reconciliation between persisted positions and exchange state."""
+    await update.message.reply_text("🔁 Starting sync with exchange...", parse_mode='Markdown')
+    try:
+        summary = await trader.reconcile_positions()
+        msg = f"✅ Sync complete. Recovered order_ids: {summary.get('recovered_order_ids',0)}, created_tp_sl: {summary.get('created_tp_sl',0)}"
+    except Exception as e:
+        msg = f"❌ Sync failed: {e}"
+    await update.message.reply_text(msg)
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
@@ -266,6 +284,7 @@ def main():
         
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("status", status_cmd))
+        app.add_handler(CommandHandler("sync", sync_cmd))
         app.add_handler(CommandHandler("summary", summary_cmd))
         app.add_handler(CallbackQueryHandler(button_handler))
         app.add_error_handler(error_handler)

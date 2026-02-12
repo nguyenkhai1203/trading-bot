@@ -348,6 +348,86 @@
       ],
       "result": "WIN",
       "pnl_pct": 338.3679999999999
+    },
+    {
+      "timestamp": "2026-02-12T10:09:17.437797",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "RSI_14_oversold",
+        "EMA9_EMA21_cross_up"
+      ],
+      "result": "WIN",
+      "pnl_pct": 2.5
+    },
+    {
+      "timestamp": "2026-02-12T10:09:17.439501",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "RSI_14_overbought",
+        "MACD_cross_down"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.8
+    },
+    {
+      "timestamp": "2026-02-12T10:09:17.440485",
+      "symbol": "SOL/USDT",
+      "timeframe": "15m",
+      "side": "BUY",
+      "signals": [
+        "Stochastic_oversold",
+        "BB_lower_touch"
+      ],
+      "result": "WIN",
+      "pnl_pct": 1.9
+    },
+    {
+      "timestamp": "2026-02-12T10:09:17.451299",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -2.0
+    },
+    {
+      "timestamp": "2026-02-12T10:09:17.452472",
+      "symbol": "ETH/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.5
+    },
+    {
+      "timestamp": "2026-02-12T10:09:17.453785",
+      "symbol": "SOL/USDT",
+      "timeframe": "15m",
+      "side": "BUY",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "WIN",
+      "pnl_pct": 3.0
+    },
+    {
+      "timestamp": "2026-02-12T10:09:17.454738",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "SELL",
+      "signals": [
+        "test_signal"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.0
     }
   ],
   "signal_stats": {
@@ -406,10 +486,11 @@
       ]
     },
     "RSI_14_oversold": {
-      "total": 4,
-      "wins": 4,
+      "total": 5,
+      "wins": 5,
       "losses": 0,
       "recent_results": [
+        1,
         1,
         1,
         1,
@@ -417,10 +498,11 @@
       ]
     },
     "EMA9_EMA21_cross_up": {
-      "total": 4,
-      "wins": 4,
+      "total": 5,
+      "wins": 5,
       "losses": 0,
       "recent_results": [
+        1,
         1,
         1,
         1,
@@ -428,10 +510,11 @@
       ]
     },
     "RSI_14_overbought": {
-      "total": 4,
+      "total": 5,
       "wins": 0,
-      "losses": 4,
+      "losses": 5,
       "recent_results": [
+        0,
         0,
         0,
         0,
@@ -439,10 +522,11 @@
       ]
     },
     "MACD_cross_down": {
-      "total": 4,
+      "total": 5,
       "wins": 0,
-      "losses": 4,
+      "losses": 5,
       "recent_results": [
+        0,
         0,
         0,
         0,
@@ -450,10 +534,11 @@
       ]
     },
     "Stochastic_oversold": {
-      "total": 4,
-      "wins": 4,
+      "total": 5,
+      "wins": 5,
       "losses": 0,
       "recent_results": [
+        1,
         1,
         1,
         1,
@@ -461,10 +546,11 @@
       ]
     },
     "BB_lower_touch": {
-      "total": 4,
-      "wins": 4,
+      "total": 5,
+      "wins": 5,
       "losses": 0,
       "recent_results": [
+        1,
         1,
         1,
         1,
@@ -472,9 +558,9 @@
       ]
     },
     "test_signal": {
-      "total": 13,
-      "wins": 3,
-      "losses": 10,
+      "total": 17,
+      "wins": 4,
+      "losses": 13,
       "recent_results": [
         0,
         0,
@@ -488,7 +574,11 @@
         0,
         1,
         0,
-        1
+        1,
+        0,
+        0,
+        1,
+        0
       ]
     }
   }

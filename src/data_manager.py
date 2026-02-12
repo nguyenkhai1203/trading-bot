@@ -4,8 +4,9 @@ import pandas as pd
 import os
 import time
 from config import BINANCE_API_KEY, BINANCE_API_SECRET
+from base_exchange_client import BaseExchangeClient
 
-class MarketDataManager:
+class MarketDataManager(BaseExchangeClient):
     _instance = None
 
     def __new__(cls, *args, **kwargs):
@@ -16,7 +17,8 @@ class MarketDataManager:
     def __init__(self):
         if hasattr(self, 'initialized'): return
         self.initialized = True
-        self.exchange = self._initialize_exchange()
+        exchange = self._initialize_exchange()
+        super().__init__(exchange)  # Initialize BaseExchangeClient
         self.data_store = {} # { 'symbol_timeframe': df }
         self.features_cache = {}  # { 'symbol_timeframe': df_with_features }
         self.listeners = []
@@ -51,73 +53,6 @@ class MarketDataManager:
         exchange = exchange_class(config)
         # NOTE: Testnet support is DEPRECATED for Binance Futures - removed sandbox mode
         return exchange
-
-    async def sync_server_time(self):
-        """Sync local time with Binance server to fix timestamp offset issues"""
-        try:
-            # Fetch server time and calculate offset
-            server_time_ms = await self._execute_with_timestamp_retry(self.exchange.fetch_time)  # Returns milliseconds
-            local_time_ms = int(time.time() * 1000)
-            offset_ms = server_time_ms - local_time_ms
-            
-            print(f"[TIME SYNC] Synchronization:")
-            print(f"   Server: {server_time_ms}ms, Local: {local_time_ms}ms")
-            print(f"   Offset: {offset_ms}ms ({'behind' if offset_ms > 0 else 'ahead'})")
-            
-            # Set the negative of offset so CCXT adds it to outgoing requests
-            # If local is ahead by 1000ms, offset is -1000, we want to subtract it: timeDifference = 1000
-            time_difference = -offset_ms
-            self.exchange.options['timeDifference'] = time_difference
-            
-            print(f"   Set CCXT timeDifference to: {time_difference}ms")
-            print(f"[OK] Time sync complete!")
-            return True
-            
-        except Exception as e:
-            print(f"[WARN] Time sync failed: {str(e)[:100]}")
-            print(f"   Using default timeDifference: -2000ms")
-            # Keep default value set in _initialize_exchange
-            return False
-
-    async def resync_time_if_needed(self, error_msg=""):
-        """Re-sync time if timestamp error detected"""
-        if "timestamp" in error_msg.lower() or "time" in error_msg.lower():
-            print(f"[TIME SYNC] Detected timestamp error, re-syncing...")
-            return await self.sync_server_time()
-        return False
-
-    async def _execute_with_timestamp_retry(self, api_call, *args, **kwargs):
-        """Execute exchange API call with timestamp error retry"""
-        max_retries = 3  # Increased from 2
-        for attempt in range(max_retries):
-            try:
-                return await api_call(*args, **kwargs)
-            except Exception as e:
-                error_msg = str(e).lower()
-                # Check for timestamp-related errors (-1021 is Binance timestamp error code)
-                is_timestamp_error = (
-                    "timestamp" in error_msg or 
-                    "-1021" in error_msg or
-                    "ahead of the server" in error_msg
-                )
-                
-                if is_timestamp_error and attempt < max_retries - 1:
-                    print(f"[TIMESTAMP ERROR] Attempt {attempt + 1}/{max_retries}: {str(e)[:100]}")
-                    # Try to resync time
-                    await self.resync_time_if_needed(str(e))
-                    # Add delay before retry
-                    import asyncio
-                    await asyncio.sleep(1)  # 1 second delay
-                    print(f"[RETRY] Retrying API call after time sync...")
-                    continue
-                else:
-                    # Log non-timestamp errors or max retries reached
-                    if not is_timestamp_error:
-                        print(f"[API ERROR] Non-timestamp error, not retrying: {str(e)[:100]}")
-                    else:
-                        print(f"[TIMESTAMP ERROR] Max retries reached, giving up: {str(e)[:100]}")
-                    # Re-raise the error
-                    raise e
 
     async def fetch_ticker(self, symbol):
         try:

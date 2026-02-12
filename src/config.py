@@ -5,8 +5,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Exchange Credentials
-BYBIT_API_KEY = os.getenv('BYBIT_API_KEY')
-BYBIT_API_SECRET = os.getenv('BYBIT_API_SECRET')
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
@@ -19,27 +17,27 @@ USE_TESTNET = False  # Deprecated - keep False for Live trading
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 TRADING_SYMBOLS = [
     'ETH/USDT',
-    'BTC/USDT',
-    'SOL/USDT',
-    'XRP/USDT',
-    'HYPE/USDT',
-    'BNB/USDT',
-    'BCH/USDT',
-    'ADA/USDT',
-    'SUI/USDT',
-    'LINK/USDT',
-    'AVAX/USDT',
-    'LTC/USDT',
-    'NEAR/USDT',
-    'FET/USDT',
-    'DOT/USDT',
-    'STX/USDT',
-    'TAO/USDT',
-    'FTM/USDT',
-    'OP/USDT',
-    'ARB/USDT',
-    'INJ/USDT',
-    'TIA/USDT',
+    # 'BTC/USDT',
+    # 'SOL/USDT',
+    # 'XRP/USDT',
+    # 'HYPE/USDT',
+    # 'BNB/USDT',
+    # 'BCH/USDT',
+    # 'ADA/USDT',
+    # 'SUI/USDT',
+    # 'LINK/USDT',
+    # 'AVAX/USDT',
+    # 'LTC/USDT',
+    # 'NEAR/USDT',
+    # 'FET/USDT',
+    # 'DOT/USDT',
+    # 'STX/USDT',
+    # 'TAO/USDT',
+    # 'FTM/USDT',
+    # 'OP/USDT',
+    # 'ARB/USDT',
+    # 'INJ/USDT',
+    # 'TIA/USDT',
     'JUP/USDT',
     'SEI/USDT',
     'FIL/USDT'
@@ -57,8 +55,41 @@ RISK_PER_TRADE = 0.05
 STOP_LOSS_PCT = 0.017   # Updated: 5% ROE / 3x Lev ≈ 1.67%
 TAKE_PROFIT_PCT = 0.04  # Updated: 12% ROE / 3x Lev = 4.0%
 
+# Runtime behavior flags
+# When False the bot will NOT automatically create SL/TP orders. Use manual TP/SL placement.
+AUTO_CREATE_SL_TP = False
+
 # Patience Entry Settings
 USE_LIMIT_ORDERS = True  # Use limit orders for better entry price
 PATIENCE_ENTRY_PCT = 0.015  # 1.5% better entry price target
 LIMIT_ORDER_TIMEOUT = 300  # 5 minutes timeout for limit orders (seconds)
 REQUIRE_TECHNICAL_CONFIRMATION = False  # Require Fibo/S/R alignment before entry (disabled for now)
+
+# === TIER SYSTEM CONFIGURATION ===
+# Dynamic leverage and position sizing based on signal confidence score
+# Lower tier = lower confidence signals, higher tier = higher confidence signals
+
+TIER_CONFIG = {
+    "minimum": {
+        "min_score": 2.0,      # Minimum score to enter trade
+        "leverage": 8,          # Leverage multiplier
+        "cost_usdt": 3.0       # Margin per trade (USDT)
+    },
+    "low": {
+        "min_score": 3.0,      # Low confidence threshold
+        "leverage": 10,         # Medium leverage
+        "cost_usdt": 4.0       # Medium margin
+    },
+    "high": {
+        "min_score": 5.0,      # High confidence threshold
+        "leverage": 12,         # Maximum leverage
+        "cost_usdt": 5.0       # Maximum margin
+    }
+}
+
+# Tier system notes:
+# - Each trade uses FIXED MARGIN (cost_usdt), not percentage of account
+# - Notional value = cost_usdt * leverage
+# - Example: $3 margin @ 8x = $24 position size
+# - Adjust cost_usdt to control risk per trade
+# - Adjust leverage to control position size multiplier

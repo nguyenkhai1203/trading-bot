@@ -7,17 +7,22 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config import (
-    BYBIT_API_KEY, 
+    BINANCE_API_KEY, BINANCE_API_SECRET,
     TRADING_SYMBOLS, 
     TRADING_TIMEFRAMES, 
-    LEVERAGE, 
-    RISK_PER_TRADE
+    LEVERAGE,
+    RISK_PER_TRADE,
+    STOP_LOSS_PCT, 
+    TAKE_PROFIT_PCT,
+    USE_LIMIT_ORDERS,
+    PATIENCE_ENTRY_PCT
 )
 from data_manager import MarketDataManager
 from strategy import WeightedScoringStrategy 
 from risk_manager import RiskManager
 from execution import Trader
 from notification import send_telegram_message
+from notification_helper import format_order_cancelled, format_position_filled, format_position_closed
 from signal_tracker import tracker as signal_tracker
 
 # ...
@@ -104,23 +109,19 @@ class TradingBot:
                     cancel_reason = f"Confidence dropped to {current_conf:.2f}"
                 
                 if should_cancel:
-                    print(f"⚠️ [{self.symbol} {self.timeframe}] Pending order technical invalidation: {cancel_reason}")
                     await self.trader.cancel_pending_order(pos_key, reason=cancel_reason)
-                    # Notify Telegram
-                    mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
-                    safe_symbol = self.symbol.replace('/', '-')
-                    # Get pending order info for message
+                    # Unified notification
                     pending_entry = pending_order.get('price', 0)
-                    pending_pos = self.trader.active_positions.get(pos_key, {})
-                    pending_sl = pending_pos.get('sl', 0)
-                    pending_tp = pending_pos.get('tp', 0)
-                    await send_telegram_message(
-                        f"{mode_label} | ❌ CANCELLED\n"
-                        f"{safe_symbol} | {self.timeframe} | {pending_side}\n"
-                        f"Entry: {pending_entry:.3f}\n"
-                        f"SL: {pending_sl:.3f} | TP: {pending_tp:.3f}\n"
-                        f"Reason: {cancel_reason}"
+                    terminal_msg, telegram_msg = format_order_cancelled(
+                        symbol=self.symbol,
+                        timeframe=self.timeframe,
+                        side=pending_side,
+                        entry_price=pending_entry,
+                        reason=cancel_reason,
+                        dry_run=self.trader.dry_run
                     )
+                    print(terminal_msg)
+                    await send_telegram_message(telegram_msg)
                     return
                 
                 # For LIVE mode: exchange handles fill, just monitor and return
@@ -148,21 +149,26 @@ class TradingBot:
                     # If filled, reload position data and notify
                     existing_pos = self.trader.active_positions.get(pos_key)
                     pos_status = existing_pos.get('status', 'filled')
-                    # Notify Telegram that limit order filled
-                    mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
-                    safe_symbol = self.symbol.replace('/', '-')
+                    # Unified notification for filled order
                     side = existing_pos.get('side')
-                    leverage = existing_pos.get('leverage', 10)
                     limit_price = existing_pos.get('entry_price')
                     sl = existing_pos.get('sl')
                     tp = existing_pos.get('tp')
-                    await send_telegram_message(
-                        f"{mode_label} | ✅ FILLED\n"
-                        f"{safe_symbol} | {self.timeframe} | {side} x{leverage}\n"
-                        f"Entry: {limit_price:.3f}\n"
-                        f"SL: {sl:.3f} | TP: {tp:.3f}\n"
-                        f"PnL: 0.00%"
+                    size = existing_pos.get('quantity', 0)
+                    notional = existing_pos.get('notional', 0)
+                    terminal_msg, telegram_msg = format_position_filled(
+                        symbol=self.symbol,
+                        timeframe=self.timeframe,
+                        side=side,
+                        entry_price=limit_price,
+                        size=size,
+                        notional=notional,
+                        sl_price=sl,
+                        tp_price=tp,
+                        dry_run=self.trader.dry_run
                     )
+                    print(terminal_msg)
+                    await send_telegram_message(telegram_msg)
                 
                 # Skip SL/TP monitoring for pending orders
                 if pos_status == 'pending':
@@ -239,19 +245,24 @@ class TradingBot:
                     # USD P&L based on actual notional change (not multiplied by leverage again)
                     notional = qty * entry_price
                     pnl_usd = (pnl_pct / 100) * notional / leverage
-                    pnl_icon = "🟢" if pnl_pct > 0 else "🔴"
                     
-                    mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
-                    safe_symbol = self.symbol.replace('/', '-')
-                    msg = (
-                        f"{mode_label} | {pnl_icon} CLOSED\n"
-                        f"{safe_symbol} | {self.timeframe} | {side} x{leverage}\n"
-                        f"Entry: {entry_price:.3f} → {current_price:.3f}\n"
-                        f"SL: {sl:.3f} | TP: {tp:.3f}\n"
-                        f"PnL: {pnl_pct:+.2f}% | ${pnl_usd:+.2f}"
+                    # Determine exit reason for notification
+                    exit_reason_label = "TP" if "TAKE PROFIT" in exit_reason else "SL" if "STOP LOSS" in exit_reason else exit_reason
+                    
+                    # Unified notification
+                    terminal_msg, telegram_msg = format_position_closed(
+                        symbol=self.symbol,
+                        timeframe=self.timeframe,
+                        side=side,
+                        entry_price=entry_price,
+                        exit_price=current_price,
+                        pnl=pnl_usd,
+                        pnl_pct=pnl_pct,
+                        reason=exit_reason_label,
+                        dry_run=self.trader.dry_run
                     )
-                    print(msg)
-                    await send_telegram_message(msg)
+                    print(terminal_msg)
+                    await send_telegram_message(telegram_msg)
                     
                     # Set cooldown after STOP LOSS to prevent immediate re-entry
                     if "STOP LOSS" in exit_reason:
@@ -473,10 +484,10 @@ class TradingBot:
                             )
                             print(msg)
                             await send_telegram_message(msg)
+                        
+                        # NOTE: SL/TP setup is already handled in execution.py:420
+                        # No need to call setup_sl_tp_for_pending() here to avoid duplicates
 
-                        # Setup SL/TP for limit order (LIVE only)
-                        if order_type == 'limit' and not self.trader.dry_run:
-                            await self.trader.setup_sl_tp_for_pending(self.symbol, timeframe=self.timeframe)
 
         except Exception as e:
             self.logger.error(f"Error in bot step {self.symbol}: {e}")
@@ -541,11 +552,13 @@ async def main():
     
     print("Initializing Bots...")
     # 0. Shared Trader (One instance for all bots to sync positions)
-    trader = Trader(manager.exchange, dry_run=False)  # LIVE MODE ENABLED
+    trader = Trader(manager.exchange, dry_run=False)  # LIVE MODE ENABLED false = chạy thật
 
     # 0.5 Set Isolated Margin Mode (one-time setup)
     if not trader.dry_run:
         await manager.set_isolated_margin_mode(TRADING_SYMBOLS)
+        # Also ensure trader enforces isolated/leverage for configured symbols
+        await trader.enforce_isolated_on_startup(TRADING_SYMBOLS)
 
     # Initialize one bot per pair/tf
     for symbol in TRADING_SYMBOLS:
