@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 
 # Add src to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from config import BINANCE_API_KEY, BINANCE_API_SECRET
 
 async def download_historical_data(symbol, timeframe, limit=5000):

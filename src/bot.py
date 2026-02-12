@@ -59,6 +59,32 @@ class TradingBot:
             # Ensure current_price is available for all checks
             current_price = df.iloc[-1]['close']
 
+            # 0. GLOBAL CONFLICT CHECK (Single Position Rule)
+            # Check if this symbol already has an active position/order in ANY timeframe
+            # ex: if LINK/USDT_8h exists, LINK/USDT_30m should not trade
+            active_timeframe = None
+            for key, pos in self.trader.active_positions.items():
+                if pos.get('symbol') == self.symbol:
+                     # Identify if it's a different timeframe
+                     tf = pos.get('timeframe')
+                     if tf != self.timeframe:
+                         active_timeframe = tf
+                         break
+            
+            # Also check pending orders (in-memory)
+            if not active_timeframe:
+                for key, pending in self.trader.pending_orders.items():
+                    if pending.get('symbol') == self.symbol:
+                        tf = pending.get('timeframe')
+                        if tf != self.timeframe:
+                            active_timeframe = tf
+                            break
+            
+            if active_timeframe:
+                # Log usage (debug level to avoid spam) but DO NOT PROCESS signal
+                # self.logger.debug(f"Skipping {self.symbol} {self.timeframe}: Active position in {active_timeframe}")
+                return
+
             # Check if we already have a position for this symbol/timeframe
             pos_key = f"{self.symbol}_{self.timeframe}"
             
@@ -183,25 +209,33 @@ class TradingBot:
 
                 # --- AUTO CHECK & UPDATE SL/TP FOR FILLED POSITIONS (LIVE) ---
                 if pos_status == 'filled' and not self.trader.dry_run:
-                    # Calculate expected SL/TP
-                    expected_sl, expected_tp = self.risk_manager.calculate_sl_tp(
-                        entry_price, side,
-                        sl_pct=self.strategy.sl_pct,
-                        tp_pct=self.strategy.tp_pct
-                    )
-                    # If SL/TP missing or different, update
-                    if (not sl or abs(sl - expected_sl) > 1e-6) or (not tp or abs(tp - expected_tp) > 1e-6):
-                        print(f"🛠️ [{self.symbol} {self.timeframe}] Updating SL/TP: SL {sl}→{expected_sl}, TP {tp}→{expected_tp}")
-                        await self.trader.modify_sl_tp(
-                            self.symbol,
-                            timeframe=self.timeframe,
-                            new_sl=expected_sl,
-                            new_tp=expected_tp
+                    # Sync with Symbol Lock to prevent multi-timeframe collisions
+                    async with self.trader._get_lock(self.symbol):
+                        # Calculate expected SL/TP
+                        e_sl, e_tp = self.risk_manager.calculate_sl_tp(
+                            entry_price, side,
+                            sl_pct=self.strategy.sl_pct,
+                            tp_pct=self.strategy.tp_pct
                         )
-                        # Update local position
-                        existing_pos['sl'] = expected_sl
-                        existing_pos['tp'] = expected_tp
-                        self.trader.active_positions[pos_key] = existing_pos
+                        # Round for comparison to avoid float drift (0.0001% tolerance)
+                        e_sl, e_tp = round(e_sl, 5), round(e_tp, 5)
+                        curr_sl, curr_tp = round(float(sl or 0), 5), round(float(tp or 0), 5)
+                        
+                        if abs(curr_sl - e_sl) > 1e-6 or abs(curr_tp - e_tp) > 1e-6:
+                            print(f"🛠️ [{self.symbol} {self.timeframe}] Updating SL/TP: {curr_sl}/{curr_tp} → {e_sl}/{e_tp}")
+                            success = await self.trader.modify_sl_tp(
+                                self.symbol,
+                                timeframe=self.timeframe,
+                                new_sl=e_sl,
+                                new_tp=e_tp
+                            )
+                            if success:
+                                # Update local cache immediately
+                                existing_pos = self.trader.active_positions.get(pos_key, existing_pos)
+                                existing_pos['sl'] = e_sl
+                                existing_pos['tp'] = e_tp
+                                self.trader.active_positions[pos_key] = existing_pos
+                                sl, tp = e_sl, e_tp
 
                 # Calculate unrealized PnL for monitoring (with leverage)
                 if side == 'BUY':
@@ -381,6 +415,18 @@ class TradingBot:
                     
                     self.logger.info(f"[{self.symbol} {self.timeframe}] Signal: {side} ({conf})")
                     
+                    # === CRITICAL PRE-TRADE CHECK ===
+                    # Verify with exchange before calculating or placing order
+                    # This prevents 'Dual Orders' if local state is stale
+                    if not self.trader.dry_run:
+                        state = await self.trader.verify_symbol_state(self.symbol)
+                        if state and (state['active_exists'] or state['order_exists']):
+                            print(f"🛑 [{self.symbol}] STOP: Found existing position/order on exchange! skipping new order.")
+                            self.logger.warning(f"[{self.symbol}] Pre-trade check failed: {state}")
+                            # Trigger sync to adopt this state
+                            await self.trader.reconcile_positions()
+                            return
+
                     # Dynamic Tier Sizing - Get leverage early for display
                     score = conf * 10
                     tier = self.get_tier_config(score)
@@ -418,6 +464,27 @@ class TradingBot:
                     
                     if qty > 0:
                         exec_side = side.lower()
+                        
+                        # === DUPLICATE PREVENTION ===
+                        # Check if we already have a pending order for this symbol/timeframe
+                        # This prevents placing multiple orders for the same signal
+                        pos_key_check = f"{self.symbol}_{self.timeframe}"
+                        
+                        # Check in pending_orders (live mode)
+                        if pos_key_check in self.trader.pending_orders:
+                            existing_pending = self.trader.pending_orders[pos_key_check]
+                            self.logger.warning(f"[DUPLICATE SKIP] {pos_key_check} already has pending order (ID: {existing_pending.get('order_id', 'N/A')})")
+                            print(f"⚠️ [{self.symbol} {self.timeframe}] Already have pending order - SKIP to prevent duplicate")
+                            return
+                        
+                        # Check in active_positions (both live and dry_run)
+                        if pos_key_check in self.trader.active_positions:
+                            existing_status = self.trader.active_positions[pos_key_check].get('status', 'unknown')
+                            if existing_status == 'pending':
+                                existing_order_id = self.trader.active_positions[pos_key_check].get('order_id', 'N/A')
+                                self.logger.warning(f"[DUPLICATE SKIP] {pos_key_check} already has pending position (ID: {existing_order_id})")
+                                print(f"⚠️ [{self.symbol} {self.timeframe}] Already have pending position - SKIP to prevent duplicate")
+                                return
                         
                         # Determine order type and price
                         from config import USE_LIMIT_ORDERS, PATIENCE_ENTRY_PCT, LIMIT_ORDER_TIMEOUT
@@ -761,8 +828,24 @@ async def main():
                 except Exception as status_err:
                     print(f"Error sending status update: {status_err}")
 
-            # 1. Centralized Data Fetch (ALWAYS fetch real-time data)
-            print(f"🔄 Heartbeat: Updating data for {len(TRADING_SYMBOLS)} symbols...")
+            # 0.2 Check for Periodic Deep Sync & Self-Healing (Every 10 minutes)
+            if not hasattr(main, 'last_deep_sync'): main.last_deep_sync = 0
+            if curr_time - main.last_deep_sync >= 600: # 10 minutes
+                print("🔄 [SELF-HEALING] Running Deep Sync to check for missing SL/TP...")
+                try:
+                    sync_summary = await trader.reconcile_positions(auto_fix=True)
+                    if sync_summary.get('created_tp_sl', 0) > 0:
+                        print(f"✅ [SELF-HEALING] Fixed {sync_summary['created_tp_sl']} positions with missing SL/TP.")
+                    main.last_deep_sync = curr_time
+                except Exception as sync_err:
+                    import traceback
+                    print(f"Error during deep sync: {sync_err}")
+                    traceback.print_exc()
+
+            # 1. FAST UPDATE: Latest prices for all symbols (Low weight)
+            await manager.update_tickers(TRADING_SYMBOLS)
+            
+            # 2. SLOW UPDATE: Full OHLCV/Candles (Higher weight, throttled inside manager)
             await manager.update_data(TRADING_SYMBOLS, TRADING_TIMEFRAMES)
             
             # 1.5. Reload config if changed (SINGLE CHECK instead of 125)
@@ -794,12 +877,27 @@ async def main():
             if tasks:
                 await asyncio.gather(*tasks)
             
-            await asyncio.sleep(60) # 60s interval - SL/TP is set on entry, no need for frequent polling
+            # 4. Deep Sync - Auto-healing positions without SL/TP (every 5s)
+            # This ensures any filled positions from exchange get proper SL/TP
+            try:
+                # Use first bot's trader for reconciliation (shared across all bots)
+                if bots and hasattr(bots[0], 'trader'):
+                    await bots[0].trader.reconcile_positions()
+            except Exception as e:
+                print(f"⚠️ Deep Sync error: {e}")
+            
+            from config import HEARTBEAT_INTERVAL
+            await asyncio.sleep(HEARTBEAT_INTERVAL) # Default 5s
             
     except KeyboardInterrupt:
         print("Stopping...")
     finally:
         await manager.close()
+        # Only iterate if 'bots' was successfully initialized
+        if 'bots' in locals():
+            for bot in bots:
+                if hasattr(bot, 'trader'):
+                    await bot.trader.close()
 
 if __name__ == "__main__":
     try:

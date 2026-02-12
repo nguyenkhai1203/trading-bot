@@ -18,38 +18,36 @@ class BaseExchangeClient:
         self._time_synced = False
         
     async def sync_server_time(self) -> bool:
-        """Sync local time with exchange server to fix timestamp offset issues."""
+        """Sync local time with exchange server using CCXT native method."""
         try:
-            # Fetch server time and calculate offset
-            server_time_ms = await self.exchange.fetch_time()
-            local_time_ms = int(time.time() * 1000)
-            offset_ms = server_time_ms - local_time_ms
+            print(f"[TIME SYNC] Synchronizing via CCXT load_time_difference()...")
+            # CCXT's load_time_difference handles server_time - local_time internally
+            # It also sets exchange.options['timeDifference']
+            await self.exchange.load_time_difference()
             
-            print(f"[TIME SYNC] Synchronization:")
-            print(f"   Server: {server_time_ms}ms, Local: {local_time_ms}ms")
-            print(f"   Offset: {offset_ms}ms ({'behind' if offset_ms > 0 else 'ahead'})")
+            # Ensure recvWindow is large (60s is Binance max)
+            self.exchange.options['recvWindow'] = 60000 
             
-            # Set the negative of offset so CCXT adds it to outgoing requests
-            time_difference = -offset_ms
-            self.exchange.options['timeDifference'] = time_difference
-            
-            print(f"   Set CCXT timeDifference to: {time_difference}ms")
-            print(f"[OK] Time sync complete!")
+            print(f"[OK] CCXT Time Sync Complete!")
+            print(f"     Calculated Offset: {self.exchange.options.get('timeDifference', 0)}ms | recvWindow: 60000ms")
             self._time_synced = True
             return True
-            
         except Exception as e:
             print(f"[WARN] Time sync failed: {str(e)[:100]}")
-            print(f"   Using default timeDifference: -2000ms")
             return False
+
+    def get_synced_timestamp(self) -> int:
+        """Get current timestamp synchronized with exchange."""
+        # CCXT's milliseconds() already includes the timeDifference if adjustForTimeDifference is True
+        return self.exchange.milliseconds()
     
     async def resync_time_if_needed(self, error_msg: str = "") -> bool:
         """Re-sync time if timestamp error detected."""
-        if "timestamp" in error_msg.lower() or "time" in error_msg.lower():
+        if "timestamp" in error_msg.lower() or "time" in error_msg.lower() or "-1021" in error_msg:
             print(f"[TIME SYNC] Detected timestamp error, re-syncing...")
             return await self.sync_server_time()
         return False
-    
+
     async def _execute_with_timestamp_retry(
         self, 
         api_call: Callable, 
@@ -95,7 +93,10 @@ class BaseExchangeClient:
                 else:
                     # Log non-timestamp errors or max retries reached
                     if not is_timestamp_error:
-                        print(f"[API ERROR] Non-timestamp error, not retrying: {str(e)[:100]}")
+                        # Silence known "informational" errors to avoid user confusion
+                        silence_errors = ["-4067", "-4046", "-4061", "no change", "side cannot be changed"]
+                        if not any(s in error_msg for s in silence_errors):
+                            print(f"[API ERROR] Non-timestamp error, not retrying: {str(e)[:100]}")
                     else:
                         print(f"[TIMESTAMP ERROR] Max retries reached, giving up: {str(e)[:100]}")
                     # Re-raise the error

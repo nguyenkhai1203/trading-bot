@@ -5,19 +5,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Exchange Credentials
+BYBIT_API_KEY = os.getenv('BYBIT_API_KEY')
+BYBIT_API_SECRET = os.getenv('BYBIT_API_SECRET')
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
 # Configuration
-# DRY_RUN: Simulation vs Real Trading
-# True = Simulation/Testing (No real funds, paper trading)
-# False = Real Trading (Uses API keys, real funds)
-# Can be overridden by environment variable DRY_RUN=True
-DRY_RUN = os.getenv('DRY_RUN', 'False').lower() == 'true'
-
 # NOTE: USE_TESTNET is DEPRECATED - Binance removed Testnet Futures support
-# Bot will now ALWAYS use LIVE exchange (set DRY_RUN=True for simulation)
+# Bot will now ALWAYS use LIVE exchange (set dry_run=True in bot.py for simulation)
 USE_TESTNET = False  # Deprecated - keep False for Live trading
+DRY_RUN = False  # Set to True for paper trading (simulation mode)
 
 # Trading Settings
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
@@ -52,6 +49,7 @@ TRADING_SYMBOLS = [
 # Timeframes to run (Concurrent execution)
 # 7 timeframes for comprehensive multi-timeframe analysis
 TRADING_TIMEFRAMES = ['15m', '30m', '1h', '2h', '4h', '8h', '1d']
+TIMEFRAMES = TRADING_TIMEFRAMES  # Alias for backward compatibility
 
 # Parallel Processing
 MAX_WORKERS = 8  # ThreadPoolExecutor workers for symbol-level parallelism
@@ -63,7 +61,7 @@ TAKE_PROFIT_PCT = 0.04  # Updated: 12% ROE / 3x Lev = 4.0%
 
 # Runtime behavior flags
 # When False the bot will NOT automatically create SL/TP orders. Use manual TP/SL placement.
-AUTO_CREATE_SL_TP = False
+AUTO_CREATE_SL_TP = True
 
 # Patience Entry Settings
 USE_LIMIT_ORDERS = True  # Use limit orders for better entry price
@@ -71,37 +69,35 @@ PATIENCE_ENTRY_PCT = 0.015  # 1.5% better entry price target
 LIMIT_ORDER_TIMEOUT = 300  # 5 minutes timeout for limit orders (seconds)
 REQUIRE_TECHNICAL_CONFIRMATION = False  # Require Fibo/S/R alignment before entry (disabled for now)
 
-# === TIER SYSTEM CONFIGURATION ===
-# Dynamic leverage and position sizing based on signal confidence score
-# Lower tier = lower confidence signals, higher tier = higher confidence signals
+# Signal Quality Filter
+MIN_WINRATE_THRESHOLD = 0.50  # Minimum winrate (50%) required to trade a signal
+# Bot will check signal_performance.json and only trade signals with winrate >= this threshold
+HEARTBEAT_INTERVAL = 5  # Main loop interval in seconds
+OHLCV_REFRESH_INTERVAL = 60  # OHLCV data refresh interval in seconds (1 minute)
 
-TIER_CONFIG = {
-    "minimum": {
-        "min_score": 2.5,      # Minimum score to enter trade
-        "leverage": 8,          # Leverage multiplier
-        "cost_usdt": 3.0       # Margin per trade (USDT)
+# Confidence-Based Position Sizing (Conservative Settings)
+# Bot will allocate capital and leverage based on signal confidence
+CONFIDENCE_TIERS = {
+    "high": {
+        "min_confidence": 0.70,  # 70%+ confidence
+        "leverage": 10,          # Conservative max leverage
+        "cost_usdt": 10.0         # $5 per trade (conservative)
+    },
+    "medium": {
+        "min_confidence": 0.50,  # 50-70% confidence
+        "leverage": 8,           # Medium leverage
+        "cost_usdt": 8.0         # $4 per trade
     },
     "low": {
-        "min_score": 3.5,      # Low confidence threshold
-        "leverage": 10,         # Medium leverage
-        "cost_usdt": 4.0       # Medium margin
-    },
-    "high": {
-        "min_score": 5.0,      # High confidence threshold
-        "leverage": 12,         # Maximum leverage
-        "cost_usdt": 5.0       # Maximum margin
+        "min_confidence": 0.30,  # 30-50% confidence
+        "leverage": 5,           # Low leverage for safety
+        "cost_usdt": 5.0         # $3 per trade (minimum)
     }
 }
+MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade
 
-# Analyzer Thresholds
+# Analyzer Thresholds (for future use)
 MIN_WIN_RATE_TRAIN = 0.55      # Minimum win rate on training set to enable (55%)
-MIN_WIN_RATE_TEST = 0.55       # Minimum win rate on test set to enable (53%)
+MIN_WIN_RATE_TEST = 0.55       # Minimum win rate on test set to enable (55%)
 MAX_CONSISTENCY = 0.25         # Maximum consistency (train/test difference)
 MIN_CROSS_TF_SUPPORT = 1       # Minimum number of other timeframes that must be profitable
-
-# Tier system notes:
-# - Each trade uses FIXED MARGIN (cost_usdt), not percentage of account
-# - Notional value = cost_usdt * leverage
-# - Example: $3 margin @ 8x = $24 position size
-# - Adjust cost_usdt to control risk per trade
-# - Adjust leverage to control position size multiplier

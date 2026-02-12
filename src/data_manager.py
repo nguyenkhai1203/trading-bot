@@ -21,6 +21,7 @@ class MarketDataManager(BaseExchangeClient):
         super().__init__(exchange)  # Initialize BaseExchangeClient
         self.data_store = {} # { 'symbol_timeframe': df }
         self.features_cache = {}  # { 'symbol_timeframe': df_with_features }
+        self._last_ohlcv_update = 0  # Timestamp for throttled candle updates
         self.listeners = []
         self._isolated_margin_set = False
         self._update_counter = 0  # Track cycles for periodic disk save
@@ -41,8 +42,8 @@ class MarketDataManager(BaseExchangeClient):
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'future', 
-                'adjustForTimeDifference': True,  # Auto-adjust for timestamp mismatch
-                'timeDifference': -2000,  # Assume local time is 2 seconds ahead (will be refined)
+                'adjustForTimeDifference': True, # Re-enable CCXT native adjustment
+                'recvWindow': 60000,             # 60s max safety window
                 'fetchMarkets': True
             }
         }
@@ -56,21 +57,6 @@ class MarketDataManager(BaseExchangeClient):
         exchange = exchange_class(config)
         return exchange
 
-    async def sync_server_time(self):
-        """Sync with exchange server time to avoid timestamp errors."""
-        # Only sync if we have credentials OR if we want to ensure accurate public requests
-        # ccxt's adjustForTimeDifference also helps
-        try:
-            from config import DRY_RUN
-            # Even in dry run, public data fetching might benefit from time sync
-            # but we skip if it's causing issues without keys
-            server_time = await self.exchange.fetch_time()
-            local_time = int(time.time() * 1000)
-            self.exchange.options['timeDifference'] = server_time - local_time
-            print(f"⏰ Time synchronized. Offset: {self.exchange.options['timeDifference']}ms")
-        except Exception as e:
-            print(f"⚠️ [WARN] Failed to sync server time: {e}")
-
     async def set_isolated_margin_mode(self, symbols):
         """Sets margin mode to ISOLATED for given symbols (Live only)."""
         from config import DRY_RUN
@@ -81,7 +67,7 @@ class MarketDataManager(BaseExchangeClient):
             try:
                 # CCXT unified method for margin mode
                 await self._execute_with_timestamp_retry(
-                    self.exchange.set_margin_mode, 'ISOLATED', symbol
+                    self.exchange.set_margin_mode, 'isolated', symbol
                 )
                 print(f"✅ {symbol} set to ISOLATED margin")
             except Exception as e:
@@ -152,13 +138,34 @@ class MarketDataManager(BaseExchangeClient):
                     print(f"Fetch error {symbol} {timeframe}: {error_str[:100]}")
                     return None
 
-    async def update_data(self, symbols, timeframes):
+    async def update_tickers(self, symbols):
+        """Fetch latest prices for all symbols in 1 API call (Low weight)."""
+        try:
+            tickers = await self._execute_with_timestamp_retry(self.exchange.fetch_tickers, symbols)
+            for symbol, ticker_data in tickers.items():
+                last_price = ticker_data.get('last')
+                if last_price:
+                    # Update the 'close' price of the latest candle for all timeframes
+                    for key, df in self.data_store.items():
+                        if key.startswith(f"{symbol}_") and not df.empty:
+                            df.iloc[-1, df.columns.get_loc('close')] = last_price
+            return len(tickers)
+        except Exception as e:
+            print(f"⚠️ [WARN] Ticker update failed: {e}")
+            return 0
+
+    async def update_data(self, symbols, timeframes, force=False):
         """
         Fetch latest candles and merge with historical data.
-        Keeps a rolling window of MAX_CANDLES for backtesting.
-        OPTIMIZED: Only saves to disk every 10 cycles.
+        OPTIMIZED: Only fetches if force=True or enough time passed (60s).
         """
-        MAX_CANDLES = 1000  # Enough for EMA 200 and 70/30 split
+        from config import OHLCV_REFRESH_INTERVAL
+        curr_time = time.time()
+        if not force and (curr_time - self._last_ohlcv_update < OHLCV_REFRESH_INTERVAL):
+            return 
+
+        self._last_ohlcv_update = curr_time
+        MAX_CANDLES = 1000 
         self._update_counter += 1
         save_to_disk = (self._update_counter % 10 == 0)  # Save every 10 cycles
         
