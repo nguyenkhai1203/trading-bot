@@ -15,17 +15,15 @@
     - **Take Profit**: Set to ~4.0% price move (targets 12%+ ROE profit).
     - **Benefit**: Provides wide stops to handle market noise while strictly limiting account drawdown.
 
-## Cross-Timeframe Signal Validation (Enhanced Safety)
-- **Philosophy**: A signal is robust if it's profitable on **1+ distant timeframes** (relaxed from prior 2+ requirement for better config availability)
-- **Decision Rationale (Feb 9, 2026)**: Changed from 2+ TF → 1+ TF for ALL symbols to increase enabled configs while maintaining safety
-- **Why 1+ TF now?**: More practical for alt coins with fewer cross-TF data points; mitigated by 70/30 walk-forward + 4 safety checks still enforcing quality
-- **Confidence Levels**:
-  - **VERY HIGH** (4+ TF): Deploy full position size, maximum confidence
-  - **HIGH** (2+ TF): Deploy, standard position size, most reliable signals ⭐ **RECOMMENDED**
-  - **MEDIUM** (1 TF): Deploy, but monitor closely - now acceptable due to strict validation
-  - **LOW** (0 TF): REJECT, no cross-timeframe evidence
-- **Implementation**: Analyzer auto-tests each signal config across all 5 TFs during optimization; ENABLEs configs with ≥1 TF passing
-- **Result**: More enabled configs (target 8-15 vs prior 1-2), while maintaining profitability through walk-forward validation
+## Optimization vs. Execution (Score vs. Confidence)
+- **Confidence Level (Optimization Filter)**:
+  - **Goal**: Statistical evidence across multiple timeframes.
+  - **Logic**: Analyzer tests if a strategy is profitable on 1+ distant timeframes.
+  - **Result**: "Filter" that ENABLEs or DISABLEs a symbol/timeframe config in `strategy_config.json`.
+- **Score (Execution Sizing)**:
+  - **Goal**: Real-time signal strength for a specific 1-min candle.
+  - **Logic**: Aggregates weights of active indicators (e.g., RSI Divergence=2.0 + EMA Cross=1.5).
+  - **Result**: Determines **Tier selection** (Sizing & Leverage) at the moment of entry.
 
 ## System Architecture: 3-Layer Scale
 1.  **Data Layer (`MarketDataManager`)**: Centralized fetching to prevent 429 Rate Limits. Shares RAM among all TF bots.
@@ -489,3 +487,24 @@ All 15 key features verified ✅:
 - **Solution**:
   - **Creation Cooldown**: After creating SL/TP, ignore that position's missing status for **20 seconds**.
   - **Trust Mechanism**: Assume order exists during cooldown to prevent duplicate creation.
+
+## Market Reversal Safeguards (Feb 14, 2026)
+### 1. Signal Flip Early Exit
+- **Problem**: Bot continued to hold positions during aggressive trend reversals.
+- **Solution**: 
+  - Monitoring loop in `bot.py` now monitors for *opposite* signals while a position is open.
+  - If a BUY position exists but a SELL signal (score >= `exit_score`) emerges, the bot triggers `force_close_position()`.
+  
+### 2. Universal Reaper (103+ Order Cleanup)
+- **Problem**: Default Reaper only scanned current `TRADING_SYMBOLS`, leaving "orphaned" orders from removed coins.
+- **Solution**: 
+  - Modified `reconcile_positions` to scan ALL open orders in the account.
+  - Automatically cancels any conditional (STOP/TAKE) order not managed by `active_positions`.
+  - Added 100ms rate limiting between cancels to avoid DDoS protection.
+
+### 3. Safe Reversal Entry ("Double-Safe")
+- **Problem**: Entering a trade immediately after a trend reversal is high-risk.
+- **Solution**:
+  - **Trend Check**: Bot checks `signal_tracker` for the previous trade's side.
+  - **Reversal Reduction**: If new trade flips the side (e.g., Short -> Long), it applies a **0.6x Leverage multiplier** and **0.5x Cost multiplier**.
+  - **Tighter Protection**: Initial Stop Loss is reduced by **40%** (Tighter) for all reversal entries to minimize exposure until the new trend is confirmed.

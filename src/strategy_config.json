@@ -58,16 +58,8 @@
         }
     },
     "TAO/USDT_8h": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_cross_21_down": 2.0,
-            "EMA_9_lt_21": 1.4,
-            "EMA_50_lt_200": 0.25,
-            "MACD_lt_signal": 2.0,
-            "RSI_14_lt_50": 1.4,
-            "RSI_7_lt_50": 1.0,
-            "breakout_above_resistance": 2.0
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
             "entry_score": 5.0,
             "exit_score": 2.5
@@ -89,9 +81,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 984.1999999999389,
-            "win_rate_sim": 0.5714285714285714,
-            "trades_sim": 84
+            "pnl_sim": 860.4999999999382,
+            "win_rate_sim": 0.5462962962962963,
+            "trades_sim": 85
         }
     },
     "TAO/USDT_1d": {
@@ -213,7 +205,7 @@
     "OP/USDT_2h": {
         "enabled": true,
         "weights": {
-            "EMA_9_cross_21_down": 0.5,
+            "EMA_9_cross_21_down": 1.0,
             "RSI_21_oversold": 2.0,
             "RSI_21_overbought": 1.4,
             "MACD_cross_down": 0.5,
@@ -338,17 +330,17 @@
         "enabled": true,
         "weights": {
             "EMA_9_cross_21_up": 1.0,
-            "EMA_50_lt_200": 0.35,
+            "EMA_9_cross_21_down": 0.35,
             "RSI_21_overbought": 2.0,
-            "MACD_cross_down": 0.7,
-            "MACD_cross_up": 0.5,
-            "Price_lt_BB_Low": 1.0,
+            "MACD_cross_up": 0.7,
+            "MACD_cross_down": 0.5,
+            "Price_lt_BB_Low": 2.0,
             "price_at_support": 2.0,
             "breakout_below_support": 1.4,
-            "breakout_above_resistance": 0.25
+            "breakout_above_resistance": 0.5
         },
         "thresholds": {
-            "entry_score": 3.0,
+            "entry_score": 3.5,
             "exit_score": 2.5
         },
         "risk": {
@@ -357,20 +349,20 @@
         },
         "tiers": {
             "low": {
-                "min_score": 3.0,
+                "min_score": 3.5,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 5.0,
+                "min_score": 5.5,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
         },
         "performance": {
-            "pnl_sim": 212.79999999995925,
-            "win_rate_sim": 0.5818713450292399,
-            "trades_sim": 56
+            "pnl_sim": 224.79999999996653,
+            "win_rate_sim": 0.6026785714285714,
+            "trades_sim": 46
         }
     },
     "ARB/USDT_4h": {
@@ -726,6 +718,7 @@
         "weights": {
             "EMA_50_lt_200": 2.0,
             "EMA_9_lt_21": 0.7,
+            "EMA_9_cross_21_down": 0.25,
             "RSI_14_overbought": 2.0,
             "RSI_7_overbought": 1.4,
             "RSI_21_overbought": 1.0
@@ -751,9 +744,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 239.59999999993306,
-            "win_rate_sim": 0.5937313432835821,
-            "trades_sim": 92
+            "pnl_sim": 307.1999999999316,
+            "win_rate_sim": 0.6035067873303167,
+            "trades_sim": 94
         }
     },
     "TIA/USDT_8h": {
@@ -818,11 +811,10 @@
         "enabled": true,
         "weights": {
             "EMA_9_cross_21_down": 2.0,
-            "EMA_9_cross_21_up": 0.35,
-            "EMA_9_gt_21": 0.25,
+            "EMA_9_gt_21": 0.35,
             "RSI_21_oversold": 2.0,
-            "MACD_gt_signal": 0.7,
-            "RSI_14_gt_50": 0.25,
+            "MACD_gt_signal": 0.35,
+            "RSI_7_overbought": 0.25,
             "Price_gt_BB_Up": 0.5
         },
         "thresholds": {
@@ -846,9 +838,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 761.3999999998887,
-            "win_rate_sim": 0.5861165048543688,
-            "trades_sim": 153
+            "pnl_sim": 734.7999999998938,
+            "win_rate_sim": 0.5916666666666667,
+            "trades_sim": 146
         }
     },
     "JUP/USDT_4h": {
@@ -1029,8 +1021,8 @@
         "enabled": true,
         "weights": {
             "EMA_50_lt_200": 2.0,
-            "EMA_9_cross_21_down": 1.4,
-            "EMA_9_lt_21": 1.0,
+            "EMA_9_lt_21": 1.4,
+            "EMA_9_cross_21_down": 1.0,
             "RSI_14_overbought": 2.0,
             "RSI_21_overbought": 1.4,
             "RSI_21_oversold": 1.0,
@@ -1058,9 +1050,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 604.7999999998756,
-            "win_rate_sim": 0.5848163030998852,
-            "trades_sim": 171
+            "pnl_sim": 393.59999999987485,
+            "win_rate_sim": 0.5586049170954831,
+            "trades_sim": 172
         }
     },
     "SEI/USDT_1d": {
@@ -1153,12 +1145,12 @@
     "FIL/USDT_1h": {
         "enabled": true,
         "weights": {
-            "RSI_21_oversold": 1.0,
-            "MACD_cross_up": 0.7,
+            "RSI_21_oversold": 0.5,
+            "MACD_cross_up": 0.35,
             "MACD_gt_signal": 0.25,
-            "bounce_from_support": 2.0,
-            "price_at_support": 1.4,
-            "breakout_above_resistance": 1.0
+            "breakout_above_resistance": 2.0,
+            "bounce_from_support": 1.4,
+            "price_at_support": 1.0
         },
         "thresholds": {
             "entry_score": 2.0,
@@ -1181,22 +1173,14 @@
             }
         },
         "performance": {
-            "pnl_sim": 398.7999999999447,
-            "win_rate_sim": 0.6214109926168991,
-            "trades_sim": 76
+            "pnl_sim": 63.199999999953434,
+            "win_rate_sim": 0.5625,
+            "trades_sim": 64
         }
     },
     "FIL/USDT_8h": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_lt_21": 2.0,
-            "EMA_50_lt_200": 0.35,
-            "MACD_lt_signal": 2.0,
-            "RSI_14_lt_50": 1.4,
-            "RSI_21_lt_50": 1.0,
-            "price_at_support": 2.0,
-            "breakout_above_resistance": 1.4
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
             "entry_score": 3.0,
             "exit_score": 2.5
@@ -1218,9 +1202,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 239.99999999989086,
-            "win_rate_sim": 0.5515046296296295,
-            "trades_sim": 150
+            "pnl_sim": 203.79999999989013,
+            "win_rate_sim": 0.5475548710050058,
+            "trades_sim": 151
         }
     },
     "FIL/USDT_1d": {
@@ -1378,25 +1362,24 @@
     "ETH/USDT_30m": {
         "enabled": true,
         "weights": {
-            "EMA_9_cross_21_up": 2.0,
-            "EMA_50_gt_200": 0.35,
-            "EMA_9_gt_21": 0.25,
-            "MACD_cross_up": 2.0,
-            "RSI_7_gt_50": 0.7,
-            "MACD_gt_signal": 0.25,
-            "Price_gt_BB_Up": 2.0,
-            "Price_lt_BB_Low": 0.7,
+            "EMA_9_cross_21_up": 0.5,
+            "EMA_9_gt_21": 0.35,
+            "MACD_gt_signal": 1.0,
+            "RSI_7_gt_50": 0.35,
+            "RSI_14_gt_50": 0.25,
+            "Price_lt_BB_Low": 2.0,
+            "Price_gt_BB_Up": 0.7,
             "breakout_above_resistance": 2.0,
-            "price_at_support": 1.4,
-            "bounce_from_support": 0.5
+            "breakout_below_support": 0.35,
+            "price_at_support": 0.25
         },
         "thresholds": {
             "entry_score": 2.0,
             "exit_score": 2.5
         },
         "risk": {
-            "sl_pct": 0.03,
-            "tp_pct": 0.03
+            "sl_pct": 0.035,
+            "tp_pct": 0.035
         },
         "tiers": {
             "low": {
@@ -1411,46 +1394,38 @@
             }
         },
         "performance": {
-            "pnl_sim": 213.599999999984,
-            "win_rate_sim": 0.6529411764705882,
-            "trades_sim": 22
+            "pnl_sim": 497.79999999994106,
+            "win_rate_sim": 0.6404761904761904,
+            "trades_sim": 81
         }
     },
     "ETH/USDT_1h": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_cross_21_down": 1.0,
-            "EMA_9_lt_21": 0.35,
-            "RSI_14_oversold": 2.0,
-            "RSI_21_lt_50": 0.35,
-            "MACD_cross_down": 0.25,
-            "bounce_from_support": 2.0,
-            "price_at_support": 1.4
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
-            "entry_score": 3.5,
+            "entry_score": 2.5,
             "exit_score": 2.5
         },
         "risk": {
             "sl_pct": 0.03,
-            "tp_pct": 0.03
+            "tp_pct": 0.045
         },
         "tiers": {
             "low": {
-                "min_score": 3.5,
+                "min_score": 2.5,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 5.5,
+                "min_score": 4.5,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
         },
         "performance": {
-            "pnl_sim": 103.19999999998981,
-            "win_rate_sim": 0.6777777777777778,
-            "trades_sim": 14
+            "pnl_sim": 658.7999999999629,
+            "win_rate_sim": 0.575657894736842,
+            "trades_sim": 51
         }
     },
     "ETH/USDT_4h": {
@@ -1628,42 +1603,32 @@
         }
     },
     "TIA/USDT_30m": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_cross_21_down": 2.0,
-            "EMA_9_cross_21_up": 1.4,
-            "EMA_9_lt_21": 0.25,
-            "RSI_14_lt_50": 0.5,
-            "RSI_7_lt_50": 0.35,
-            "MACD_gt_signal": 0.25,
-            "Price_lt_BB_Low": 0.5,
-            "Price_gt_BB_Up": 0.35,
-            "price_at_support": 1.0
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
-            "entry_score": 3.0,
+            "entry_score": 2.0,
             "exit_score": 2.5
         },
         "risk": {
-            "sl_pct": 0.025,
-            "tp_pct": 0.025
+            "sl_pct": 0.035,
+            "tp_pct": 0.052500000000000005
         },
         "tiers": {
             "low": {
-                "min_score": 3.0,
+                "min_score": 2.0,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 5.0,
+                "min_score": 4.0,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
         },
         "performance": {
-            "pnl_sim": 161.19999999994616,
-            "win_rate_sim": 0.5777777777777777,
-            "trades_sim": 74
+            "pnl_sim": 610.1999999999243,
+            "win_rate_sim": 0.4722222222222222,
+            "trades_sim": 104
         }
     },
     "BTC/USDT_1h": {
@@ -1899,51 +1864,41 @@
             "price_at_support": 1.0
         },
         "thresholds": {
-            "entry_score": 2.0,
-            "exit_score": 2.5
-        },
-        "risk": {
-            "sl_pct": 0.03,
-            "tp_pct": 0.03
-        },
-        "tiers": {
-            "low": {
-                "min_score": 2.0,
-                "leverage": 8,
-                "cost_usdt": 3.0
-            },
-            "high": {
-                "min_score": 4.0,
-                "leverage": 12,
-                "cost_usdt": 5.0
-            }
-        },
-        "performance": {
-            "pnl_sim": 417.5999999998712,
-            "win_rate_sim": 0.5655905511811024,
-            "trades_sim": 177
-        }
-    },
-    "SOL/USDT_4h": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_cross_21_down": 1.0,
-            "EMA_50_lt_200": 0.35,
-            "EMA_9_lt_21": 0.25,
-            "RSI_14_overbought": 2.0,
-            "RSI_21_overbought": 1.4,
-            "MACD_cross_up": 1.0,
-            "Price_gt_BB_Up": 0.5,
-            "Price_lt_BB_Low": 0.35,
-            "breakout_above_resistance": 2.0
-        },
-        "thresholds": {
-            "entry_score": 2.5,
+            "entry_score": 3.0,
             "exit_score": 2.5
         },
         "risk": {
             "sl_pct": 0.035,
             "tp_pct": 0.035
+        },
+        "tiers": {
+            "low": {
+                "min_score": 3.0,
+                "leverage": 8,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 5.0,
+                "leverage": 12,
+                "cost_usdt": 5.0
+            }
+        },
+        "performance": {
+            "pnl_sim": 362.599999999944,
+            "win_rate_sim": 0.5872340425531914,
+            "trades_sim": 77
+        }
+    },
+    "SOL/USDT_4h": {
+        "enabled": false,
+        "weights": {},
+        "thresholds": {
+            "entry_score": 2.5,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.025,
+            "tp_pct": 0.037500000000000006
         },
         "tiers": {
             "low": {
@@ -1958,9 +1913,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 161.799999999992,
-            "win_rate_sim": 0.7166666666666667,
-            "trades_sim": 11
+            "pnl_sim": 133.1999999999898,
+            "win_rate_sim": 0.55,
+            "trades_sim": 14
         }
     },
     "SOL/USDT_8h": {
@@ -2003,33 +1958,33 @@
             "RSI_14_gt_50": 0.25,
             "Price_gt_BB_Up": 1.0,
             "bounce_from_support": 2.0,
-            "price_at_support": 0.7,
+            "price_at_support": 1.4,
             "breakout_below_support": 0.25
         },
         "thresholds": {
-            "entry_score": 3.0,
+            "entry_score": 2.0,
             "exit_score": 2.5
         },
         "risk": {
-            "sl_pct": 0.025,
-            "tp_pct": 0.037500000000000006
+            "sl_pct": 0.035,
+            "tp_pct": 0.035
         },
         "tiers": {
             "low": {
-                "min_score": 3.0,
+                "min_score": 2.0,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 5.0,
+                "min_score": 4.0,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
         },
         "performance": {
-            "pnl_sim": 363.29999999997017,
-            "win_rate_sim": 0.5848484848484848,
-            "trades_sim": 41
+            "pnl_sim": 398.7999999999447,
+            "win_rate_sim": 0.6101190476190477,
+            "trades_sim": 76
         }
     },
     "XRP/USDT_1h": {
@@ -2122,16 +2077,15 @@
     "XRP/USDT_8h": {
         "enabled": true,
         "weights": {
-            "EMA_9_cross_21_down": 2.0,
-            "EMA_50_lt_200": 1.4,
+            "EMA_50_lt_200": 2.0,
+            "EMA_9_cross_21_down": 1.4,
             "EMA_9_lt_21": 0.25,
             "MACD_cross_down": 2.0,
             "RSI_14_overbought": 1.4,
             "RSI_14_lt_50": 1.0,
             "Price_gt_BB_Up": 2.0,
             "Price_lt_BB_Low": 1.4,
-            "breakout_below_support": 2.0,
-            "breakout_above_resistance": 1.4
+            "breakout_above_resistance": 2.0
         },
         "thresholds": {
             "entry_score": 2.0,
@@ -2154,9 +2108,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 436.7999999999047,
-            "win_rate_sim": 0.5914754098360656,
-            "trades_sim": 136
+            "pnl_sim": 469.9999999998945,
+            "win_rate_sim": 0.5930774748923959,
+            "trades_sim": 150
         }
     },
     "XRP/USDT_1d": {
@@ -2707,13 +2661,10 @@
     "ADA/USDT_1h": {
         "enabled": true,
         "weights": {
-            "EMA_9_cross_21_down": 1.0,
+            "EMA_9_cross_21_down": 0.5,
             "RSI_21_oversold": 2.0,
-            "MACD_cross_up": 0.35,
-            "RSI_14_oversold": 0.25,
-            "Price_lt_BB_Low": 1.0,
-            "bounce_from_support": 0.5,
-            "breakout_below_support": 0.35
+            "Price_lt_BB_Low": 0.5,
+            "bounce_from_support": 0.5
         },
         "thresholds": {
             "entry_score": 2.0,
@@ -2833,12 +2784,13 @@
         "weights": {
             "EMA_50_lt_200": 2.0,
             "EMA_9_lt_21": 1.4,
-            "RSI_7_lt_50": 2.0,
-            "MACD_cross_down": 1.4,
+            "EMA_9_cross_21_up": 1.0,
+            "MACD_cross_down": 2.0,
+            "RSI_7_lt_50": 1.4,
             "MACD_lt_signal": 1.0
         },
         "thresholds": {
-            "entry_score": 7.0,
+            "entry_score": 6.0,
             "exit_score": 2.5
         },
         "risk": {
@@ -2847,12 +2799,12 @@
         },
         "tiers": {
             "low": {
-                "min_score": 7.0,
+                "min_score": 6.0,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 9.0,
+                "min_score": 8.0,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
@@ -2924,9 +2876,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 576.4999999999782,
-            "win_rate_sim": 0.6527777777777778,
-            "trades_sim": 30
+            "pnl_sim": 627.7999999999774,
+            "win_rate_sim": 0.6623931623931625,
+            "trades_sim": 31
         }
     },
     "SUI/USDT_8h": {
@@ -3023,16 +2975,8 @@
         }
     },
     "LINK/USDT_30m": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_gt_21": 0.5,
-            "MACD_gt_signal": 1.0,
-            "MACD_cross_down": 0.7,
-            "RSI_14_gt_50": 0.5,
-            "Price_gt_BB_Up": 0.5,
-            "breakout_above_resistance": 2.0,
-            "bounce_from_support": 0.35
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
             "entry_score": 2.0,
             "exit_score": 2.5
@@ -3054,8 +2998,8 @@
             }
         },
         "performance": {
-            "pnl_sim": 488.79999999989013,
-            "win_rate_sim": 0.5540282550591829,
+            "pnl_sim": 443.79999999989013,
+            "win_rate_sim": 0.5488736158839251,
             "trades_sim": 151
         }
     },
@@ -3095,7 +3039,7 @@
             "RSI_21_overbought": 2.0,
             "RSI_21_oversold": 1.4,
             "MACD_cross_down": 1.0,
-            "Price_gt_BB_Up": 0.5,
+            "Price_gt_BB_Up": 1.0,
             "breakout_above_resistance": 1.0
         },
         "thresholds": {
@@ -3119,9 +3063,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 65.59999999995489,
-            "win_rate_sim": 0.5596153846153846,
-            "trades_sim": 62
+            "pnl_sim": 101.79999999995562,
+            "win_rate_sim": 0.5647058823529412,
+            "trades_sim": 61
         }
     },
     "LINK/USDT_4h": {
@@ -3154,18 +3098,8 @@
         }
     },
     "LINK/USDT_8h": {
-        "enabled": true,
-        "weights": {
-            "EMA_50_lt_200": 2.0,
-            "EMA_9_lt_21": 0.7,
-            "EMA_9_cross_21_up": 0.5,
-            "RSI_21_overbought": 2.0,
-            "RSI_14_overbought": 1.4,
-            "RSI_7_overbought": 1.0,
-            "Price_lt_BB_Low": 2.0,
-            "Price_gt_BB_Up": 1.4,
-            "price_at_support": 2.0
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
             "entry_score": 3.0,
             "exit_score": 2.5
@@ -3187,9 +3121,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 424.79999999991196,
-            "win_rate_sim": 0.5783166109253066,
-            "trades_sim": 121
+            "pnl_sim": 393.59999999991123,
+            "win_rate_sim": 0.5702844518088925,
+            "trades_sim": 122
         }
     },
     "LINK/USDT_1d": {
@@ -3375,37 +3309,32 @@
         }
     },
     "LTC/USDT_15m": {
-        "enabled": true,
-        "weights": {
-            "RSI_21_oversold": 2.0,
-            "RSI_7_oversold": 0.35,
-            "breakout_above_resistance": 0.5,
-            "bounce_from_support": 0.35
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
-            "entry_score": 2.5,
+            "entry_score": 2.0,
             "exit_score": 2.5
         },
         "risk": {
-            "sl_pct": 0.03,
-            "tp_pct": 0.045
+            "sl_pct": 0.02,
+            "tp_pct": 0.04
         },
         "tiers": {
             "low": {
-                "min_score": 2.5,
+                "min_score": 2.0,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 4.5,
+                "min_score": 4.0,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
         },
         "performance": {
-            "pnl_sim": 225.59999999999127,
-            "win_rate_sim": 0.6571428571428571,
-            "trades_sim": 12
+            "pnl_sim": 200.399999999976,
+            "win_rate_sim": 0.4423076923076923,
+            "trades_sim": 33
         }
     },
     "LTC/USDT_30m": {
@@ -3413,7 +3342,8 @@
         "weights": {
             "EMA_9_cross_21_up": 1.0,
             "RSI_21_oversold": 2.0,
-            "Price_lt_BB_Low": 1.0
+            "Price_lt_BB_Low": 1.0,
+            "breakout_above_resistance": 0.5
         },
         "thresholds": {
             "entry_score": 2.5,
@@ -3436,8 +3366,8 @@
             }
         },
         "performance": {
-            "pnl_sim": 566.3999999999796,
-            "win_rate_sim": 0.5964912280701754,
+            "pnl_sim": 476.3999999999796,
+            "win_rate_sim": 0.55,
             "trades_sim": 28
         }
     },
@@ -3677,9 +3607,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 535.1999999999061,
-            "win_rate_sim": 0.5888221153846154,
-            "trades_sim": 129
+            "pnl_sim": 501.59999999990396,
+            "win_rate_sim": 0.5838117106773824,
+            "trades_sim": 132
         }
     },
     "NEAR/USDT_1d": {
@@ -3715,21 +3645,20 @@
         "enabled": true,
         "weights": {
             "EMA_9_gt_21": 0.5,
-            "EMA_50_lt_200": 0.35,
             "RSI_21_overbought": 2.0,
-            "RSI_7_overbought": 0.7,
-            "RSI_7_oversold": 0.5,
-            "Price_gt_BB_Up": 1.0,
+            "RSI_7_oversold": 0.7,
+            "RSI_7_overbought": 0.5,
+            "Price_gt_BB_Up": 0.5,
             "breakout_above_resistance": 2.0,
             "price_at_support": 0.7,
-            "bounce_from_support": 0.25
+            "bounce_from_support": 0.5
         },
         "thresholds": {
             "entry_score": 2.0,
             "exit_score": 2.5
         },
         "risk": {
-            "sl_pct": 0.025,
+            "sl_pct": 0.02,
             "tp_pct": 0.025
         },
         "tiers": {
@@ -3745,9 +3674,9 @@
             }
         },
         "performance": {
-            "pnl_sim": -5.400000000048749,
-            "win_rate_sim": 0.55,
-            "trades_sim": 67
+            "pnl_sim": 231.19999999994616,
+            "win_rate_sim": 0.5875706214689265,
+            "trades_sim": 74
         }
     },
     "FET/USDT_30m": {
@@ -3848,29 +3777,29 @@
             "RSI_14_lt_50": 1.0
         },
         "thresholds": {
-            "entry_score": 2.5,
+            "entry_score": 6.0,
             "exit_score": 2.5
         },
         "risk": {
             "sl_pct": 0.025,
-            "tp_pct": 0.025
+            "tp_pct": 0.05
         },
         "tiers": {
             "low": {
-                "min_score": 2.5,
+                "min_score": 6.0,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 4.5,
+                "min_score": 8.0,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
         },
         "performance": {
-            "pnl_sim": 278.7999999998374,
-            "win_rate_sim": 0.5533199195171026,
-            "trades_sim": 226
+            "pnl_sim": 210.59999999999127,
+            "win_rate_sim": 0.5833333333333333,
+            "trades_sim": 12
         }
     },
     "FET/USDT_1d": {
@@ -3932,19 +3861,8 @@
         }
     },
     "DOT/USDT_30m": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_cross_21_up": 1.0,
-            "EMA_9_gt_21": 0.35,
-            "EMA_9_lt_21": 0.25,
-            "RSI_21_overbought": 2.0,
-            "MACD_cross_down": 0.7,
-            "RSI_21_gt_50": 0.25,
-            "Price_gt_BB_Up": 1.0,
-            "breakout_above_resistance": 2.0,
-            "bounce_from_support": 0.7,
-            "price_at_support": 0.25
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
             "entry_score": 2.5,
             "exit_score": 2.5
@@ -3966,9 +3884,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 154.59999999998763,
-            "win_rate_sim": 0.6916666666666667,
-            "trades_sim": 17
+            "pnl_sim": -43.40000000000509,
+            "win_rate_sim": 0.41666666666666663,
+            "trades_sim": 7
         }
     },
     "DOT/USDT_1h": {
@@ -4001,78 +3919,61 @@
         }
     },
     "DOT/USDT_2h": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_cross_21_down": 1.0,
-            "EMA_50_lt_200": 0.7,
-            "EMA_9_lt_21": 0.25,
-            "RSI_21_oversold": 2.0,
-            "RSI_21_overbought": 1.4,
-            "MACD_cross_down": 0.5,
-            "breakout_above_resistance": 2.0,
-            "price_at_support": 0.7,
-            "breakout_below_support": 0.25
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
-            "entry_score": 2.5,
-            "exit_score": 2.5
-        },
-        "risk": {
-            "sl_pct": 0.03,
-            "tp_pct": 0.045
-        },
-        "tiers": {
-            "low": {
-                "min_score": 2.5,
-                "leverage": 8,
-                "cost_usdt": 3.0
-            },
-            "high": {
-                "min_score": 4.5,
-                "leverage": 12,
-                "cost_usdt": 5.0
-            }
-        },
-        "performance": {
-            "pnl_sim": 338.3999999999869,
-            "win_rate_sim": 0.7076923076923077,
-            "trades_sim": 18
-        }
-    },
-    "DOT/USDT_4h": {
-        "enabled": true,
-        "weights": {
-            "EMA_50_lt_200": 1.0,
-            "EMA_9_lt_21": 0.7,
-            "RSI_21_overbought": 2.0,
-            "RSI_14_overbought": 1.4,
-            "RSI_14_oversold": 1.0,
-            "Price_gt_BB_Up": 0.5
-        },
-        "thresholds": {
-            "entry_score": 3.5,
+            "entry_score": 2.0,
             "exit_score": 2.5
         },
         "risk": {
             "sl_pct": 0.035,
-            "tp_pct": 0.052500000000000005
+            "tp_pct": 0.035
         },
         "tiers": {
             "low": {
-                "min_score": 3.5,
+                "min_score": 2.0,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 5.5,
+                "min_score": 4.0,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
         },
         "performance": {
-            "pnl_sim": 362.1999999999862,
-            "win_rate_sim": 0.6214285714285714,
-            "trades_sim": 19
+            "pnl_sim": 329.3999999998814,
+            "win_rate_sim": 0.5484199796126401,
+            "trades_sim": 163
+        }
+    },
+    "DOT/USDT_4h": {
+        "enabled": false,
+        "weights": {},
+        "thresholds": {
+            "entry_score": 4.5,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.03,
+            "tp_pct": 0.06
+        },
+        "tiers": {
+            "low": {
+                "min_score": 4.5,
+                "leverage": 8,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 6.5,
+                "leverage": 12,
+                "cost_usdt": 5.0
+            }
+        },
+        "performance": {
+            "pnl_sim": 248.3999999999869,
+            "win_rate_sim": 0.5,
+            "trades_sim": 18
         }
     },
     "DOT/USDT_8h": {
@@ -4105,64 +4006,43 @@
         }
     },
     "STX/USDT_15m": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_lt_21": 0.5,
-            "EMA_9_gt_21": 0.35,
-            "EMA_50_lt_200": 0.25,
-            "RSI_21_overbought": 2.0,
-            "RSI_7_overbought": 1.4,
-            "RSI_14_overbought": 1.0,
-            "breakout_above_resistance": 2.0,
-            "breakout_below_support": 1.4,
-            "price_at_support": 0.25
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
-            "entry_score": 4.0,
+            "entry_score": 3.5,
             "exit_score": 2.5
         },
         "risk": {
-            "sl_pct": 0.035,
-            "tp_pct": 0.07
+            "sl_pct": 0.025,
+            "tp_pct": 0.025
         },
         "tiers": {
             "low": {
-                "min_score": 4.0,
+                "min_score": 3.5,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 6.0,
+                "min_score": 5.5,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
         },
         "performance": {
-            "pnl_sim": 300.59999999999127,
-            "win_rate_sim": 0.6111111111111112,
-            "trades_sim": 12
+            "pnl_sim": -57.600000000033106,
+            "win_rate_sim": 0.47038327526132406,
+            "trades_sim": 48
         }
     },
     "STX/USDT_30m": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_lt_21": 1.0,
-            "EMA_9_gt_21": 0.35,
-            "EMA_9_cross_21_down": 0.25,
-            "RSI_21_overbought": 1.0,
-            "MACD_cross_down": 0.7,
-            "MACD_lt_signal": 0.5,
-            "Price_gt_BB_Up": 1.0,
-            "breakout_above_resistance": 2.0,
-            "bounce_from_support": 1.4,
-            "price_at_support": 0.25
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
             "entry_score": 2.0,
             "exit_score": 2.5
         },
         "risk": {
-            "sl_pct": 0.03,
+            "sl_pct": 0.02,
             "tp_pct": 0.03
         },
         "tiers": {
@@ -4178,9 +4058,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 398.3999999999505,
-            "win_rate_sim": 0.6154589371980677,
-            "trades_sim": 68
+            "pnl_sim": 502.7999999999229,
+            "win_rate_sim": 0.49836601307189543,
+            "trades_sim": 106
         }
     },
     "STX/USDT_1h": {
@@ -4271,18 +4151,10 @@
         }
     },
     "STX/USDT_8h": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_cross_21_down": 2.0,
-            "EMA_50_lt_200": 1.4,
-            "EMA_9_cross_21_up": 1.0,
-            "RSI_7_overbought": 2.0,
-            "MACD_lt_signal": 1.4,
-            "RSI_14_lt_50": 1.0,
-            "Price_gt_BB_Up": 2.0
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
-            "entry_score": 5.0,
+            "entry_score": 2.0,
             "exit_score": 2.5
         },
         "risk": {
@@ -4291,20 +4163,20 @@
         },
         "tiers": {
             "low": {
-                "min_score": 5.0,
+                "min_score": 2.0,
                 "leverage": 8,
                 "cost_usdt": 3.0
             },
             "high": {
-                "min_score": 7.0,
+                "min_score": 4.0,
                 "leverage": 12,
                 "cost_usdt": 5.0
             }
         },
         "performance": {
-            "pnl_sim": 156.9999999999891,
-            "win_rate_sim": 0.7,
-            "trades_sim": 15
+            "pnl_sim": 201.79999999984648,
+            "win_rate_sim": 0.5430512016718914,
+            "trades_sim": 211
         }
     },
     "STX/USDT_1d": {
@@ -4368,20 +4240,20 @@
     "TAO/USDT_30m": {
         "enabled": true,
         "weights": {
-            "EMA_9_cross_21_down": 1.0,
+            "EMA_9_cross_21_down": 2.0,
             "EMA_9_gt_21": 0.35,
             "RSI_21_oversold": 2.0,
             "MACD_cross_up": 0.7,
             "MACD_gt_signal": 0.25,
-            "breakout_above_resistance": 1.0
+            "breakout_above_resistance": 0.5
         },
         "thresholds": {
             "entry_score": 2.0,
             "exit_score": 2.5
         },
         "risk": {
-            "sl_pct": 0.035,
-            "tp_pct": 0.035
+            "sl_pct": 0.03,
+            "tp_pct": 0.03
         },
         "tiers": {
             "low": {
@@ -4396,9 +4268,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 118.5999999999658,
-            "win_rate_sim": 0.5820707070707071,
-            "trades_sim": 47
+            "pnl_sim": 285.5999999999185,
+            "win_rate_sim": 0.5702118820108018,
+            "trades_sim": 112
         }
     },
     "ETH/USDT_2h": {
@@ -4438,6 +4310,228 @@
             "pnl_sim": 237.79999999997744,
             "win_rate_sim": 0.6733333333333333,
             "trades_sim": 31
+        }
+    },
+    "SOL/USDT_15m": {
+        "enabled": true,
+        "weights": {
+            "EMA_9_cross_21_down": 2.0,
+            "MACD_cross_down": 0.5,
+            "Price_gt_BB_Up": 1.0,
+            "breakout_above_resistance": 2.0
+        },
+        "thresholds": {
+            "entry_score": 2.0,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.02,
+            "tp_pct": 0.025
+        },
+        "tiers": {
+            "low": {
+                "min_score": 2.0,
+                "leverage": 8,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 4.0,
+                "leverage": 12,
+                "cost_usdt": 5.0
+            }
+        },
+        "performance": {
+            "pnl_sim": 160.1999999999607,
+            "win_rate_sim": 0.5637898686679175,
+            "trades_sim": 54
+        }
+    },
+    "SOL/USDT_1d": {
+        "enabled": false,
+        "weights": {},
+        "thresholds": {
+            "entry_score": 2.5,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.025,
+            "tp_pct": 0.05
+        },
+        "tiers": {
+            "low": {
+                "min_score": 2.5,
+                "leverage": 8,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 4.5,
+                "leverage": 12,
+                "cost_usdt": 5.0
+            }
+        },
+        "performance": {
+            "pnl_sim": 309.1999999999789,
+            "win_rate_sim": 0.47916666666666663,
+            "trades_sim": 34
+        }
+    },
+    "SUI/USDT_15m": {
+        "enabled": false,
+        "weights": {},
+        "thresholds": {
+            "entry_score": 2.5,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.03,
+            "tp_pct": 0.045
+        },
+        "tiers": {
+            "low": {
+                "min_score": 2.5,
+                "leverage": 8,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 4.5,
+                "leverage": 12,
+                "cost_usdt": 5.0
+            }
+        },
+        "performance": {
+            "pnl_sim": 245.99999999996726,
+            "win_rate_sim": 0.4305555555555556,
+            "trades_sim": 45
+        }
+    },
+    "SUI/USDT_4h": {
+        "enabled": false,
+        "weights": {},
+        "thresholds": {
+            "entry_score": 2.5,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.03,
+            "tp_pct": 0.03
+        },
+        "tiers": {
+            "low": {
+                "min_score": 2.5,
+                "leverage": 8,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 4.5,
+                "leverage": 12,
+                "cost_usdt": 5.0
+            }
+        },
+        "performance": {
+            "pnl_sim": 2.3999999999468855,
+            "win_rate_sim": 0.5108333333333333,
+            "trades_sim": 73
+        }
+    },
+    "LTC/USDT_4h": {
+        "enabled": true,
+        "weights": {
+            "RSI_21_overbought": 2.0,
+            "RSI_14_overbought": 1.4,
+            "RSI_7_overbought": 1.0,
+            "Price_lt_BB_Low": 2.0
+        },
+        "thresholds": {
+            "entry_score": 2.0,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.03,
+            "tp_pct": 0.03
+        },
+        "tiers": {
+            "low": {
+                "min_score": 2.0,
+                "leverage": 8,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 4.0,
+                "leverage": 12,
+                "cost_usdt": 5.0
+            }
+        },
+        "performance": {
+            "pnl_sim": 153.59999999992942,
+            "win_rate_sim": 0.5703980099502488,
+            "trades_sim": 97
+        }
+    },
+    "LTC/USDT_8h": {
+        "enabled": true,
+        "weights": {
+            "EMA_9_lt_21": 2.0,
+            "EMA_50_lt_200": 0.7,
+            "EMA_9_cross_21_down": 0.25,
+            "RSI_14_overbought": 2.0,
+            "RSI_7_overbought": 1.4,
+            "RSI_14_oversold": 1.0,
+            "Price_lt_BB_Low": 2.0,
+            "price_at_support": 1.0
+        },
+        "thresholds": {
+            "entry_score": 4.0,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.02,
+            "tp_pct": 0.025
+        },
+        "tiers": {
+            "low": {
+                "min_score": 4.0,
+                "leverage": 8,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 6.0,
+                "leverage": 12,
+                "cost_usdt": 5.0
+            }
+        },
+        "performance": {
+            "pnl_sim": 134.59999999998763,
+            "win_rate_sim": 0.6357142857142857,
+            "trades_sim": 17
+        }
+    },
+    "FET/USDT_1h": {
+        "enabled": false,
+        "weights": {},
+        "thresholds": {
+            "entry_score": 2.0,
+            "exit_score": 2.5
+        },
+        "risk": {
+            "sl_pct": 0.025,
+            "tp_pct": 0.037500000000000006
+        },
+        "tiers": {
+            "low": {
+                "min_score": 2.0,
+                "leverage": 8,
+                "cost_usdt": 3.0
+            },
+            "high": {
+                "min_score": 4.0,
+                "leverage": 12,
+                "cost_usdt": 5.0
+            }
+        },
+        "performance": {
+            "pnl_sim": 430.1999999999425,
+            "win_rate_sim": 0.4967159277504105,
+            "trades_sim": 79
         }
     }
 }

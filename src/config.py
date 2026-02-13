@@ -20,7 +20,7 @@ DRY_RUN = False  # Set to True for paper trading (simulation mode)
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 TRADING_SYMBOLS = [
     'ETH/USDT',
-    # 'BTC/USDT',
+   # 'BTC/USDT',
     'SOL/USDT',
     'XRP/USDT',
     'HYPE/USDT',

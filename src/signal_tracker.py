@@ -283,6 +283,13 @@ class SignalTracker:
             'last_result': recent_trades[-1]['result'] if recent_trades else None
         }
     
+    def get_last_trade_side(self, symbol):
+        """Get the side of the absolute latest trade for a symbol."""
+        recent_trades = [t for t in self.data['trades'] if t['symbol'] == symbol]
+        if not recent_trades:
+            return None
+        return recent_trades[-1]['side']
+
     def should_skip_symbol(self, symbol, min_wr=0.3, min_trades=3):
         """
         Check if we should skip trading this symbol due to poor recent performance.

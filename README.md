@@ -133,18 +133,19 @@ tradingBot/
 - No 90-second timeout
 - Better entry prices
 
-### Dynamic Leverage Tiers
+### Dynamic Leverage Tiers (Score-Based)
 
-| Signal Score | Leverage | Margin | Notional |
-|--------------|----------|--------|----------|
-| 2.0 - 3.9    | 8x       | $3     | $24      |
-| 4.0 - 6.9    | 10x      | $4     | $40      |
-| 7.0+         | 12x      | $5     | $60      |
+| Signal Score | Leverage | Cost (USDT) | Notional |
+|--------------|----------|-------------|----------|
+| 2.0 - 3.9    | 8x       | $3          | $24      |
+| 4.0 - 5.4    | 10x      | $4          | $40      |
+| 5.5+         | 12x      | $5          | $60      |
 
-**Features:**
-- Fixed margin mode ($3-5 per trade)
-- Score-based sizing
-- Isolated margin (no cross-margin risk)
+**Safe Reversal Entry Protection:**
+If a new signal flips the trend (Short -> Long or vice versa), the bot automatically reduces risk:
+- **Leverage**: 0.6x multiplier (e.g., 10x -> 6x)
+- **Position Size**: 0.5x multiplier (Half size)
+- **Initial Stop Loss**: 0.6x tighter (Protects against whipsaw)
 
 ### Signal Confidence System
 

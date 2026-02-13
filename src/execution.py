@@ -1685,34 +1685,56 @@ class Trader:
             for oid, count in self._missing_order_counts.items():
                 if count > 0: managed_ids.add(str(oid))
 
-            for o in all_exchange_orders:
-                o_id = str(o.get('id') or o.get('orderId'))
-                o_type = str(o.get('type') or o.get('info', {}).get('type', '')).upper()
-                o_symbol = o.get('symbol')
-                norm_symbol = self._normalize_symbol(o_symbol)
-                
-                # Check if this symbol belongs to our TRADING_SYMBOLS (normalized)
-                from config import TRADING_SYMBOLS
-                norm_trading_syms = [self._normalize_symbol(s) for s in TRADING_SYMBOLS]
-                
-                if norm_symbol not in norm_trading_syms:
-                    continue
+            # UNIVERSAL REAPER (Run only every 5 minutes)
+            # This cleans up orphaned orders from previous sessions or manual interventions
+            current_ts = self.exchange.milliseconds()
+            if not hasattr(self, '_last_reaper_run'): self._last_reaper_run = 0
+            
+            # Run 1st time immediately, then every 5 mins
+            if current_ts - self._last_reaper_run > 300000: 
+                self.logger.info("🧹 [REAPER] Starting periodic orphan scan...")
+                self._last_reaper_run = current_ts
 
-                # We only reaper STOP/TAKE orders (Conditional)
-                is_conditional = 'STOP' in o_type or 'TAKE' in o_type or o.get('algoType') in ('STOP_LOSS', 'TAKE_PROFIT')
+                # Randomize order to avoid getting stuck on the same failing orders if we hit limits
+                import random
+                shuffled_orders = list(all_exchange_orders)
+                random.shuffle(shuffled_orders)
                 
-                if is_conditional and o_id not in managed_ids:
-                    self.logger.warning(f"🧹 [REAPER] Cancelling orphaned {o_type} order {o_id} for {o_symbol}")
-                    try:
-                        # Use appropriate cancel method for Algo orders if necessary
-                        if o.get('algoType'):
-                            # fapiPrivateDeleteOrder for algo orders
-                            await self._execute_with_timestamp_retry(self.exchange.fapiPrivateDeleteOrder, {'symbol': o_symbol, 'orderId': o_id})
-                        else:
-                            await self._execute_with_timestamp_retry(self.exchange.cancel_order, o_id, o_symbol)
-                        summary['orphans_cancelled'] += 1
-                    except Exception as e:
-                        self.logger.warning(f"[REAPER] Failed to cancel {o_id}: {e}")
+                orphans_deleted = 0
+                MAX_ORPHANS_PER_CYCLE = 20  # Increased batch limit since we run less often
+
+                for o in shuffled_orders:
+                    if orphans_deleted >= MAX_ORPHANS_PER_CYCLE:
+                        self.logger.info(f"🧹 [REAPER] Hit max orphans limit ({MAX_ORPHANS_PER_CYCLE}). pausing until next cycle.")
+                        break
+
+                    o_id = str(o.get('id') or o.get('orderId'))
+                    o_type = str(o.get('type') or o.get('info', {}).get('type', '')).upper()
+                    o_symbol = o.get('symbol')
+                    norm_symbol = self._normalize_symbol(o_symbol)
+                    
+                    # Check if this symbol belongs to our TRADING_SYMBOLS (normalized)
+                    # UPDATED: Reaper now scans ALL account symbols to clear ghosts from previous runs
+                    
+                    # We only reaper STOP/TAKE orders (Conditional)
+                    is_conditional = 'STOP' in o_type or 'TAKE' in o_type or o.get('algoType') in ('STOP_LOSS', 'TAKE_PROFIT')
+                    
+                    if is_conditional and o_id not in managed_ids:
+                        self.logger.warning(f"🧹 [REAPER] Cancelling orphaned {o_type} order {o_id} for {o_symbol}")
+                        try:
+                            # Use appropriate cancel method for Algo orders if necessary
+                            if o.get('algoType'):
+                                # fapiPrivateDeleteOrder for algo orders
+                                await self._execute_with_timestamp_retry(self.exchange.fapiPrivateDeleteOrder, {'symbol': o_symbol, 'orderId': o_id})
+                            else:
+                                await self._execute_with_timestamp_retry(self.exchange.cancel_order, o_id, o_symbol)
+                            
+                            summary['orphans_cancelled'] += 1
+                            orphans_deleted += 1
+                            # Rate limit protection: Increased to 0.5s + Batch limit
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            self.logger.warning(f"[REAPER] Failed to cancel {o_id}: {e}")
 
         return summary
 

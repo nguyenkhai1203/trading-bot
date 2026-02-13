@@ -314,13 +314,42 @@ class TradingBot:
                     await self.trader.remove_position(self.symbol, timeframe=self.timeframe, exit_price=current_price, exit_reason=exit_reason)
                     return 
 
-                # 2. In Live mode, sync with exchange
-                if not self.trader.dry_run:
-                    # Double check if still open on exchange 
-                    still_open = await self.trader.get_open_position(self.symbol, timeframe=self.timeframe)
-                    if not still_open:
-                        await self.trader.remove_position(self.symbol, timeframe=self.timeframe, exit_price=current_price, exit_reason="EXTERNAL_EXIT")
-                        return
+                # 3. Check for Signal Reversal (Early Exit)
+                # Use cached features
+                df_rev = self.data_manager.get_data_with_features(self.symbol, self.timeframe)
+                if df_rev is not None and not df_rev.empty:
+                    last_row_rev = df_rev.iloc[-1]
+                    rev_signal_data = self.strategy.get_signal(last_row_rev)
+                    rev_side = rev_signal_data['side']
+                    rev_score = rev_signal_data['confidence'] * 10
+                    
+                    # Exit threshold from config (default 2.5)
+                    # We use a slightly lower threshold for EXITING than ENTERING
+                    exit_thresh = self.strategy.config_data.get('thresholds', {}).get('exit_score', 2.5)
+                    
+                    opp_side = 'SELL' if side == 'BUY' else 'BUY'
+                    if rev_side == opp_side and rev_score >= exit_thresh:
+                        print(f"🔄 [{self.symbol} {self.timeframe}] SIGNAL REVERSED to {rev_side} (Score {rev_score:.1f}). Force closing...")
+                        success = await self.trader.force_close_position(pos_key, reason=f"Signal Flip to {rev_side}")
+                        if success:
+                            # Approximate PnL for notification
+                            qty = existing_pos.get('qty', 0)
+                            pnl_usd = (unrealized_pnl_pct / 100) * (qty * entry_price) / leverage
+                            
+                            terminal_msg, telegram_msg = format_position_closed(
+                                symbol=self.symbol,
+                                timeframe=self.timeframe,
+                                side=side,
+                                entry_price=entry_price,
+                                exit_price=current_price,
+                                pnl=pnl_usd,
+                                pnl_pct=unrealized_pnl_pct,
+                                reason=f"Signal Flip ({rev_side})",
+                                dry_run=self.trader.dry_run
+                            )
+                            print(terminal_msg)
+                            await send_telegram_message(telegram_msg)
+                            return
 
                 # If position is still open and no exit hit, skip entry analysis
                 return
@@ -412,40 +441,58 @@ class TradingBot:
                             await self.trader.reconcile_positions()
                             return
 
+                    # === SAFE REVERSAL ENTRY ===
+                    # If this signal flips the previous trade direction for this symbol, take it cautiously.
+                    last_trade_side = signal_tracker.get_last_trade_side(self.symbol)
+                    is_reversal = last_trade_side and last_trade_side != side
+                    
                     # Dynamic Tier Sizing - Get leverage early for display
                     score = conf * 10
                     tier = self.get_tier_config(score)
                     target_lev = tier.get('leverage', LEVERAGE)
                     
+                    if is_reversal:
+                        print(f"⚠️ [{self.symbol} {self.timeframe}] REVERSAL DETECTED ({last_trade_side} -> {side}). Reduction: x{target_lev} -> x{max(3, int(target_lev*0.6))}")
+                        target_lev = max(3, int(target_lev * 0.6)) # Reduce leverage for early reversal protection
+                    
                     tech_info = f" ({', '.join(confirm_signals)})" if confirm_signals else ""
                     print(f"🎯 [{self.symbol} {self.timeframe}] SIGNAL FOUND: {side} x{target_lev}{tech_info} | Conf: {conf:.2f} | Price: {current_price:.3f}")
                     
-                    # Use dynamic SL/TP from strategy (optimized by analyzer)
+                    # Use dynamic SL/TP from strategy
+                    # UPDATED: Tighter SL for reversals to be 'Safe' as requested
+                    current_sl_pct = self.strategy.sl_pct
+                    if is_reversal:
+                        current_sl_pct *= 0.6 # 40% tighter stop
+                        
                     sl, tp = self.risk_manager.calculate_sl_tp(
                         current_price, side, 
-                        sl_pct=self.strategy.sl_pct, 
+                        sl_pct=current_sl_pct, 
                         tp_pct=self.strategy.tp_pct
                     )
                     
-                    # Dynamic Tier Sizing (target_lev already calculated above)
-                    # Score and tier already calculated
-                    # Check for cost_usdt (fixed margin) or risk_pct (account %)
+                    # Dynamic Tier Sizing (target_lev already adjusted above if reversal)
                     target_cost = tier.get('cost_usdt', None)
                     target_risk = tier.get('risk_pct', None)
                     
                     qty = 0
                     if target_cost is not None:
                         # Fixed Margin Mode (User Preferred)
-                        qty = self.risk_manager.calculate_size_by_cost(current_price, target_cost, target_lev)
-                        risk_info = f"${target_cost}"
+                        actual_cost = target_cost
+                        if is_reversal:
+                            actual_cost *= 0.5 # 50% size for early reversal entries
+                        
+                        qty = self.risk_manager.calculate_size_by_cost(current_price, actual_cost, target_lev)
+                        risk_info = f"${actual_cost:.1f} (REVERSAL SAFE)" if is_reversal else f"${target_cost}"
                     else:
                         # Fallback to Risk %
                         use_risk = target_risk if target_risk else 0.01
+                        if is_reversal: use_risk *= 0.5
+                        
                         qty = self.risk_manager.calculate_position_size(
                             current_equity, current_price, sl, 
                             leverage=target_lev, risk_pct=use_risk
                         )
-                        risk_info = f"{use_risk*100}%"
+                        risk_info = f"{use_risk*100}% (REVERSAL SAFE)" if is_reversal else f"{use_risk*100}%"
                     
                     if qty > 0:
                         exec_side = side.lower()
