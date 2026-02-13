@@ -270,20 +270,19 @@ Remove-Item -Recurse -Force data/
 
 ## ⚠️ Important Notes
 
-### Binance Conditional Orders
-- STOP_MARKET/TAKE_PROFIT_MARKET may not be retrievable via `fetch_order`
-- Returns -2013 "Order does not exist" even when accepted
-- This is a Binance API limitation
+### Binance Conditional Orders (SL/TP)
+- **Problem:** SL/TP orders (STOP_MARKET/TAKE_PROFIT_MARKET) often disappear from standard `fetch_orders`.
+- **Solution:** Bot now uses **Unified ID Matching** (checks `id`, `orderId`, `algoId`, `clientAlgoId`) and scans both Standard and Algo endpoints.
+- **Verification:** Run `py scripts/dump_all_orders.py` to see ALL orders (including hidden Algo ones).
 
 ### Time Synchronization
-- Bot auto-syncs with server time on startup
-- Prevents -1021 timestamp errors
-- Uses unified `BaseExchangeClient` for all components
+- **Problem:** Error -1021 (Timestamp for this request is outside of the recvWindow).
+- **Solution:** Bot uses a **Manual Time Offset** with a -5000ms safety buffer.
+- **Auto-Fix:** If time drift is detected, the bot auto-resyncs without crashing.
 
 ### Margin & Leverage
-- Bot enforces ISOLATED margin mode
-- Sets leverage per-order automatically
-- Leverage clamped to 5x-12x range
+- **Bot enforces ISOLATED margin mode**
+- **Sets leverage per-order automatically (5x-12x)**
 
 ---
 

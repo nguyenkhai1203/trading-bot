@@ -464,3 +464,28 @@ All 15 key features verified ✅:
 | Parallel analyzer | ✅ | 8 workers + signal caching |
 | Pending order reversal | ✅ | Works in both LIVE and DRY_RUN mode |
 | Limit order fill check | ✅ | Dry run simulates fills when price reaches target |
+
+## Critical Stability Fixes (Feb 13, 2026)
+**Session focused on "Order Spam" and "Timestamp Errors":**
+
+### 1. Timestamp Sync Conflict (Error -1021)
+- **Problem**: CCXT's auto-sync (`adjustForTimeDifference=True`) conflicted with our `BaseExchangeClient` manual sync.
+- **Result**: "Double sync" pushed timestamp into the future -> Rejected by Binance.
+- **Solution**:
+  - Disabled CCXT sync: `adjustForTimeDifference: False` in `data_manager.py`.
+  - Enforced manual sync: `_server_offset_ms` calculated once at startup with **-5000ms safety buffer**.
+
+### 2. Algo Order Visibility (Standard vs Conditional)
+- **Problem**: Bot placed SL/TP (Algo Orders) but only checked Standard Orders (`fetch_open_orders`).
+- **Result**: Bot thought orders were missing -> Infinite "Repair Loop" (Order Spam).
+- **Solution**:
+  - **Unified Polling**: Check BOTH `fetch_open_orders` AND `fetch_open_algo_orders`.
+  - **Unified ID Matching**: Check all ID fields: `id`, `orderId`, `algoId`, `clientAlgoId`.
+  - **Diagnostic Tool**: Created `scripts/dump_all_orders.py` to see ALL orders.
+
+### 3. Creation Loop (Race Condition)
+- **Problem**: API latency means an order placed at T=0 might not appear in `fetch` at T=0.1s.
+- **Result**: Bot placed order -> Verified immediately -> Not found -> Placed again (Spam).
+- **Solution**:
+  - **Creation Cooldown**: After creating SL/TP, ignore that position's missing status for **20 seconds**.
+  - **Trust Mechanism**: Assume order exists during cooldown to prevent duplicate creation.
