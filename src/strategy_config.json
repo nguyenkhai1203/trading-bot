@@ -211,23 +211,15 @@
         }
     },
     "OP/USDT_2h": {
-        "enabled": true,
-        "weights": {
-            "EMA_9_cross_21_down": 0.5,
-            "RSI_21_oversold": 2.0,
-            "RSI_21_overbought": 1.4,
-            "MACD_cross_down": 0.5,
-            "breakout_above_resistance": 2.0,
-            "price_at_support": 1.4,
-            "breakout_below_support": 0.5
-        },
+        "enabled": false,
+        "weights": {},
         "thresholds": {
             "entry_score": 3.0,
             "exit_score": 2.5
         },
         "risk": {
             "sl_pct": 0.025,
-            "tp_pct": 0.07500000000000001
+            "tp_pct": 0.0625
         },
         "tiers": {
             "low": {
@@ -242,9 +234,9 @@
             }
         },
         "performance": {
-            "pnl_sim": 602.1999999999862,
-            "win_rate_sim": 0.5773809523809523,
-            "trades_sim": 19
+            "pnl_sim": 527.4999999999636,
+            "win_rate_sim": 0.41666666666666663,
+            "trades_sim": 50
         }
     },
     "OP/USDT_4h": {
