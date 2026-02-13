@@ -28,8 +28,9 @@ class BaseExchangeClient:
             # Calculate manual offset
             self._server_offset_ms = server_time - local_time
             
-            # Also sync CCXT for its internal methods
-            await self.exchange.load_time_difference()
+            # Also sync CCXT for its internal methods (only if API key exists)
+            if self.exchange.apiKey:
+                await self.exchange.load_time_difference()
             
             # Ensure recvWindow is large (60s is Binance max)
             self.exchange.options['recvWindow'] = 60000 
@@ -105,7 +106,8 @@ class BaseExchangeClient:
                     # Log non-timestamp errors or max retries reached
                     if not is_timestamp_error:
                         # Silence known "informational" errors to avoid user confusion
-                        silence_errors = ["-4067", "-4046", "-4061", "no change", "side cannot be changed"]
+                        silence_errors = ["-4067", "-4046", "-4061", "no change", "side cannot be changed", 
+                                        "requires \"apiKey\"", "apiKey"]
                         if not any(s in error_msg for s in silence_errors):
                             print(f"[API ERROR] Non-timestamp error, not retrying: {str(e)[:100]}")
                     else:

@@ -613,9 +613,12 @@ async def main():
 
     manager = MarketDataManager()
     
-    # Sync server time to fix timestamp offset issues
-    print("⏰ Synchronizing with Binance server time...")
-    await manager.sync_server_time()
+    # Sync server time to fix timestamp offset issues (only needed for live trading)
+    if not DRY_RUN:
+        print("⏰ Synchronizing with Binance server time...")
+        await manager.sync_server_time()
+    else:
+        print("🧪 [DRY-RUN] Skipping server time sync (using local time)")
     
     bots = []
     
@@ -817,19 +820,20 @@ async def main():
                 except Exception as status_err:
                     print(f"Error sending status update: {status_err}")
 
-            # 0.2 Check for Periodic Deep Sync & Self-Healing (Every 10 minutes)
-            if not hasattr(main, 'last_deep_sync'): main.last_deep_sync = 0
-            if curr_time - main.last_deep_sync >= 600: # 10 minutes
-                print("🔄 [SELF-HEALING] Running Deep Sync to check for missing SL/TP...")
-                try:
-                    sync_summary = await trader.reconcile_positions(auto_fix=True)
-                    if sync_summary.get('created_tp_sl', 0) > 0:
-                        print(f"✅ [SELF-HEALING] Fixed {sync_summary['created_tp_sl']} positions with missing SL/TP.")
-                    main.last_deep_sync = curr_time
-                except Exception as sync_err:
-                    import traceback
-                    print(f"Error during deep sync: {sync_err}")
-                    traceback.print_exc()
+            # 0.2 Check for Periodic Deep Sync & Self-Healing (Every 10 minutes, live only)
+            if not DRY_RUN:
+                if not hasattr(main, 'last_deep_sync'): main.last_deep_sync = 0
+                if curr_time - main.last_deep_sync >= 600: # 10 minutes
+                    print("🔄 [SELF-HEALING] Running Deep Sync to check for missing SL/TP...")
+                    try:
+                        sync_summary = await trader.reconcile_positions(auto_fix=True)
+                        if sync_summary.get('created_tp_sl', 0) > 0:
+                            print(f"✅ [SELF-HEALING] Fixed {sync_summary['created_tp_sl']} positions with missing SL/TP.")
+                        main.last_deep_sync = curr_time
+                    except Exception as sync_err:
+                        import traceback
+                        print(f"Error during deep sync: {sync_err}")
+                        traceback.print_exc()
 
             # 1. FAST UPDATE: Latest prices for all symbols (Low weight)
             await manager.update_tickers(TRADING_SYMBOLS)
@@ -866,14 +870,15 @@ async def main():
             if tasks:
                 await asyncio.gather(*tasks)
             
-            # 4. Deep Sync - Auto-healing positions without SL/TP (every 5s)
+            # 4. Deep Sync - Auto-healing positions without SL/TP (every 5s, live only)
             # This ensures any filled positions from exchange get proper SL/TP
-            try:
-                # Use first bot's trader for reconciliation (shared across all bots)
-                if bots and hasattr(bots[0], 'trader'):
-                    await bots[0].trader.reconcile_positions()
-            except Exception as e:
-                print(f"⚠️ Deep Sync error: {e}")
+            if not DRY_RUN:
+                try:
+                    # Use first bot's trader for reconciliation (shared across all bots)
+                    if bots and hasattr(bots[0], 'trader'):
+                        await bots[0].trader.reconcile_positions()
+                except Exception as e:
+                    print(f"⚠️ Deep Sync error: {e}")
             
             from config import HEARTBEAT_INTERVAL
             await asyncio.sleep(HEARTBEAT_INTERVAL) # Default 5s
