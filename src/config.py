@@ -19,18 +19,18 @@ DRY_RUN = False  # Set to True for paper trading (simulation mode)
 # Trading Settings
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 TRADING_SYMBOLS = [
-    'ETH/USDT',
+  #  'ETH/USDT',
    # 'BTC/USDT',
     'SOL/USDT',
     'XRP/USDT',
     'HYPE/USDT',
-    'BNB/USDT',
-    'BCH/USDT',
+   # 'BNB/USDT',
+   # 'BCH/USDT',
     'ADA/USDT',
     'SUI/USDT',
     'LINK/USDT',
     'AVAX/USDT',
-    'LTC/USDT',
+   # 'LTC/USDT',
     'NEAR/USDT',
     'FET/USDT',
     'DOT/USDT',
@@ -54,7 +54,7 @@ TIMEFRAMES = TRADING_TIMEFRAMES  # Alias for backward compatibility
 # Parallel Processing
 MAX_WORKERS = 8  # ThreadPoolExecutor workers for symbol-level parallelism
 
-LEVERAGE = 8  # Updated: 8-12x range (mid-point)
+LEVERAGE = 5  # Updated: 8-12x range (mid-point)
 RISK_PER_TRADE = 0.05
 STOP_LOSS_PCT = 0.017   # Updated: 5% ROE / 3x Lev ≈ 1.67%
 TAKE_PROFIT_PCT = 0.04  # Updated: 12% ROE / 3x Lev = 4.0%
@@ -80,18 +80,18 @@ OHLCV_REFRESH_INTERVAL = 60  # OHLCV data refresh interval in seconds (1 minute)
 CONFIDENCE_TIERS = {
     "high": {
         "min_confidence": 0.70,  # 70%+ confidence
-        "leverage": 10,          # Conservative max leverage
-        "cost_usdt": 10.0         # $5 per trade (conservative)
+        "leverage": 5,          # Conservative max leverage
+        "cost_usdt": 5.0         # $5 per trade (conservative)
     },
     "medium": {
         "min_confidence": 0.50,  # 50-70% confidence
-        "leverage": 8,           # Medium leverage
-        "cost_usdt": 8.0         # $4 per trade
+        "leverage": 4,           # Medium leverage
+        "cost_usdt": 4.0         # $4 per trade
     },
     "low": {
         "min_confidence": 0.30,  # 30-50% confidence
-        "leverage": 5,           # Low leverage for safety
-        "cost_usdt": 5.0         # $3 per trade (minimum)
+        "leverage": 3,           # Low leverage for safety
+        "cost_usdt": 3.0         # $3 per trade (minimum)
     }
 }
 MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade
