@@ -111,6 +111,7 @@ class WeightedScoringStrategy(Strategy):
         tiers = self.config_data['tiers']
         
         # Check tiers in order: high -> low -> minimum (fallback)
+        # Check tiers in order: high -> low -> minimum (fallback)
         selected_tier = res # default
         
         if 'high' in tiers and score >= tiers['high'].get('min_score', 999):
