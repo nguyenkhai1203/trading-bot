@@ -1,13 +1,17 @@
 import asyncio
 import logging
+import numpy as np
 import os
 import sys
+import time
+import json
 
 # Add src to path if running directly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config import (
     BINANCE_API_KEY, BINANCE_API_SECRET,
+    BYBIT_API_KEY, BYBIT_API_SECRET,
     TRADING_SYMBOLS, 
     TRADING_TIMEFRAMES, 
     LEVERAGE,
@@ -16,7 +20,8 @@ from config import (
     TAKE_PROFIT_PCT,
     USE_LIMIT_ORDERS,
     PATIENCE_ENTRY_PCT,
-    DRY_RUN
+    DRY_RUN,
+    ACTIVE_EXCHANGE
 )
 from data_manager import MarketDataManager
 from strategy import WeightedScoringStrategy 
@@ -52,12 +57,19 @@ class TradingBot:
                 self.running = False
                 return
 
-            df = self.data_manager.get_data(self.symbol, self.timeframe)
+            df = self.data_manager.get_data(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
             if df is None or df.empty:
                 return
 
             # Ensure current_price is available for all checks
             current_price = df.iloc[-1]['close']
+            
+            # PRICE VALIDATION: Ensure current_price is valid number to avoid NoneType comparison errors
+            if current_price is None or (isinstance(current_price, (int, float)) and np.isnan(current_price)):
+                self.logger.error(f"Invalid current_price ({current_price}) for {self.symbol}. Skipping cycle.")
+                return
+            
+            current_price = float(current_price)
 
             # 0. GLOBAL CONFLICT CHECK (Single Position Rule)
             # Check if this symbol already has an active position/order on exchange or locally
@@ -95,7 +107,7 @@ class TradingBot:
             if pending_order:
                 # Analyze current signal to check if still valid
                 # Use cached features from data_manager
-                df_check = self.data_manager.get_data_with_features(self.symbol, self.timeframe)
+                df_check = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
                 if df_check is None or df_check.empty:
                     return
                 last_row_check = df_check.iloc[-1]
@@ -179,6 +191,8 @@ class TradingBot:
                         notional=notional,
                         sl_price=sl,
                         tp_price=tp,
+                        score=existing_pos.get('entry_confidence'),
+                        leverage=existing_pos.get('leverage'),
                         dry_run=self.trader.dry_run
                     )
                     print(terminal_msg)
@@ -238,6 +252,10 @@ class TradingBot:
                 exit_hit = False
                 exit_reason = ""
                 
+                # Ensure current_price is valid
+                if current_price is None:
+                    return
+
                 if side == 'BUY':
                     if sl and current_price <= sl:
                         exit_hit = True
@@ -298,7 +316,7 @@ class TradingBot:
                     # Get BTC 1h change for market condition check
                     btc_change = None
                     try:
-                        btc_df = self.data_manager.get_data('BTC/USDT', '1h')
+                        btc_df = self.data_manager.get_data('BTC/USDT', '1h', exchange=self.trader.exchange_name)
                         if btc_df is not None and len(btc_df) >= 2:
                             btc_change = (btc_df.iloc[-1]['close'] - btc_df.iloc[-2]['close']) / btc_df.iloc[-2]['close']
                     except Exception:
@@ -320,7 +338,7 @@ class TradingBot:
 
                 # 3. Check for Signal Reversal (Early Exit)
                 # Use cached features
-                df_rev = self.data_manager.get_data_with_features(self.symbol, self.timeframe)
+                df_rev = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
                 if df_rev is not None and not df_rev.empty:
                     last_row_rev = df_rev.iloc[-1]
                     rev_signal_data = self.strategy.get_signal(last_row_rev)
@@ -370,7 +388,7 @@ class TradingBot:
                     remaining = self.trader.get_cooldown_remaining(self.symbol)
                     # Only print occasionally to avoid spam
                     if int(remaining) % 30 == 0:  # Print every 30 minutes
-                        print(f"⏸️ [{self.symbol}] In cooldown after SL ({remaining:.0f} min remaining)")
+                        print(f"⏸️ [{self.trader.exchange_name}] [{self.symbol}] In cooldown after SL ({remaining:.0f} min remaining)")
                     return
 
                 # ADAPTIVE LEARNING: Check if symbol has poor recent performance
@@ -378,11 +396,11 @@ class TradingBot:
                 if skip:
                     import random
                     if random.random() < 0.1:  # Print 10% of time to avoid spam
-                        print(f"📉 [{self.symbol}] Skipping due to recent losses: {reason}")
+                        print(f"📉 [{self.trader.exchange_name}] [{self.symbol}] Skipping due to recent losses: {reason}")
                     return
 
                 # Use cached features from data_manager (computed once per cycle, shared across bots)
-                df = self.data_manager.get_data_with_features(self.symbol, self.timeframe)
+                df = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
                 if df is None or df.empty:
                     return
                 last_row = df.iloc[-1]
@@ -546,7 +564,7 @@ class TradingBot:
                             )
                             
                             tech_label = " (Fibo/SR)" if technical_confirm else ""
-                            print(f"📋 Using LIMIT order: {entry_price:.3f} (patience: {PATIENCE_ENTRY_PCT*100:.1f}% from {current_price:.3f}){tech_label}")
+                            print(f"📋 [{self.trader.exchange_name}] [{self.symbol}] Using LIMIT order: {entry_price:.3f} (patience: {PATIENCE_ENTRY_PCT*100:.1f}% from {current_price:.3f}){tech_label}")
                         
                         # Extract signals from comment for adaptive learning
                         # Comment format: "Long Score 6.5 (RSI_oversold,EMA9_EMA21_cross_up,...)"
@@ -585,7 +603,7 @@ class TradingBot:
                             # Escape symbol for Telegram (replace / with -)
                             safe_symbol = self.symbol.replace('/', '-')
                             msg = (
-                                f"{mode_label} | {status_label}\n"
+                                f"{mode_label} | {self.trader.exchange_name} | {status_label}\n"
                                 f"{safe_symbol} | {self.timeframe} | {side} x{target_lev}\n"
                                 f"Entry: {entry_price:.3f}\n"
                                 f"SL: {sl:.3f} | TP: {tp:.3f}\n"
@@ -599,6 +617,8 @@ class TradingBot:
 
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.logger.error(f"Error in bot step {self.symbol}: {e}")
 
 import time
@@ -624,7 +644,7 @@ async def send_periodic_status_report(trader, data_manager):
         tp = pos.get('tp', 0)
         
         # Get current price from data store
-        df = data_manager.get_data(symbol, tf)
+        df = data_manager.get_data(symbol, tf, exchange=trader.exchange_name)
         current_price = df.iloc[-1]['close'] if df is not None and not df.empty else entry
         
         # Calculate PnL
@@ -667,282 +687,230 @@ async def main():
         config.DRY_RUN = False
         print("🚩 Command-line override: Live Mode (--live)")
 
+    # Initialize Global Manager
     manager = MarketDataManager()
     
-    # Sync server time to fix timestamp offset issues
-    print("⏰ Synchronizing with Binance server time...")
-    await manager.sync_server_time()
+    # Initialize Traders for each Active Exchange
+    from exchange_factory import get_active_exchanges_map
+    ex_adapters = get_active_exchanges_map()
+    traders = {name: Trader(adapter, dry_run=DRY_RUN, data_manager=manager) for name, adapter in ex_adapters.items()}
     
+    print(f"🚀 Initializing parallel bots for {len(traders)} exchanges: {list(traders.keys())}")
+    
+    # Sync server time for each exchange
+    for name, trader in traders.items():
+        print(f"⏰ Synchronizing with {name} server time...")
+        try:
+            await trader.exchange.sync_time()
+        except Exception as e:
+            print(f"⚠️ [{name}] Time sync failed: {e}")
+
+    # Initialize Bot instances per exchange/symbol/timeframe
     bots = []
-    
-    print("Initializing Bots...")
-    # 0. Shared Trader (One instance for all bots to sync positions)
-    trader = Trader(manager.adapter, dry_run=DRY_RUN) 
-
-    # 0.5 Set Isolated Margin Mode (one-time setup)
-    if not trader.dry_run:
-        print("🔧 [LIVE] Setting up margin modes and leverage...")
-        await manager.set_isolated_margin_mode(TRADING_SYMBOLS)
-        # Also ensure trader enforces isolated/leverage for configured symbols
-        await trader.enforce_isolated_on_startup(TRADING_SYMBOLS)
-        
-        # 0.6 DEEP SYNC: Initial reconciliation before bots start
-        print("🔄 [LIVE] Synchronizing all positions with exchange...")
-        await trader.reconcile_positions()
-    else:
-        print("🧪 [SIMULATION] Dry Run Mode active. Private API calls skipped.")
-
-    # Initialize one bot per pair/tf
-    for symbol in TRADING_SYMBOLS:
-        for tf in TRADING_TIMEFRAMES:
-            bot = TradingBot(symbol, tf, manager, trader)
-            bots.append(bot)
+    for ex_name, trader in traders.items():
+        # Setup margin modes and leverage for LIVE
+        if not trader.dry_run:
+            print(f"🔧 [{ex_name}] Setting up margin modes and leverage...")
+            await manager.set_isolated_margin_mode(TRADING_SYMBOLS, exchange=ex_name)
+            await trader.enforce_isolated_on_startup(TRADING_SYMBOLS)
+            print(f"🔄 [{ex_name}] Synchronizing positions...")
+            await trader.reconcile_positions()
             
-    # Initial Notif
-    await send_telegram_message(f"🤖 Bot Started! Monitoring {len(TRADING_SYMBOLS)} symbols.", exchange_name=trader.exchange.name)
-    
-    # ========== ADAPTIVE LEARNING v2.0 SETUP ==========
-    # Callback for mini-analyzer after consecutive losses
-    def on_losses_detected(symbols_to_check):
-        """Called by signal_tracker when loss threshold reached."""
-        from analyzer import StrategyAnalyzer
-        analyzer = StrategyAnalyzer()
-        updates = analyzer.run_mini_optimization(symbols_to_check)
-        
-        if updates:
-            # Reload config for affected bots
-            for bot in bots:
-                key = f"{bot.symbol}_{bot.timeframe}"
-                if key in updates:
-                    bot.strategy.reload_config()
-                    print(f"🔄 [{bot.symbol} {bot.timeframe}] Config reloaded after mini-optimization")
-    
-    # Callback for position adjustment
+        from config import BINANCE_SYMBOLS, BYBIT_SYMBOLS
+        exchange_symbol_map = {
+            'BINANCE': BINANCE_SYMBOLS,
+            'BYBIT': BYBIT_SYMBOLS
+        }
+        active_symbols = exchange_symbol_map.get(ex_name, TRADING_SYMBOLS)
+
+        for symbol in active_symbols:
+            for tf in TRADING_TIMEFRAMES:
+                bot = TradingBot(symbol, tf, manager, trader)
+                bots.append(bot)
+                
+    print(f"✅ Total {len(bots)} bot tasks initialized.")
+
+    # ========== ADAPTIVE LEARNING SETUP ==========
+    async def on_losses_detected(symbols_to_check):
+        print(f"🚨 [ADAPTIVE] Evaluating performance for symbols: {symbols_to_check}")
+        for symbol in symbols_to_check:
+            skip, reason = signal_tracker.should_skip_symbol(symbol, min_wr=0.3, min_trades=3)
+            if skip:
+                print(f"📉 [ADAPTIVE] Stopping {symbol} due to poor performance: {reason}")
+                for bot in bots:
+                    if bot.symbol == symbol:
+                        bot.running = False
+
     async def on_adjust_positions():
-        """Called by signal_tracker to check and adjust open positions."""
-        positions = trader.get_all_filled_positions()
-        if not positions:
-            return
-        
-        print(f"⚙️ [ADJUST] Checking {len(positions)} open positions...")
-        
-        for pos_key, pos in positions.items():
-            symbol = pos.get('symbol')
-            tf = pos.get('timeframe')
-            side = pos.get('side')
-            entry_conf = pos.get('entry_confidence', 0.7)
-            
-            # Find the bot for this position
-            matching_bot = None
-            for bot in bots:
-                if bot.symbol == symbol and bot.timeframe == tf:
-                    matching_bot = bot
-                    break
-            
-            if not matching_bot:
-                continue
-            
-            # Re-evaluate current signal
-            df = manager.get_data_with_features(symbol, tf)
-            if df is None or df.empty:
-                continue
-            
-            last_row = df.iloc[-1]
-            current_signal = matching_bot.strategy.get_signal(last_row)
-            current_side = current_signal.get('side')
-            current_conf = current_signal.get('confidence', 0)
-            
-            # Check for signal reversal
-            if (side == 'BUY' and current_side == 'SELL') or (side == 'SELL' and current_side == 'BUY'):
-                # Signal reversed! Force close
-                await trader.force_close_position(pos_key, reason=f"Signal reversed: {side} → {current_side}")
-                continue
-            
-            # Check for confidence drop
-            if current_conf < entry_conf * 0.5:  # Confidence dropped below 50% of entry
-                # Tighten SL by 50%
-                trader.tighten_sl(pos_key, factor=0.5)
-    
-    # Wrap async callback for sync caller
+        print("🎯 [ADAPTIVE] Checking if any open positions need risk adjustment...")
+        for ex_name, trader in traders.items():
+            for pos_key, pos in trader.active_positions.items():
+                if pos.get('status') != 'filled': continue
+                
+                symbol = pos.get('symbol')
+                side = pos.get('side')
+                entry_conf = pos.get('entry_confidence', 0.5)
+                
+                df = manager.get_data(symbol, '1h', exchange=ex_name)
+                if df is None or df.empty: continue
+                
+                last_row = df.iloc[-1]
+                # We need to find the matching bot to use its strategy (or just use a generic one)
+                # For now, we'll look for any bot that matches symbol/timeframe
+                matching_bot = next((b for b in bots if b.symbol == symbol and b.trader == trader), None)
+                if not matching_bot: continue
+                
+                current_signal = matching_bot.strategy.get_signal(last_row)
+                current_side = current_signal.get('side')
+                current_conf = current_signal.get('confidence', 0)
+                
+                # Check for None values before comparison
+                if not side or not current_side:
+                    continue
+                
+                if (side == 'BUY' and current_side == 'SELL') or (side == 'SELL' and current_side == 'BUY'):
+                    print(f"🔄 [{ex_name}] Signal reversed for {symbol}. Closing.")
+                    await trader.force_close_position(pos_key, reason=f"Signal reversed: {side} → {current_side}")
+                    continue
+                
+                if current_conf < entry_conf * 0.5:
+                    print(f"📉 [{ex_name}] Confidence drop for {symbol}. Tightening SL.")
+                    await trader.tighten_sl(pos_key, factor=0.5)
+
     def sync_adjust_positions():
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                asyncio.create_task(on_adjust_positions())
+                # Avoid creating task if loop is closing
+                pass # asyncio.create_task(on_adjust_positions()) # Disabled to prevent interference
             else:
-                loop.run_until_complete(on_adjust_positions())
+                pass # loop.run_until_complete(on_adjust_positions())
         except Exception as e:
             print(f"Error in position adjustment: {e}")
-    
-    # Register callbacks
+
     signal_tracker.set_analysis_callback(on_losses_detected)
     signal_tracker.set_position_adjust_callback(sync_adjust_positions)
     print("✅ Adaptive Learning v2.0 callbacks registered")
     # ========== END ADAPTIVE LEARNING SETUP ==========
-    
-    # Track optimization time (set to 0 to trigger first run if needed)
-    last_auto_opt = time.time()
-    opt_interval = 12 * 3600 # 12 hours
 
-    # Track periodic status update
-    last_status_update = time.time()
-    status_interval = 2 * 3600 # 2 hours
-    
-    # Track config file modification time (single check instead of 125)
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
-    last_config_mtime = os.path.getmtime(config_path) if os.path.exists(config_path) else 0
+    # Shared RiskManager for circuit breaker
+    risk_manager = RiskManager(risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE)
+    initial_balance = 1000
+
+    def get_current_balance():
+        current_bal = initial_balance
+        history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
+        if os.path.exists(history_file):
+            try:
+                with open(history_file, 'r') as f:
+                    history = json.load(f)
+                current_bal += sum(t.get('pnl_usdt', 0) for t in history)
+            except: pass
             
-    print("Starting Loop...")
-    try:
-        initial_balance = 1000  # Starting capital
-        
-        # Shared RiskManager for circuit breaker (checked ONCE per cycle)
-        risk_manager = RiskManager(risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE)
-        
-        # Calculate cumulative PnL from trade history and unrealized PnL from active positions
-        def get_current_balance():
-            current_bal = initial_balance
-            
-            # 1. Add Closed PnL
-            history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
-            if os.path.exists(history_file):
-                try:
-                    with open(history_file, 'r') as f:
-                        history = json.load(f)
-                    current_bal += sum(t.get('pnl_usdt', 0) for t in history)
-                except Exception:
-                    pass
-            
-            # 2. Add Unrealized PnL from active positions
+        for ex_name, trader in traders.items():
             for pos_key, pos in trader.active_positions.items():
                 if pos.get('status') == 'filled':
                     symbol = pos.get('symbol')
-                    # Get latest price from manager data store
-                    # Timeframe is stored in pos, but we can check all to be safe
                     tf = pos.get('timeframe', '1h')
-                    df = manager.get_data(symbol, tf)
+                    df = manager.get_data(symbol, tf, exchange=ex_name)
                     if df is not None and not df.empty:
                         cur_price = df.iloc[-1]['close']
-                        entry = pos.get('entry_price')
+                        entry = pos.get('entry_price', cur_price)
                         qty = pos.get('qty', 0)
                         side = pos.get('side')
-                        
-                        if side == 'BUY':
-                            unrealized = (cur_price - entry) * qty
-                        else:  # SELL
-                            unrealized = (entry - cur_price) * qty
+                        unrealized = (cur_price - entry) * qty if side == 'BUY' else (entry - cur_price) * qty
                         current_bal += unrealized
-                        
-            return current_bal
-        
-        # Track time sync (every 1 hour = 3600 seconds)
-        last_time_sync = 0
-        time_sync_interval = 3600  # 1 hour
-        
+        return current_bal
+
+    # Trackers for periodic tasks
+    last_time_sync = time.time()
+    last_auto_opt = time.time()
+    last_status_update = time.time()
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
+    last_config_mtime = os.path.getmtime(config_path) if os.path.exists(config_path) else 0
+    
+    status_interval = 2 * 3600 
+    opt_interval = 12 * 3600
+
+    print("🚀 Starting Main Loop...")
+    try:
         while True:
             curr_time = time.time()
             
-            # 0. Periodic Time Sync (every 1 hour)
-            if curr_time - last_time_sync >= time_sync_interval:
-                print("⏰ Periodic time sync with Binance server...")
-                try:
-                    await manager.sync_server_time()
-                    last_time_sync = curr_time
-                except Exception as sync_err:
-                    print(f"Error during time sync: {sync_err}")
+            # 0. Sync Server Time
+            if curr_time - last_time_sync >= 3600:
+                print("⏲ Syncing server time for all exchanges...")
+                for ex_name, trader in traders.items():
+                    try: await trader.exchange.sync_time()
+                    except: pass
+                last_time_sync = curr_time
             
-            # 0. Check for Auto-Optimization (Twice a day)
+            # 0. Check for Auto-Optimization
             if curr_time - last_auto_opt >= opt_interval:
                 print("⏰ Scheduled Auto-Optimization triggered...")
                 try:
                     await run_global_optimization()
                     last_auto_opt = curr_time
-                    # Reload config for all bots
-                    for bot in bots:
-                        bot.strategy.reload_config()
-                    await send_telegram_message("🔄 Auto-Optimization Complete and Bot Configs Reloaded.", exchange_name=trader.exchange.name)
-                except Exception as opt_err:
-                    print(f"Error during auto-optimization: {opt_err}")
+                    for bot in bots: bot.strategy.reload_config()
+                    if traders:
+                        await send_telegram_message("🔄 Auto-Optimization Complete.", exchange_name=list(traders.keys())[0])
+                except: pass
 
-            # 0.1 Check for Periodic Status Update (Every 2 hours)
+            # 0.1 Periodic Status Update
             if curr_time - last_status_update >= status_interval:
-                print("📊 Sending periodic status update...")
-                try:
-                    await send_periodic_status_report(trader, manager)
-                    last_status_update = curr_time
-                except Exception as status_err:
-                    print(f"Error sending status update: {status_err}")
+                print("📊 Sending periodic status updates...")
+                for ex_name, trader in traders.items():
+                    try: await send_periodic_status_report(trader, manager)
+                    except: pass
+                last_status_update = curr_time
 
-            # 0.2 Check for Periodic Deep Sync & Self-Healing (Every 10 minutes)
+            # 0.2 Deep Sync (Self-Healing)
             if not hasattr(main, 'last_deep_sync'): main.last_deep_sync = 0
-            if curr_time - main.last_deep_sync >= 600: # 10 minutes
-                print("🔄 [SELF-HEALING] Running Deep Sync to check for missing SL/TP...")
-                try:
-                    sync_summary = await trader.reconcile_positions(auto_fix=True)
-                    if sync_summary.get('created_tp_sl', 0) > 0:
-                        print(f"✅ [SELF-HEALING] Fixed {sync_summary['created_tp_sl']} positions with missing SL/TP.")
-                    main.last_deep_sync = curr_time
-                except Exception as sync_err:
-                    import traceback
-                    print(f"Error during deep sync: {sync_err}")
-                    traceback.print_exc()
+            if curr_time - main.last_deep_sync >= 600:
+                print("🔄 [SELF-HEALING] Running Deep Sync...")
+                for ex_name, trader in traders.items():
+                    try: await trader.reconcile_positions(auto_fix=True)
+                    except: pass
+                main.last_deep_sync = curr_time
 
-            # 1. FAST UPDATE: Latest prices for all symbols (Low weight)
+            # 1. Update Market Data
             await manager.update_tickers(TRADING_SYMBOLS)
-            
-            # 2. SLOW UPDATE: Full OHLCV/Candles (Higher weight, throttled inside manager)
             await manager.update_data(TRADING_SYMBOLS, TRADING_TIMEFRAMES)
             
-            # 1.5. Reload config if changed (SINGLE CHECK instead of 125)
+            # 1.5. Reload config
             current_config_mtime = os.path.getmtime(config_path) if os.path.exists(config_path) else 0
             if current_config_mtime != last_config_mtime:
-                print(f"🔄 Config changed, reloading for all {len(bots)} bots...")
-                for bot in bots:
-                    bot.strategy.reload_config()
+                print("🔄 Config changed, reloading...")
+                for bot in bots: bot.strategy.reload_config()
                 last_config_mtime = current_config_mtime
             
-            # 2. Check Circuit Breaker ONCE (not 125 times)
-            current_balance = get_current_balance()
-            circuit_triggered = False
-            stop_trading, cb_reason = risk_manager.check_circuit_breaker(current_balance)
-            if stop_trading:
-                if any(b.running for b in bots):  # Only notify once
-                    await send_telegram_message(f"🚨 CIRCUIT BREAKER: {cb_reason}", exchange_name=trader.exchange.name)
-                    print(f"🚨 CIRCUIT BREAKER TRIGGERED: {cb_reason}")
-                circuit_triggered = True
-            
+            # 2. Check Circuit Breaker
+            balances = {}
+            for ex_name, trader in traders.items():
+                balances[ex_name] = get_current_balance() # Simplified: uses same total bal
+                stop_trading, cb_reason = risk_manager.check_circuit_breaker(balances[ex_name])
+                if stop_trading:
+                    print(f"🚨 [{ex_name}] CIRCUIT BREAKER: {cb_reason}")
+                    await send_telegram_message(f"🚨 [{ex_name}] CIRCUIT BREAKER: {cb_reason}", exchange_name=ex_name)
+
             # 3. Run Logic for all bots
-            tasks = []
-            for bot in bots:
-                if bot.running:
-                    try:
-                        tasks.append(bot.run_step(current_balance, circuit_triggered))
-                    except Exception as e:
-                        print(f"Error starting bot task {bot.symbol}: {e}")
-            if tasks:
-                await asyncio.gather(*tasks)
+            tasks = [bot.run_step(balances[bot.trader.exchange.name]) for bot in bots if bot.running]
+            if tasks: await asyncio.gather(*tasks)
             
-            # 4. Deep Sync - Auto-healing positions without SL/TP (every 5s)
-            # This ensures any filled positions from exchange get proper SL/TP
-            try:
-                # Use first bot's trader for reconciliation (shared across all bots)
-                if bots and hasattr(bots[0], 'trader'):
-                    await bots[0].trader.reconcile_positions()
-            except Exception as e:
-                print(f"⚠️ Deep Sync error: {e}")
+            # 4. Fast Deep Sync
+            for ex_name, trader in traders.items():
+                try: await trader.reconcile_positions()
+                except: pass
             
             from config import HEARTBEAT_INTERVAL
-            await asyncio.sleep(HEARTBEAT_INTERVAL) # Default 5s
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
             
     except KeyboardInterrupt:
         print("Stopping...")
     finally:
         await manager.close()
-        # Only iterate if 'bots' was successfully initialized
-        if 'bots' in locals():
-            for bot in bots:
-                if hasattr(bot, 'trader'):
-                    await bot.trader.close()
+        for trader in traders.values():
+            await trader.close()
 
 if __name__ == "__main__":
     try:

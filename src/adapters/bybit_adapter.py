@@ -46,11 +46,18 @@ class BybitAdapter(BaseAdapter):
             return False
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> List[list]:
-        """Fetch OHLCV klines."""
+        """Fetch OHLCV klines with Bybit-specific mapping."""
+        # Bybit doesn't support '8h'. Map to something else or skip.
+        # Bybit V5 supports: 1,3,5,15,30,60,120,240,360,720,D,M,W
+        mapping = {
+            '8h': '4h', # closest supported
+        }
+        target_tf = mapping.get(timeframe, timeframe)
+        
         try:
-            return await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            return await self.exchange.fetch_ohlcv(symbol, target_tf, limit=limit)
         except Exception as e:
-            self.logger.error(f"[Bybit] Fetch OHLCV failed for {symbol}: {e}")
+            self.logger.error(f"[Bybit] Fetch OHLCV failed for {symbol} ({target_tf}): {e}")
             return []
 
     async def fetch_ticker(self, symbol: str) -> Dict:

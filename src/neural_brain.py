@@ -75,7 +75,7 @@ class NeuralBrain:
     def load_model(self):
         """Load weights from JSON."""
         if not os.path.exists(self.model_path):
-            print("🧠 No existing brain found. Created new random brain.")
+            # print("🧠 No existing brain found. Created new random brain.")
             return
             
         try:

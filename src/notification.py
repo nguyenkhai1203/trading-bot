@@ -2,6 +2,8 @@ import aiohttp
 import asyncio
 import os
 import time
+import ssl
+import certifi
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,9 +28,12 @@ async def send_telegram_message(message, exchange_name=None):
     if exchange_name:
         message = f"[{exchange_name}] {message}"
     
+    
     if not token or not chat_id:
-        # print(f"[TELEGRAM MOCK] {message}") 
-        # Reduce spam in console
+        if os.getenv('DRY_RUN', 'False').lower() == 'true':
+            # print(f"[TELEGRAM MOCK] {message}") 
+            return
+        # print(f"[TELEGRAM WARN] Token or Chat ID missing")
         return
 
     # Rate limit: max 1 message per 0.5 second
@@ -46,8 +51,13 @@ async def send_telegram_message(message, exchange_name=None):
         'parse_mode': 'Markdown'
     }
     
+    
     try:
-        async with aiohttp.ClientSession() as session:
+        # Create SSL context with certifi
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        
+        async with aiohttp.ClientSession(connector=connector) as session:
             async with session.post(url, json=payload, timeout=10) as response:
                 if response.status == 429:  # Rate limited
                     retry_after = int(response.headers.get('Retry-After', 5))

@@ -112,7 +112,7 @@ def format_pending_order(
         f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}\n"
-        f"Score: {score:.1f} | Leverage: {leverage}x"
+        f"Score: {score:.1f} | Leverage: {leverage}x ({int(score*10):d}%)"
     )
     
     return (terminal, telegram)
@@ -127,6 +127,8 @@ def format_position_filled(
     notional: float,
     sl_price: float,
     tp_price: float,
+    score: Optional[float],
+    leverage: Optional[int],
     dry_run: bool
 ) -> Tuple[str, str]:
     """
@@ -148,7 +150,7 @@ def format_position_filled(
     
     telegram = (
         f"{mode} | ⚪ FILLED\n"
-        f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}\n"
+        f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label} ({int(score*100) if score else 0}%)\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Size: {format_size(size, symbol)} {base_currency} (${notional:.0f})\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}"

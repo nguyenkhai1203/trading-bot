@@ -3,6 +3,7 @@
 Simple Telegram Bot - Status & Summary only
 Auto-sends report every 2 hours
 """
+import asyncio
 import json
 import logging
 import os
@@ -15,26 +16,24 @@ import ccxt
 import telegram
 import requests
 
-load_dotenv()
+# Load environment variables from project root
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+env_path = os.path.join(project_root, '.env')
+load_dotenv(env_path)
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from config import BINANCE_API_KEY, BINANCE_API_SECRET
 from execution import Trader
 from data_manager import MarketDataManager
 
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN not found in .env")
 
 # Setup exchange & trader
-exchange = ccxt.binance({
-    'enableRateLimit': True,
-    'options': {'defaultType': 'future', 'adjustForTimeDifference': True},
-    'apiKey': BINANCE_API_KEY if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY else None,
-    'secret': BINANCE_API_SECRET if BINANCE_API_SECRET and 'your_' not in BINANCE_API_SECRET else None,
-})
-# NOTE: Testnet support is DEPRECATED for Binance Futures - removed sandbox mode
+from exchange_factory import get_exchange_adapter
+exchange = get_exchange_adapter()
 
 trader = Trader(exchange, dry_run=True)
 data_manager = MarketDataManager()
@@ -132,12 +131,16 @@ async def get_status_message() -> str:
             total_pnl += pnl_usd
             total_pnl_pct += pnl_pct
             
+            # Try to get timeframe and confidence if available
+            timeframe = pos.get('timeframe', '1h')
+            conf = pos.get('confidence', 0)
+            conf_str = f"{conf:.1f}" if conf else "Auto"
+            
             emoji = "🟢" if pnl_pct >= 0 else "🔴"
             side_emoji = "📈" if side.upper() == 'BUY' else "📉"
             
-            lines.append(f"{side_emoji} *{symbol}* {side.upper()} {leverage}x")
-            lines.append(f"   Entry: `{entry:.4f}` → Now: `{current:.4f}`")
-            lines.append(f"   {emoji} *{pnl_pct:+.2f}%* (${pnl_usd:+.2f})")
+            lines.append(f"{side_emoji} *{side.upper()} - {symbol} - {timeframe} - {conf_str}* ({leverage}x)")
+            lines.append(f"   `{entry:.4f}` → `{current:.4f}` ({emoji}{pnl_pct:+.2f}%)")
             lines.append(f"   🎯 TP: {tp:.4f} | 🛡 SL: {sl:.4f}")
             lines.append("")
     else:
@@ -161,11 +164,15 @@ async def get_status_message() -> str:
             except:
                 current = price
             
-            dist = ((current - price) / price) * 100 if price > 0 else 0
-            side_emoji = "📈" if side.upper() == 'BUY' else "📉"
+            timeframe = pos.get('timeframe', '1h')
+            tp = float(pos.get('tp') or 0.0)
+            sl = float(pos.get('sl') or 0.0)
             
-            lines.append(f"{side_emoji} *{symbol}* {side.upper()} {leverage}x")
-            lines.append(f"   Limit: `{price:.4f}` | Now: `{current:.4f}` ({dist:+.2f}%)")
+            side_emoji = "⏳"
+            
+            lines.append(f"{side_emoji} *{side.upper()} - {symbol} - {timeframe}* ({leverage}x)")
+            lines.append(f"   Entry: `{price:.4f}` | Now: `{current:.4f}`")
+            lines.append(f"   🎯 TP: {tp:.4f} | 🛡 SL: {sl:.4f}")
             lines.append("")
     else:
         lines.append("🟡 *PENDING*: _None_")
@@ -230,6 +237,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = await get_status_message()
     await update.message.reply_text(msg, parse_mode='Markdown')
+    
+    # Broadcast to channel if command came from elsewhere (e.g. DM)
+    if CHAT_ID and str(update.effective_chat.id) != str(CHAT_ID):
+        try:
+             await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+        except Exception as e:
+             logging.error(f"Failed to broadcast status to channel: {e}")
 
 async def summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = await get_summary_message('month')
@@ -251,6 +265,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     if query.data == 'status':
         msg = await get_status_message()
+        await query.edit_message_text(msg, parse_mode='Markdown')
+        
+        # Broadcast to channel if clicked in DM
+        if CHAT_ID and str(query.message.chat.id) != str(CHAT_ID):
+            try:
+                await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+            except Exception as e:
+                logging.error(f"Failed to broadcast button status to channel: {e}")
+        return
     elif query.data == 'summary_month':
         msg = await get_summary_message('month')
     elif query.data == 'summary_all':
@@ -260,12 +283,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     await query.edit_message_text(msg, parse_mode='Markdown')
 
+import asyncio
+
+# ... (imports) ...
+
 # ============== AUTO REPORT ==============
-async def auto_report(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send status every 2 hours"""
+async def periodic_report_loop(application: Application):
+    """Loop for periodic reports (replacing JobQueue)"""
+    while True:
+        await asyncio.sleep(7200) # 2 hours
+        try:
+            if CHAT_ID:
+                msg = await get_status_message()
+                await application.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+        except Exception as e:
+            print(f"⚠️ Auto-report failed: {e}")
+
+async def post_init(application: Application) -> None:
+    """Start background tasks."""
     if CHAT_ID:
-        msg = await get_status_message()
-        await context.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+        asyncio.create_task(periodic_report_loop(application))
+        print(f"✅ Auto-report every 2h to {CHAT_ID}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error(f"Error: {context.error}")
@@ -280,7 +318,7 @@ def main():
         pass
     
     try:
-        app = Application.builder().token(TELEGRAM_TOKEN).build()
+        app = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
         
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("status", status_cmd))
@@ -288,11 +326,6 @@ def main():
         app.add_handler(CommandHandler("summary", summary_cmd))
         app.add_handler(CallbackQueryHandler(button_handler))
         app.add_error_handler(error_handler)
-        
-        # Auto report every 2 hours
-        if CHAT_ID:
-            app.job_queue.run_repeating(auto_report, interval=7200, first=10)
-            print(f"✅ Auto-report every 2h to {CHAT_ID}")
         
         print("🤖 Telegram bot started")
         app.run_polling(drop_pending_updates=True)

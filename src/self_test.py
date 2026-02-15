@@ -122,19 +122,35 @@ class SelfTest:
             self.log_test("Strategy Config File", True, "File loaded successfully")
             
             # Check for unauthorized symbols
-            unauthorized_symbols = set()
+            from config import BINANCE_SYMBOLS, BYBIT_SYMBOLS
+            exchange_symbols_map = {
+                'BINANCE': BINANCE_SYMBOLS,
+                'BYBIT': BYBIT_SYMBOLS
+            }
+            unauthorized_configs = []
+            
             for key in config.keys():
-                if '_' in key:
+                parts = key.split('_')
+                if len(parts) >= 3:
+                    ex_name = parts[0]
+                    symbol = parts[1]
+                    tf = parts[2]
+                    
+                    allowed = exchange_symbols_map.get(ex_name, [])
+                    if symbol not in allowed:
+                        unauthorized_configs.append(f"{ex_name} {symbol}")
+                elif '_' in key:
+                    # Fallback for old style keys (just symbol_tf)
                     symbol = key.split('_')[0]
                     if symbol not in TRADING_SYMBOLS:
-                        unauthorized_symbols.add(symbol)
+                        unauthorized_configs.append(f"UNKNOWN {symbol}")
             
-            if unauthorized_symbols:
+            if unauthorized_configs:
                 self.log_test("Symbol Adherence", False, 
-                             f"Unauthorized symbols found: {unauthorized_symbols}")
+                             f"Unauthorized configurations found: {unauthorized_configs[:3]}...")
             else:
                 self.log_test("Symbol Adherence", True, 
-                             "All configs use authorized TRADING_SYMBOLS")
+                             "All configs use authorized exchange/symbol pairs")
             
             # Count enabled configs
             enabled_count = sum(1 for v in config.values() if isinstance(v, dict) and v.get('enabled', False))

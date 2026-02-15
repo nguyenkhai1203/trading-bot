@@ -121,13 +121,19 @@ class WeightedScoringStrategy(Strategy):
         elif 'minimum' in tiers and score >= tiers['minimum'].get('min_score', 0):
             selected_tier = tiers['minimum']
              
-        # GLOBAL OVERRIDE: Clamp to config.LEVERAGE to ensure user safety settings
-        from config import LEVERAGE as GLOBAL_MAX_LEV
+        # GLOBAL OVERRIDE: Clamp to config safety settings
+        from config import GLOBAL_MAX_LEVERAGE, GLOBAL_MAX_COST_PER_TRADE
         
-        # Create a copy to avoid modifying the cached config in-place permanently (optional but safer)
         final_tier = selected_tier.copy()
         if 'leverage' in final_tier:
-             final_tier['leverage'] = min(final_tier['leverage'], GLOBAL_MAX_LEV)
+             final_tier['leverage'] = min(final_tier['leverage'], GLOBAL_MAX_LEVERAGE)
+        
+        if 'cost_usdt' in final_tier:
+             final_tier['cost_usdt'] = min(final_tier['cost_usdt'], GLOBAL_MAX_COST_PER_TRADE)
+             
+        # Fallback if cost_usdt missing but tier selected
+        if 'cost_usdt' not in final_tier and 'leverage' in final_tier:
+             final_tier['cost_usdt'] = min(5.0, GLOBAL_MAX_COST_PER_TRADE)
              
         return final_tier
 

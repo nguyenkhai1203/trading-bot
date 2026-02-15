@@ -82,14 +82,14 @@ class Backtester:
                 p = self.position
                 # Check SL/TP
                 if p['type'] == 'long':
-                    if row['low'] <= p['sl']:
+                    if p.get('sl') is not None and row['low'] <= p['sl']:
                         self._close_position(timestamp, p['sl'], 'SL')
-                    elif row['high'] >= p['tp']:
+                    elif p.get('tp') is not None and row['high'] >= p['tp']:
                         self._close_position(timestamp, p['tp'], 'TP')
                 elif p['type'] == 'short':
-                    if row['high'] >= p['sl']:
+                    if p.get('sl') is not None and row['high'] >= p['sl']:
                         self._close_position(timestamp, p['sl'], 'SL')
-                    elif row['low'] <= p['tp']:
+                    elif p.get('tp') is not None and row['low'] <= p['tp']:
                         self._close_position(timestamp, p['tp'], 'TP')
                         
             # --- Check Entry Signals ---

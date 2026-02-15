@@ -28,6 +28,7 @@ class Trader:
         # Configure Logger with Exchange Prefix
         # exchange.name is set by BaseAdapter (e.g., 'BINANCE', 'BYBIT')
         ex_name = getattr(exchange, 'name', 'UNKNOWN')
+        self.exchange_name = ex_name
         self.logger = ExchangeLoggerAdapter(logging.getLogger(__name__), {'exchange_name': ex_name})
         
         # Use shared MarketDataManager for time synchronization
@@ -79,9 +80,9 @@ class Trader:
                    if len(parts) >= 1:
                        val['symbol'] = parts[0]
                 
-                self.active_positions[new_k] = val
+                self.active_positions[new_key] = val
                 migrated = True
-                self.logger.info(f"[MIGRATION] Key {k} -> {new_k}")
+                self.logger.info(f"[MIGRATION] Key {k} -> {new_key}")
         if migrated:
             self._save_positions()
 
@@ -339,6 +340,10 @@ class Trader:
         limit_price = pos['entry_price']
         
         # Check if price reached limit
+        # Ensure prices are not None to avoid "<= not supported between instances of 'NoneType' and 'NoneType'"
+        if current_price is None or limit_price is None:
+            return False
+
         filled = False
         if side == 'BUY' and current_price <= limit_price:
             # Buy limit: fill when price goes down to limit or below
@@ -439,6 +444,25 @@ class Trader:
         if qty_rounded <= 0:
             self.logger.warning(f"Rejected order: qty too small after rounding ({qty} -> {qty_rounded}) for {symbol}")
             return None
+        
+        # MINIMUM NOTIONAL CHECK (Safety against exchange rejections/spam)
+        # Most exchanges (Binance/Bybit) require at least $5-10 notional value.
+        # If order is too small, it will fail anyway. Catch it here to avoid spam.
+        price_to_check = price if price and price > 0 else 0
+        if price_to_check <= 0:
+            # Fallback to ticker if price not provided (for market orders)
+            try:
+                # This is a sync check but trader usually has latest data or can fetch
+                # For now, if we don't have price, we might skip this specific check or use a default
+                pass
+            except Exception: pass
+            
+        if price_to_check > 0:
+            notional = qty_rounded * price_to_check
+            if notional < 5.1: # $5.1 threshold (safe margin over $5.0 min)
+                self.logger.warning(f"Rejected order: Notional ${notional:.2f} too small (< $5.1) for {symbol}")
+                print(f"⚠️ [{symbol}] Order rejected: Notional ${notional:.2f} < $5.1 min requirement.")
+                return None
         
         exchange_name = getattr(self.exchange, 'name', 'BINANCE')
         pos_key = f"{exchange_name}_{symbol}_{timeframe}" if timeframe else f"{exchange_name}_{symbol}"
@@ -1441,6 +1465,11 @@ class Trader:
         active_ex_pos = {}
         all_exchange_orders = [] # Shared global order book
         
+        # SKIP SYNC IF DRY RUN AND NO API KEY
+        if self.dry_run and not self.exchange.apiKey:
+            self.logger.info("[SYNC] Dry run without API key: Skipping exchange fetch (simulating clean state)")
+            return summary
+
         try:
             # Fetch ALL positions
             ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
@@ -1895,6 +1924,10 @@ class Trader:
                         current_price = float(ticker.get('last') or ticker.get('close'))
                         
                         # Check if TP would trigger immediately (with 0.1% buffer)
+                        # Ensure current_price and tp are not None
+                        if current_price is None or tp is None:
+                            raise Exception("TP_SAFETY_NO_PRICE")
+
                         if side == 'BUY':
                             # For LONG, TP should be above current price
                             if tp <= current_price * 1.001:
