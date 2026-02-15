@@ -61,7 +61,9 @@ class TradingBot:
 
             # 0. GLOBAL CONFLICT CHECK (Single Position Rule)
             # Check if this symbol already has an active position/order on exchange or locally
-            pos_key = f"{self.symbol}_{self.timeframe}"
+            # Use namespaced key
+            exchange_name = getattr(self.trader.exchange, 'name', 'BINANCE')
+            pos_key = f"{exchange_name}_{self.symbol}_{self.timeframe}"
             already_in_symbol = await self.trader.has_any_symbol_position(self.symbol)
             if already_in_symbol:
                 # If we have a position/order for THIS timeframe, we proceed to regular logic
@@ -71,7 +73,7 @@ class TradingBot:
                     return
 
             # Check if we already have a position for this symbol/timeframe
-            pos_key = f"{self.symbol}_{self.timeframe}"
+            pos_key = f"{exchange_name}_{self.symbol}_{self.timeframe}"
             
             # 1. CHECK PENDING ORDERS FIRST - Cancel if technical invalidation
             # Live mode: pending orders are in pending_orders dict
@@ -133,7 +135,7 @@ class TradingBot:
                         dry_run=self.trader.dry_run
                     )
                     print(terminal_msg)
-                    await send_telegram_message(telegram_msg)
+                    await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange.name)
                     return
                 
                 # For LIVE mode: exchange handles fill, just monitor and return
@@ -180,7 +182,7 @@ class TradingBot:
                         dry_run=self.trader.dry_run
                     )
                     print(terminal_msg)
-                    await send_telegram_message(telegram_msg)
+                    await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange.name)
                 
                 # Skip SL/TP monitoring for pending orders
                 if pos_status == 'pending':
@@ -282,7 +284,7 @@ class TradingBot:
                         dry_run=self.trader.dry_run
                     )
                     print(terminal_msg)
-                    await send_telegram_message(telegram_msg)
+                    await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange.name)
                     
                     # Set cooldown after STOP LOSS to prevent immediate re-entry
                     if "STOP LOSS" in exit_reason:
@@ -500,7 +502,8 @@ class TradingBot:
                         # === DUPLICATE PREVENTION ===
                         # Check if we already have a pending order for this symbol/timeframe
                         # This prevents placing multiple orders for the same signal
-                        pos_key_check = f"{self.symbol}_{self.timeframe}"
+                        exchange_name = getattr(self.trader.exchange, 'name', 'BINANCE')
+                        pos_key_check = f"{exchange_name}_{self.symbol}_{self.timeframe}"
                         
                         # Check in pending_orders (live mode)
                         if pos_key_check in self.trader.pending_orders:
@@ -567,7 +570,7 @@ class TradingBot:
                         )
                         
                         if res:
-                            mode_label = "✅ REAL" if not self.trader.dry_run else "🧪 TEST"
+                            mode_label = "🟢 LIVE" if not self.trader.dry_run else "🧪 TEST"
                             # Status: PENDING for limit, FILLED for market
                             if order_type == 'limit':
                                 status_label = "📌 PENDING"
@@ -583,7 +586,7 @@ class TradingBot:
                                 f"PnL: 0.00%"
                             )
                             print(msg)
-                            await send_telegram_message(msg)
+                            await send_telegram_message(msg, exchange_name=self.trader.exchange.name)
                         
                         # NOTE: SL/TP setup is already handled in execution.py:420
                         # No need to call setup_sl_tp_for_pending() here to avoid duplicates
@@ -639,7 +642,7 @@ async def send_periodic_status_report(trader, data_manager):
     total_icon = "🟢" if total_pnl_usd > 0 else "🔴"
     msg += f"\n{total_icon} **Total PnL: ${total_pnl_usd:+.2f}**"
     
-    await send_telegram_chunked(msg)
+    await send_telegram_chunked(msg, exchange_name=trader.exchange.name)
 
 async def main():
     import argparse
@@ -668,7 +671,7 @@ async def main():
     
     print("Initializing Bots...")
     # 0. Shared Trader (One instance for all bots to sync positions)
-    trader = Trader(manager.exchange, dry_run=DRY_RUN) 
+    trader = Trader(manager.adapter, dry_run=DRY_RUN) 
 
     # 0.5 Set Isolated Margin Mode (one-time setup)
     if not trader.dry_run:
@@ -690,7 +693,7 @@ async def main():
             bots.append(bot)
             
     # Initial Notif
-    await send_telegram_message(f"🤖 Bot Started! Monitoring {len(TRADING_SYMBOLS)} symbols.")
+    await send_telegram_message(f"🤖 Bot Started! Monitoring {len(TRADING_SYMBOLS)} symbols.", exchange_name=trader.exchange.name)
     
     # ========== ADAPTIVE LEARNING v2.0 SETUP ==========
     # Callback for mini-analyzer after consecutive losses
@@ -851,7 +854,7 @@ async def main():
                     # Reload config for all bots
                     for bot in bots:
                         bot.strategy.reload_config()
-                    await send_telegram_message("🔄 Auto-Optimization Complete and Bot Configs Reloaded.")
+                    await send_telegram_message("🔄 Auto-Optimization Complete and Bot Configs Reloaded.", exchange_name=trader.exchange.name)
                 except Exception as opt_err:
                     print(f"Error during auto-optimization: {opt_err}")
 
@@ -898,7 +901,7 @@ async def main():
             stop_trading, cb_reason = risk_manager.check_circuit_breaker(current_balance)
             if stop_trading:
                 if any(b.running for b in bots):  # Only notify once
-                    await send_telegram_message(f"🚨 CIRCUIT BREAKER: {cb_reason}")
+                    await send_telegram_message(f"🚨 CIRCUIT BREAKER: {cb_reason}", exchange_name=trader.exchange.name)
                     print(f"🚨 CIRCUIT BREAKER TRIGGERED: {cb_reason}")
                 circuit_triggered = True
             

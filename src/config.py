@@ -10,6 +10,9 @@ BYBIT_API_SECRET = os.getenv('BYBIT_API_SECRET')
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
+# Active Exchange (str): 'BINANCE' or 'BYBIT'
+ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'BINANCE').upper()
+
 # Configuration
 # NOTE: USE_TESTNET is DEPRECATED - Binance removed Testnet Futures support
 # Bot will now ALWAYS use LIVE exchange (set dry_run=True in bot.py for simulation)
@@ -20,7 +23,7 @@ DRY_RUN = False  # Set to True for paper trading (simulation mode)
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 TRADING_SYMBOLS = [
     'ETH/USDT',
-   # 'BTC/USDT',
+    'BTC/USDT',
     'SOL/USDT',
     'XRP/USDT',
     'HYPE/USDT',
@@ -80,18 +83,18 @@ OHLCV_REFRESH_INTERVAL = 60  # OHLCV data refresh interval in seconds (1 minute)
 CONFIDENCE_TIERS = {
     "high": {
         "min_confidence": 0.70,  # 70%+ confidence
-        "leverage": 10,          # Conservative max leverage
-        "cost_usdt": 10.0         # $5 per trade (conservative)
+        "leverage": 6,          # Conservative max leverage
+        "cost_usdt": 5        # $5 per trade (conservative)
     },
     "medium": {
         "min_confidence": 0.50,  # 50-70% confidence
-        "leverage": 8,           # Medium leverage
-        "cost_usdt": 8.0         # $4 per trade
+        "leverage": 4,           # Medium leverage
+        "cost_usdt": 4         # $4 per trade
     },
     "low": {
         "min_confidence": 0.30,  # 30-50% confidence
-        "leverage": 5,           # Low leverage for safety
-        "cost_usdt": 5.0         # $3 per trade (minimum)
+        "leverage": 3,           # Low leverage for safety
+        "cost_usdt": 3         # $3 per trade (minimum)
     }
 }
 MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade

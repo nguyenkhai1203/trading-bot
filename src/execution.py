@@ -12,6 +12,11 @@ import hashlib
 import requests
 from urllib.parse import urlencode
 
+# Logger Adapter for Exchange Prefix
+class ExchangeLoggerAdapter(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        return '[%s] %s' % (self.extra['exchange_name'], msg), kwargs
+
 # Cooldown after SL (in seconds)
 SL_COOLDOWN_SECONDS = 2 * 3600  # 2 hours cooldown after stop loss
 
@@ -19,7 +24,11 @@ class Trader:
     def __init__(self, exchange, dry_run=True, data_manager=None):
         self.exchange = exchange
         self.dry_run = dry_run
-        self.logger = logging.getLogger(__name__)
+        
+        # Configure Logger with Exchange Prefix
+        # exchange.name is set by BaseAdapter (e.g., 'BINANCE', 'BYBIT')
+        ex_name = getattr(exchange, 'name', 'UNKNOWN')
+        self.logger = ExchangeLoggerAdapter(logging.getLogger(__name__), {'exchange_name': ex_name})
         
         # Use shared MarketDataManager for time synchronization
         if data_manager is None:
@@ -51,6 +60,29 @@ class Trader:
                     # Rename to standard _adopted for consistency
                     new_key = f"{symbol}_adopted"
                     self.active_positions[new_key] = pos
+            self._save_positions()
+
+        # MIGRATION: Prefix legacy keys with 'BINANCE' if not present
+        migrated = False
+        keys_to_migrate = list(self.active_positions.keys())
+        for k in keys_to_migrate:
+            # Check if likely legacy (no prefix like BINANCE_ or BYBIT_)
+            if not k.startswith(('BINANCE_', 'BYBIT_')):
+                val = self.active_positions.pop(k)
+                # Assume legacy is BINANCE
+                new_key = f"BINANCE_{k}"
+                # Also ensure val has 'symbol'
+                if 'symbol' not in val:
+                   # Try to recover symbol from key (e.g. ETH/USDT_1h) (risky but needed)
+                   # But legacy keys are usually symbol_timeframe
+                   parts = k.split('_')
+                   if len(parts) >= 1:
+                       val['symbol'] = parts[0]
+                
+                self.active_positions[new_k] = val
+                migrated = True
+                self.logger.info(f"[MIGRATION] Key {k} -> {new_k}")
+        if migrated:
             self._save_positions()
 
     def _get_lock(self, symbol):
@@ -348,7 +380,8 @@ class Trader:
 
     async def get_open_position(self, symbol, timeframe=None):
         """Checks if there's an open position for the symbol/timeframe."""
-        key = f"{symbol}_{timeframe}" if timeframe else symbol
+        exchange_name = getattr(self.exchange, 'name', 'BINANCE')
+        key = f"{exchange_name}_{symbol}_{timeframe}" if timeframe else f"{exchange_name}_{symbol}"
         
         if self.dry_run:
             return key in self.active_positions
@@ -399,7 +432,8 @@ class Trader:
             self.logger.warning(f"Rejected order: qty too small after rounding ({qty} -> {qty_rounded}) for {symbol}")
             return None
         
-        pos_key = f"{symbol}_{timeframe}" if timeframe else symbol
+        exchange_name = getattr(self.exchange, 'name', 'BINANCE')
+        pos_key = f"{exchange_name}_{symbol}_{timeframe}" if timeframe else f"{exchange_name}_{symbol}"
         signals = signals_used or []
         confidence = entry_confidence or 0.5
         
@@ -1399,19 +1433,10 @@ class Trader:
             ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
             active_ex_pos = {p['symbol']: p for p in ex_positions if self._safe_float(p.get('contracts'), 0) > 0}
             
-            # 1. Fetch TOTAL Open Orders (Standard + Algo)
+            # 1. Fetch TOTAL Open Orders (Standard + Algo via Adapter)
             try:
-                # Parallel fetch for speed
-                std_orders_task = self._execute_with_timestamp_retry(self.exchange.fetch_open_orders)
-                algo_orders_task = self._execute_with_timestamp_retry(self.exchange.fapiPrivateGetOpenAlgoOrders)
-                
-                std_orders, algo_orders = await asyncio.gather(std_orders_task, algo_orders_task, return_exceptions=True)
-                
-                all_exchange_orders = []
-                if isinstance(std_orders, list): all_exchange_orders.extend(std_orders)
-                if isinstance(algo_orders, list): 
-                    self.logger.info(f"[SYNC] Found {len(algo_orders)} Algo orders")
-                    all_exchange_orders.extend(algo_orders)
+                # Adapter handles both Std + Algo merging internally
+                all_exchange_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders)
                 
                 if all_exchange_orders:
                     self.logger.info(f"[SYNC] Total visibility: {len(all_exchange_orders)} orders (Std + Algo)")

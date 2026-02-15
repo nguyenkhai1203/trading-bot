@@ -428,6 +428,17 @@
       ],
       "result": "LOSS",
       "pnl_pct": -1.0
+    },
+    {
+      "timestamp": "2026-02-15T07:37:48.512555",
+      "symbol": "XRP/USDT",
+      "timeframe": "8h",
+      "side": "BUY",
+      "signals": [
+        "Price_gt_BB_Up"
+      ],
+      "result": "WIN",
+      "pnl_pct": 38.41095890410961
     }
   ],
   "signal_stats": {
@@ -579,6 +590,14 @@
         0,
         1,
         0
+      ]
+    },
+    "Price_gt_BB_Up": {
+      "total": 1,
+      "wins": 1,
+      "losses": 0,
+      "recent_results": [
+        1
       ]
     }
   }
