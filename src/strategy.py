@@ -97,14 +97,25 @@ class WeightedScoringStrategy(Strategy):
         tiers = self.config_data['tiers']
         
         # Check tiers in order: high -> low -> minimum (fallback)
+        # Check tiers in order: high -> low -> minimum (fallback)
+        selected_tier = res # default
+        
         if 'high' in tiers and score >= tiers['high'].get('min_score', 999):
-            return tiers['high']
+            selected_tier = tiers['high']
         elif 'low' in tiers and score >= tiers['low'].get('min_score', 999):
-            return tiers['low']
+            selected_tier = tiers['low']
         elif 'minimum' in tiers and score >= tiers['minimum'].get('min_score', 0):
-            return tiers['minimum']
+            selected_tier = tiers['minimum']
              
-        return res
+        # GLOBAL OVERRIDE: Clamp to config.LEVERAGE to ensure user safety settings
+        from config import LEVERAGE as GLOBAL_MAX_LEV
+        
+        # Create a copy to avoid modifying the cached config in-place permanently (optional but safer)
+        final_tier = selected_tier.copy()
+        if 'leverage' in final_tier:
+             final_tier['leverage'] = min(final_tier['leverage'], GLOBAL_MAX_LEV)
+             
+        return final_tier
 
     def get_default_weights(self):
         return {
