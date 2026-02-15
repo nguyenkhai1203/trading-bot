@@ -13,12 +13,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -42,12 +42,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -71,12 +71,12 @@
         "tiers": {
             "low": {
                 "min_score": 5.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 7.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -100,12 +100,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -129,12 +129,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -158,12 +158,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -187,12 +187,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -224,12 +224,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -253,12 +253,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -282,12 +282,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -311,12 +311,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -350,12 +350,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -379,12 +379,12 @@
         "tiers": {
             "low": {
                 "min_score": 6.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 8.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -408,12 +408,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -437,12 +437,12 @@
         "tiers": {
             "low": {
                 "min_score": 5.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 7.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -466,12 +466,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -495,12 +495,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -524,12 +524,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -553,12 +553,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -582,12 +582,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -611,12 +611,12 @@
         "tiers": {
             "low": {
                 "min_score": 6.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 8.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -640,12 +640,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -669,12 +669,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -698,12 +698,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -734,12 +734,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -763,12 +763,12 @@
         "tiers": {
             "low": {
                 "min_score": 6.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 8.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -792,12 +792,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -828,12 +828,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -857,12 +857,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -886,12 +886,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -915,12 +915,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -944,12 +944,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -973,12 +973,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1002,12 +1002,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1040,12 +1040,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1069,12 +1069,12 @@
         "tiers": {
             "low": {
                 "min_score": 6.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 8.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1098,12 +1098,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1127,12 +1127,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1163,12 +1163,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1192,12 +1192,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1221,12 +1221,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1250,12 +1250,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1279,12 +1279,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1308,12 +1308,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1344,12 +1344,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1384,12 +1384,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1413,12 +1413,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1442,12 +1442,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1471,12 +1471,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1500,12 +1500,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1529,12 +1529,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1558,12 +1558,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1587,12 +1587,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1616,12 +1616,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1645,12 +1645,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1674,12 +1674,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1709,12 +1709,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1738,12 +1738,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1776,12 +1776,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1805,12 +1805,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1834,12 +1834,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1874,12 +1874,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1903,12 +1903,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1932,12 +1932,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -1972,12 +1972,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2001,12 +2001,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2030,12 +2030,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2059,12 +2059,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2098,12 +2098,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2127,12 +2127,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2165,12 +2165,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2202,12 +2202,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2237,12 +2237,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2266,12 +2266,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2295,12 +2295,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2324,12 +2324,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2353,12 +2353,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2382,12 +2382,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2411,12 +2411,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2440,12 +2440,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2469,12 +2469,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2498,12 +2498,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2527,12 +2527,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2556,12 +2556,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2585,12 +2585,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2614,12 +2614,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2643,12 +2643,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2677,12 +2677,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2706,12 +2706,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2735,12 +2735,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2764,12 +2764,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2800,12 +2800,12 @@
         "tiers": {
             "low": {
                 "min_score": 6.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 8.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2829,12 +2829,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2866,12 +2866,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2895,12 +2895,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2930,12 +2930,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2959,12 +2959,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -2988,12 +2988,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3017,12 +3017,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3053,12 +3053,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3082,12 +3082,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3111,12 +3111,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3148,12 +3148,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3177,12 +3177,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3206,12 +3206,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3235,12 +3235,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3264,12 +3264,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3293,12 +3293,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3322,12 +3322,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3356,12 +3356,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3385,12 +3385,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3414,12 +3414,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3443,12 +3443,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3472,12 +3472,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3501,12 +3501,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3530,12 +3530,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3559,12 +3559,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3597,12 +3597,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3626,12 +3626,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3664,12 +3664,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3693,12 +3693,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3722,12 +3722,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3751,12 +3751,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3787,12 +3787,12 @@
         "tiers": {
             "low": {
                 "min_score": 6.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 8.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3816,12 +3816,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3845,12 +3845,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3874,12 +3874,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3903,12 +3903,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3932,12 +3932,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3961,12 +3961,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -3990,12 +3990,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4019,12 +4019,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4048,12 +4048,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4077,12 +4077,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4106,12 +4106,12 @@
         "tiers": {
             "low": {
                 "min_score": 3.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 5.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4135,12 +4135,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4164,12 +4164,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4193,12 +4193,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4222,12 +4222,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4258,12 +4258,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4297,12 +4297,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4331,12 +4331,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4360,12 +4360,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4389,12 +4389,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4418,12 +4418,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.5,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.5,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4452,12 +4452,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4490,12 +4490,12 @@
         "tiers": {
             "low": {
                 "min_score": 4.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 6.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },
@@ -4519,12 +4519,12 @@
         "tiers": {
             "low": {
                 "min_score": 2.0,
-                "leverage": 8,
+                "leverage": 5,
                 "cost_usdt": 3.0
             },
             "high": {
                 "min_score": 4.0,
-                "leverage": 12,
+                "leverage": 5,
                 "cost_usdt": 5.0
             }
         },

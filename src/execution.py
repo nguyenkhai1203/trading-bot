@@ -208,12 +208,20 @@ class Trader:
         return symbol.split(':')[0].replace('/', '').upper()
 
     def _clamp_leverage(self, lev):
-        """Clamp leverage to allowed range (default 8-12)."""
+        """Clamp leverage to allowed range (default 5-20)."""
+        # Import dynamically to ensure we get latest config value
+        from config import LEVERAGE as GLOBAL_MAX
+        
         lv = self._safe_int(lev, default=None)
         if lv is None:
-            lv = self._safe_int(self.default_leverage, default=8)
-        # Allow floor 5 if default is lower; clamp to [5,12] to be safe
-        return max(5, min(12, lv))
+            lv = self._safe_int(self.default_leverage, default=5)
+            
+        # 1. Clamp to global max setting (User safety preference)
+        if lv > GLOBAL_MAX:
+            lv = GLOBAL_MAX
+            
+        # 2. Hard limits: ensure between 1 and 20 (Exchange limits)
+        return max(1, min(20, lv))
 
     def _debug_log(self, *parts):
         try:
