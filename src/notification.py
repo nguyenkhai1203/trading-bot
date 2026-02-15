@@ -16,11 +16,15 @@ def _get_lock():
         _send_lock = asyncio.Lock()
     return _send_lock
 
-async def send_telegram_message(message):
+async def send_telegram_message(message, exchange_name=None):
     global _last_send_time
     
     token = os.getenv('TELEGRAM_TOKEN')
     chat_id = os.getenv('TELEGRAM_CHAT_ID')
+    
+    # Prepend exchange prefix if provided
+    if exchange_name:
+        message = f"[{exchange_name}] {message}"
     
     if not token or not chat_id:
         # print(f"[TELEGRAM MOCK] {message}") 
@@ -61,7 +65,7 @@ async def send_telegram_message(message):
         print(f"❌ Telegram Error: {e}")
         print(f"   Message was: {message[:100]}...")
 
-async def send_telegram_chunked(message):
+async def send_telegram_chunked(message, exchange_name=None):
     """Splits long messages (>4000 chars) into chunks for Telegram."""
     if not message: return
     
@@ -69,13 +73,16 @@ async def send_telegram_chunked(message):
     chunks = [message[i:i+max_len] for i in range(0, len(message), max_len)]
     
     for chunk in chunks:
-        await send_telegram_message(chunk)
+        await send_telegram_message(chunk, exchange_name)
         await asyncio.sleep(1) # Rate limit safety
 
-async def send_trade_notification(symbol, side, entry, exit, pnl, pnl_pct, reason):
+async def send_trade_notification(symbol, side, entry, exit, pnl, pnl_pct, reason, exchange_name=None):
     emoji = "🟢" if pnl > 0 else "🔴"
+    
+    prefix = f"[{exchange_name}] " if exchange_name else ""
+    
     msg = (
-        f"{emoji} **TRADE CLOSED** {emoji}\n"
+        f"{prefix}{emoji} **TRADE CLOSED** {emoji}\n"
         f"Symbol: {symbol}\n"
         f"Side: {side.upper()}\n"
         f"Entry: {entry}\n"
@@ -83,4 +90,5 @@ async def send_trade_notification(symbol, side, entry, exit, pnl, pnl_pct, reaso
         f"PnL: ${pnl:.2f} ({pnl_pct:.2f}%)\n"
         f"Reason: {reason}"
     )
+    # We pass None here because we already embedded the prefix in the title line
     await send_telegram_message(msg)

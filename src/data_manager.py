@@ -3,22 +3,37 @@ import ccxt.async_support as ccxt
 import pandas as pd
 import os
 import time
-from config import BINANCE_API_KEY, BINANCE_API_SECRET
-from base_exchange_client import BaseExchangeClient
+from config import BINANCE_API_KEY, BINANCE_API_SECRET, ACTIVE_EXCHANGE
+from adapters.binance_adapter import BinanceAdapter
+from adapters.bybit_adapter import BybitAdapter
 
-class MarketDataManager(BaseExchangeClient):
+class MarketDataManager:
     _instance = None
 
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
              cls._instance = super(MarketDataManager, cls).__new__(cls)
+             cls._instance.initialized = False
         return cls._instance
 
     def __init__(self):
-        if hasattr(self, 'initialized'): return
+        if hasattr(self, 'initialized') and self.initialized: return
         self.initialized = True
-        exchange = self._initialize_exchange()
-        super().__init__(exchange)  # Initialize BaseExchangeClient
+        
+        # Initialize Exchange Adapter based on Config
+        print(f"🔌 Initializing Exchange Adapter: {ACTIVE_EXCHANGE}")
+        if ACTIVE_EXCHANGE == 'BYBIT':
+            self.adapter = BybitAdapter()
+        else:
+            # Default to Binance
+            ccxt_exchange = self._initialize_exchange()
+            self.adapter = BinanceAdapter(ccxt_exchange)
+            
+        self.exchange = self.adapter # Backward compatibility
+        
+        # self.exchange = self._initialize_exchange() # REMOVED
+        # super().__init__(exchange)  # REMOVED
+        
         self.data_store = {} # { 'symbol_timeframe': df }
         self.features_cache = {}  # { 'symbol_timeframe': df_with_features }
         self._last_ohlcv_update = 0  # Timestamp for throttled candle updates
@@ -33,6 +48,14 @@ class MarketDataManager(BaseExchangeClient):
             from feature_engineering import FeatureEngineer
             self._feature_engineer = FeatureEngineer()
         return self._feature_engineer
+
+    async def sync_server_time(self):
+        """Delegate time sync to adapter."""
+        return await self.adapter.sync_time()
+
+    def get_synced_timestamp(self):
+        """Delegate timestamp generation to adapter."""
+        return self.adapter.get_synced_timestamp()
 
     def _initialize_exchange(self):
         # ... logic similar to DataFetcher ...
@@ -61,88 +84,31 @@ class MarketDataManager(BaseExchangeClient):
     async def set_isolated_margin_mode(self, symbols):
         """Sets margin mode to ISOLATED for given symbols (Live only)."""
         from config import DRY_RUN
-        if DRY_RUN or not self.exchange.apiKey:
+        # Check apiKey via adapter proxy
+        if DRY_RUN or not self.adapter.apiKey:
             return
             
         for symbol in symbols:
             try:
-                # CCXT unified method for margin mode
-                await self._execute_with_timestamp_retry(
-                    self.exchange.set_margin_mode, 'isolated', symbol
-                )
+                # Use Adapter method
+                await self.adapter.set_margin_mode(symbol, 'ISOLATED')
                 print(f"✅ {symbol} set to ISOLATED margin")
             except Exception as e:
                 # Often fails if already set, which is fine
                 pass
-    async def fetch_ticker(self, symbol):
-        try:
-            ticker = await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol)
-            return ticker
-        except Exception as e:
-            error_str = str(e)
-            # Handle Binance timestamp sync issue (-1021)
-            if '-1021' in error_str or 'Timestamp' in error_str or 'ahead' in error_str:
-                print(f"⚠️  Timestamp sync issue for {symbol}, retrying in 2 seconds...")
-                import asyncio
-                await asyncio.sleep(2)
-                try:
-                    ticker = await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol)
-                    print(f"✅ Recovered: {symbol} price fetched successfully")
-                    return ticker
-                except Exception as e2:
-                    print(f"Error fetching ticker {symbol} (retry failed): {e2}")
-                    return None
-            else:
-                print(f"Error fetching ticker {symbol}: {e}")
-                return None
 
-    async def set_isolated_margin_mode(self, symbols):
-        """Set isolated margin mode for each symbol (call once at bot startup)."""
-        if self._isolated_margin_set or not symbols:
-            return
-        
-        print(f"⚙️ Checking ISOLATED MARGIN mode for {len(symbols)} symbols...")
-        print("⚠️ Note: Binance Futures uses Isolated Margin by default")
-        print("✅ Skipping set_margin_type() - already configured on exchange")
-        
-        # Binance Futures: Isolated margin is the default mode
-        # No need to set it explicitly via API
-        self._isolated_margin_set = True
-        print("✅ Isolated margin mode verified")
+    async def fetch_ticker(self, symbol):
+        """Fetch ticker deeply delegated to adapter."""
+        return await self.adapter.fetch_ticker(symbol)
 
     async def fetch_ohlcv_with_retry(self, symbol, timeframe, limit=50, max_retries=3):
-        """Fetch OHLCV data with retry logic for timestamp offset issues"""
-        for attempt in range(max_retries):
-            try:
-                ohlcv = await self._execute_with_timestamp_retry(
-                    self.exchange.fetch_ohlcv, symbol, timeframe=timeframe, limit=limit
-                )
-                if ohlcv:
-                    return ohlcv
-                else:
-                    return None
-            except Exception as e:
-                error_str = str(e)
-                # Handle Binance timestamp/parameter issues (-1021, -1102)
-                if ('-1021' in error_str or '-1102' in error_str or 
-                    'Timestamp' in error_str or 'parameter' in error_str.lower()):
-                    if attempt < max_retries - 1:
-                        wait_time = 2 * (attempt + 1)  # Exponential backoff: 2s, 4s, 6s
-                        print(f"⚠️  Fetch error {symbol} {timeframe} (attempt {attempt+1}/{max_retries}): {str(e)[:80]}")
-                        print(f"   Retrying in {wait_time}s...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        print(f"❌ Fetch failed after {max_retries} attempts: {symbol} {timeframe}")
-                        return None
-                else:
-                    # Non-retryable error
-                    print(f"Fetch error {symbol} {timeframe}: {error_str[:100]}")
-                    return None
+        """Fetch OHLCV data deeply delegated to adapter."""
+        return await self.adapter.fetch_ohlcv(symbol, timeframe, limit=limit)
 
     async def update_tickers(self, symbols):
         """Fetch latest prices for all symbols in 1 API call (Low weight)."""
         try:
-            tickers = await self._execute_with_timestamp_retry(self.exchange.fetch_tickers, symbols)
+            tickers = await self.adapter.fetch_tickers(symbols)
             for symbol, ticker_data in tickers.items():
                 last_price = ticker_data.get('last')
                 if last_price:

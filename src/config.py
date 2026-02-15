@@ -10,6 +10,9 @@ BYBIT_API_SECRET = os.getenv('BYBIT_API_SECRET')
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
+# Active Exchange (str): 'BINANCE' or 'BYBIT'
+ACTIVE_EXCHANGE = os.getenv('ACTIVE_EXCHANGE', 'BINANCE').upper()
+
 # Configuration
 # NOTE: USE_TESTNET is DEPRECATED - Binance removed Testnet Futures support
 # Bot will now ALWAYS use LIVE exchange (set dry_run=True in bot.py for simulation)
@@ -18,13 +21,14 @@ DRY_RUN = True  # Set to True for paper trading (simulation mode)
 
 # Trading Settings
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
+# Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 TRADING_SYMBOLS = [
-   # 'ETH/USDT',
-   # 'BTC/USDT',
+    'ETH/USDT',
+    'BTC/USDT',
     'SOL/USDT',
     'XRP/USDT',
     'HYPE/USDT',
-   # 'BNB/USDT',
+    # 'BNB/USDT',
     'BCH/USDT',
     'ADA/USDT',
     'SUI/USDT',
