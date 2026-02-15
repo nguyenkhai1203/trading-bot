@@ -290,6 +290,7 @@ class TradingBot:
                     
                     # ADAPTIVE LEARNING: Record trade outcome
                     signals_used = existing_pos.get('signals_used', [])
+                    snapshot = existing_pos.get('snapshot')
                     result = 'WIN' if 'TAKE PROFIT' in exit_reason else 'LOSS'
                     
                     # Get BTC 1h change for market condition check
@@ -308,7 +309,8 @@ class TradingBot:
                         signals_used=signals_used,
                         result=result,
                         pnl_pct=pnl_pct,
-                        btc_change=btc_change
+                        btc_change=btc_change,
+                        snapshot=snapshot
                     )
                     
                     await self.trader.remove_position(self.symbol, timeframe=self.timeframe, exit_price=current_price, exit_reason=exit_reason)
@@ -554,6 +556,9 @@ class TradingBot:
                             except:
                                 pass
                         
+                        # Extract snapshot (features) for training
+                        snapshot = signal_data.get('snapshot')
+                        
                         res = await self.trader.place_order(
                             self.symbol, exec_side, qty, 
                             timeframe=self.timeframe, 
@@ -563,7 +568,8 @@ class TradingBot:
                             timeout=LIMIT_ORDER_TIMEOUT if order_type == 'limit' else None,
                             leverage=target_lev,
                             signals_used=signals_used,
-                            entry_confidence=conf  # For adaptive position adjustment
+                            entry_confidence=conf,  # For adaptive position adjustment
+                            snapshot=snapshot       # Save features for RL training
                         )
                         
                         if res:

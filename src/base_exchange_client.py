@@ -104,6 +104,15 @@ class BaseExchangeClient:
                 else:
                     # Log non-timestamp errors or max retries reached
                     if not is_timestamp_error:
+                        # Handle Rate Limit (429) / 418 specifically
+                        if "429" in error_msg or "418" in error_msg or "too many requests" in error_msg:
+                            wait_s = (attempt + 1) * 5 # Aggressive backoff: 5s, 10s, 15s
+                            print(f"⚠️ [RATE LIMIT] backing off for {wait_s}s...")
+                            await asyncio.sleep(wait_s)
+                            # Retry if we have retries left
+                            if attempt < max_retries - 1:
+                                continue
+
                         # Silence known "informational" errors to avoid user confusion
                         silence_errors = ["-4067", "-4046", "-4061", "no change", "side cannot be changed"]
                         if not any(s in error_msg for s in silence_errors):

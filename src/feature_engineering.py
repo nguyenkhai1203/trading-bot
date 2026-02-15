@@ -7,9 +7,11 @@ class FeatureEngineer:
     def __init__(self):
         pass
 
-    def calculate_features(self, df):
+    def calculate_features(self, df, portfolio_state=None):
         """
-        Input: DataFrame with 'close', 'high', 'low', 'volume'
+        Input: 
+            df: DataFrame with 'close', 'high', 'low', 'volume'
+            portfolio_state: Dict with 'balance', 'unrealized_pnl', 'leverage', 'equity' (Optional)
         Output: DataFrame with added feature columns (RSI, EMA, etc.)
         """
         if df is None or df.empty:
@@ -250,5 +252,68 @@ class FeatureEngineer:
             (df['close'] < df['support_level']) & 
             (df['close'].shift(1) >= df['support_level'].shift(1))
         )
+
+        # 15. FEATURE SCALING (Normalization for RL/Neural Net)
+        # Goal: Bring all features to 0..1 or -1..1 range
+        
+        # RSI: Already 0-100, scale to 0-1
+        for length in [7, 14, 21]:
+            if f'RSI_{length}' in df.columns:
+                df[f'norm_RSI_{length}'] = df[f'RSI_{length}'] / 100.0
+        
+        # MACD: Unbounded, scale using recent min/max (Lookback 100)
+        lookback_norm = 100
+        if 'MACD' in df.columns:
+            macd_min = df['MACD'].rolling(lookback_norm).min()
+            macd_max = df['MACD'].rolling(lookback_norm).max()
+            df['norm_MACD'] = (df['MACD'] - macd_min) / (macd_max - macd_min).replace(0, 1)
+            # Clip to 0-1 to handle outliers outside lookback
+            df['norm_MACD'] = df['norm_MACD'].clip(0, 1)
+            
+        # Bollinger Bands: %B (Percentage Bandwidth)
+        # Position of price relative to bands (0=Lower, 1=Upper, >1=Breakout)
+        if 'BB_Up' in df.columns and 'BB_Low' in df.columns:
+            df['norm_BB_Width'] = (df['BB_Up'] - df['BB_Low']) / df['BB_Mid']
+            df['norm_Price_in_BB'] = (df['close'] - df['BB_Low']) / (df['BB_Up'] - df['BB_Low']).replace(0, 1)
+            
+        # Volume: Log scale + MinMax
+        # Volume data is highly skewed, log transform first
+        df['log_volume'] = np.log1p(df['volume'])
+        vol_min = df['log_volume'].rolling(lookback_norm).min()
+        vol_max = df['log_volume'].rolling(lookback_norm).max()
+        df['norm_Volume'] = (df['log_volume'] - vol_min) / (vol_max - vol_min).replace(0, 1)
+        
+        # ADX: Already 0-100, scale to 0-1
+        if 'ADX' in df.columns:
+            df['norm_ADX'] = df['ADX'] / 100.0
+            
+        # ATR: Normalized by Price (Percentage Volatility)
+        if 'ATR_14' in df.columns:
+            df['norm_ATR'] = df['ATR_14'] / df['close']
+
+        # 16. PORTFOLIO STATE (Context Awareness)
+        if portfolio_state:
+            # Balance: Normalized against initial capital (e.g. 1000)
+            # We assume a baseline of 1000 for normalization logic, or use current equity/balance ratio
+            balance = portfolio_state.get('balance', 1000)
+            equity = portfolio_state.get('equity', 1000)
+            unrealized_pnl = portfolio_state.get('unrealized_pnl', 0)
+            leverage = portfolio_state.get('leverage', 1)
+            
+            # Feature 1: PnL State (Normalized 0.01 = 1%)
+            # Clip between -100% and +100% for safety
+            df['state_pnl_pct'] = np.clip(unrealized_pnl / balance if balance > 0 else 0, -1.0, 1.0)
+            
+            # Feature 2: Leverage Usage (Normalized by Max 20x)
+            df['state_leverage'] = np.clip(leverage / 20.0, 0, 1.0)
+            
+            # Feature 3: Equity Health (Equity / Balance)
+            # >1 = Profitable, <1 = Drawdown
+            df['state_equity_ratio'] = equity / balance if balance > 0 else 1.0
+        else:
+            # Default headers if no state provided (for backtesting without state simulation)
+            df['state_pnl_pct'] = 0.0
+            df['state_leverage'] = 0.0
+            df['state_equity_ratio'] = 1.0
 
         return df

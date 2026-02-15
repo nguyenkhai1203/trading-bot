@@ -65,7 +65,7 @@ class SignalTracker:
         except Exception as e:
             print(f"Error saving signal tracker: {e}")
     
-    def record_trade(self, symbol, timeframe, side, signals_used, result, pnl_pct, btc_change=None):
+    def record_trade(self, symbol, timeframe, side, signals_used, result, pnl_pct, btc_change=None, snapshot=None):
         """
         Record a completed trade for learning.
         
@@ -77,6 +77,7 @@ class SignalTracker:
             result: 'WIN' (TP hit) or 'LOSS' (SL hit)
             pnl_pct: PnL percentage
             btc_change: BTC 1h price change (optional, for market condition check)
+            snapshot: Dictionary of normalized features at entry (for Neural Net training)
         """
         trade = {
             'timestamp': datetime.now().isoformat(),
@@ -88,11 +89,15 @@ class SignalTracker:
             'pnl_pct': pnl_pct
         }
         
+        # RL UPGRADE: Save feature snapshot for training
+        if snapshot:
+            trade['snapshot'] = snapshot
+        
         self.data['trades'].append(trade)
         
-        # Keep only last 500 trades to prevent file bloat
-        if len(self.data['trades']) > 500:
-            self.data['trades'] = self.data['trades'][-500:]
+        # Keep only last 1000 trades (increased for RL data collection)
+        if len(self.data['trades']) > 1000:
+            self.data['trades'] = self.data['trades'][-1000:]
         
         # Update signal stats
         self._update_signal_stats(signals_used, result)

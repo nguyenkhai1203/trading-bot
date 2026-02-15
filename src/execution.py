@@ -208,12 +208,20 @@ class Trader:
         return symbol.split(':')[0].replace('/', '').upper()
 
     def _clamp_leverage(self, lev):
-        """Clamp leverage to allowed range (default 8-12)."""
+        """Clamp leverage to allowed range (default 5-20)."""
+        # Import dynamically to ensure we get latest config value
+        from config import LEVERAGE as GLOBAL_MAX
+        
         lv = self._safe_int(lev, default=None)
         if lv is None:
-            lv = self._safe_int(self.default_leverage, default=8)
-        # Allow floor 5 if default is lower; clamp to [5,12] to be safe
-        return max(5, min(12, lv))
+            lv = self._safe_int(self.default_leverage, default=5)
+            
+        # 1. Clamp to global max setting (User safety preference)
+        if lv > GLOBAL_MAX:
+            lv = GLOBAL_MAX
+            
+        # 2. Hard limits: ensure between 1 and 20 (Exchange limits)
+        return max(1, min(20, lv))
 
     def _debug_log(self, *parts):
         try:
@@ -383,7 +391,7 @@ class Trader:
             self.logger.error(f"Error fetching position from exchange for {symbol}: {e}")
             return key in self.active_positions
 
-    async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None):
+    async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None):
         """Places an order and updates persistent storage. For limit orders, monitors fill in background."""
         # Validate qty - reject invalid orders
         if qty is None or qty <= 0:
@@ -425,6 +433,7 @@ class Trader:
                 "leverage": leverage,
                 "signals_used": signals,
                 "entry_confidence": confidence,
+                "snapshot": snapshot,
                 "timestamp": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
             }
             self._save_positions()
@@ -532,6 +541,7 @@ class Trader:
                     "leverage": use_leverage,
                     "signals_used": signals,
                     "entry_confidence": confidence,
+                    "snapshot": snapshot,
                     "timestamp": order.get('timestamp', 0),
                     "order_id": order.get('id') # Ensure order_id is saved
                 }
@@ -608,6 +618,7 @@ class Trader:
                     'leverage': use_leverage,
                     'signals_used': signals,
                     'entry_confidence': confidence,
+                    'snapshot': snapshot,
                     'timestamp': order.get('timestamp', 0)
                 }
 
@@ -626,6 +637,7 @@ class Trader:
                     "order_id": order_id,
                     "signals_used": signals,
                     "entry_confidence": confidence,
+                    "snapshot": snapshot,
                     "timestamp": order.get('timestamp', 0)
                 }
                 self._save_positions()
@@ -732,6 +744,7 @@ class Trader:
                         "leverage": pending.get('leverage', self.default_leverage),
                         "signals_used": pending.get('signals_used', []),
                         "entry_confidence": pending.get('entry_confidence', 0.5),
+                        "snapshot": pending.get('snapshot'),
                         "timestamp": order_status.get('timestamp', pending.get('timestamp'))
                     }
                     # Persist and cleanup
