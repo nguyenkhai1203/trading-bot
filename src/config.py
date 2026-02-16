@@ -105,6 +105,13 @@ CONFIDENCE_TIERS = {
 }
 MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade
 
+# Trailing / Profit Lock-in Settings (v3.0)
+ENABLE_PROFIT_LOCK = True
+PROFIT_LOCK_THRESHOLD = 0.8     # 80% of the way to TP
+PROFIT_LOCK_LEVEL = 0.1         # Lock in 10% of the target profit
+MAX_TP_EXTENSIONS = 2           # Limit number of times TP can be moved
+ATR_EXT_MULTIPLIER = 1.5        # Fallback ATR multiplier for TP extension
+
 # Analyzer Thresholds (for future use)
 MIN_WIN_RATE_TRAIN = 0.55      # Minimum win rate on training set to enable (55%)
 MIN_WIN_RATE_TEST = 0.55       # Minimum win rate on test set to enable (55%)

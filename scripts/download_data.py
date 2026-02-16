@@ -48,11 +48,13 @@ async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', l
             }
         }
         if exchange_name.upper() == 'BINANCE':
-            config['apiKey'] = BINANCE_API_KEY
-            config['secret'] = BINANCE_API_SECRET
+            if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY:
+                config['apiKey'] = BINANCE_API_KEY
+                config['secret'] = BINANCE_API_SECRET
         elif exchange_name.upper() == 'BYBIT':
-            config['apiKey'] = BYBIT_API_KEY
-            config['secret'] = BYBIT_API_SECRET
+            if BYBIT_API_KEY and 'your_' not in BYBIT_API_KEY:
+                config['apiKey'] = BYBIT_API_KEY
+                config['secret'] = BYBIT_API_SECRET
             
         exchange = ex_class(config)
         

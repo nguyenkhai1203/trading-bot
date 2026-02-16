@@ -20,12 +20,23 @@ def get_exchange_adapter(name=ACTIVE_EXCHANGE):
             'defaultType': 'future',
             'adjustForTimeDifference': True,
         }
-        client = ccxt.binance({
-            'apiKey': BINANCE_API_KEY if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY else None,
-            'secret': BINANCE_API_SECRET if BINANCE_API_SECRET and 'your_' not in BINANCE_API_SECRET else None,
+        
+        # Determine valid credentials
+        valid_key = BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY
+        valid_secret = BINANCE_API_SECRET and 'your_' not in BINANCE_API_SECRET
+        
+        exchange_config = {
             'options': options,
             'enableRateLimit': True,
-        })
+        }
+        
+        if valid_key and valid_secret:
+            exchange_config['apiKey'] = BINANCE_API_KEY
+            exchange_config['secret'] = BINANCE_API_SECRET
+        else:
+            print(f"⚠️ [Factory] Initializing Binance in PUBLIC MODE (No Keys)")
+            
+        client = ccxt.binance(exchange_config)
         return BinanceAdapter(client)
     else:
         raise ValueError(f"Unknown exchange: {name}")
@@ -50,7 +61,23 @@ def get_active_exchanges_map():
 
                 
         try:
-            adapters[name] = get_exchange_adapter(name)
+            adapter = get_exchange_adapter(name)
+            
+            # Configure Permissions based on keys
+            api_key = BINANCE_API_KEY if name == 'BINANCE' else BYBIT_API_KEY
+            
+            # Check if key is valid (simple check: present and not default placeholder)
+            has_valid_key = bool(api_key and 'your_' not in api_key)
+            
+            adapter.set_permissions(can_trade=has_valid_key, can_view_balance=has_valid_key)
+            
+            if adapter.is_public_only:
+                print(f"📡 [Factory] {name}: Active (Public Mode - Trading Disabled)")
+            else:
+                print(f"🔐 [Factory] {name}: Active (Trading Enabled)")
+                
+            adapters[name] = adapter
+            
         except Exception as e:
             print(f"❌ [Factory] Failed to initialize {name}: {e}")
             

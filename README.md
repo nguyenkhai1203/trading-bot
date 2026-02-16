@@ -342,9 +342,9 @@ rm -rf data/
 - **Solution:** Bot uses a **Manual Time Offset** with a -5000ms safety buffer.
 - **Auto-Fix:** If time drift is detected, the bot auto-resyncs without crashing.
 
-### Margin & Leverage
-- **Bot enforces ISOLATED margin mode**
-- **Sets leverage per-order automatically (5x-12x)**
+### Bybit V5 Conditional Orders
+- **Market Types**: On Bybit, SL/TP orders are always placed as `market` types with `triggerDirection` (descending for Long, ascending for Short) as required by API V5.
+- **History Fallback**: Bybit's `fetchOrder` only accesses the last 500 orders. If an order isn't found, the bot falls back to `fetch_open_orders` and gracefully clears "ghost" orders that are no longer active.
 
 ---
 

@@ -123,7 +123,10 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
     async def cancel_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
         """Cancel an order."""
         try:
-            return await self.exchange.cancel_order(order_id, symbol, params)
+            # Merge Bybit-specific params for linear futures
+            extra_params = {'category': 'linear'}
+            extra_params.update(params)
+            return await self.exchange.cancel_order(order_id, symbol, extra_params)
         except Exception as e:
             self.logger.error(f"[Bybit] Cancel order failed for {symbol}: {e}")
             raise e

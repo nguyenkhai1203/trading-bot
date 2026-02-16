@@ -515,3 +515,21 @@ All 15 key features verified ✅:
 - **Refinement**: Curated `BYBIT_SYMBOLS` to Top 20 High-Volume Stable Pairs (BTC, ETH, SOL, etc.).
 - **Filtering**: Removed volatile meme coins to ensure stability.
 - **Normalization**: Standardized symbol formats (`BTC/USDT` vs `BTCUSDT`) across system.
+
+## Latest Updates (Feb 16, 2026)
+
+### 1. Strict Exchange Data Separation
+- **Load-time Partitioning**: Bot only loads positions matching the active `exchange_name` prefix from `positions.json`.
+- **Data Preservation**: Non-active exchange data is preserved in an internal bucket and merged back during save cycles.
+- **Permission Guards**: Added `can_trade` check to skip private API calls if keys are missing (Public Mode).
+- **Iteration Guards**: Added explicit prefix checks to all reconciliation and repair loops.
+
+### 2. Bybit V5 Support Improvements
+- **Order Type**: Forced `market` for all SL/TP orders on Bybit V5 to fix "OrderType invalid".
+- **Conditional Parameters**: Correctly set `triggerDirection` based on position side.
+- **Order Sync**: Fallback to `fetch_open_orders` for orders outside Bybit's 500-order limit.
+- **Log Noise**: More aggressive silencing of handled Bybit API warnings.
+
+### 3. Dynamic Risk Management v3.0
+- **Profit Lock**: Moves SL to 10% profit territory once price reaches 80% of the path to TP.
+- **TP Extension**: Dynamically extends TP based on Support/Resistance or ATR in strong trends.

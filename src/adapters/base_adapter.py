@@ -13,7 +13,12 @@ class BaseAdapter(ABC):
 
     @property
     def is_authenticated(self) -> bool:
-        """Check if the exchange client has API credentials."""
+        """Check if the exchange client has legitimate trading permissions."""
+        # Priority: Check explicit capabilities if set (from BaseExchangeClient)
+        if hasattr(self, 'permissions'):
+            return self.permissions.get('can_trade', False)
+            
+        # Fallback: Check CCXT credentials directly (Legacy)
         if not self.exchange:
             return False
         api_key = getattr(self.exchange, 'apiKey', None)
@@ -73,3 +78,8 @@ class BaseAdapter(ABC):
     async def fetch_balance(self) -> Dict:
         """Fetch account balance."""
         pass
+
+    async def close(self):
+        """Close the underlying exchange connection."""
+        if self.exchange and hasattr(self.exchange, 'close'):
+            await self.exchange.close()

@@ -103,13 +103,14 @@ class TradingBot:
             elif current_equity is None:
                  current_equity = 0.0
 
-            # Low Funds Guard: Skip if less than $1 total equity
-            if current_equity < 1.0 and not circuit_breaker_triggered:
+            # Low Funds Guard: Skip if less than $1 total equity (ONLY if trading is enabled)
+            if self.trader.exchange.can_trade and current_equity < 1.0 and not circuit_breaker_triggered:
                  print(f"⏹️ [{self.trader.exchange_name}] [{self.symbol}] Insufficient funds for trading (${current_equity:.2f}). Skipping.")
                  return
 
             # Ensure current_price is available for all checks
-            current_price = df.iloc[-1]['close']
+            last_row = df.iloc[-1]
+            current_price = last_row['close']
             
             # PRICE VALIDATION: Ensure current_price is valid number to avoid NoneType comparison errors
             if current_price is None or (isinstance(current_price, (int, float)) and np.isnan(current_price)):
@@ -382,6 +383,20 @@ class TradingBot:
                     
                     await self.trader.remove_position(self.symbol, timeframe=self.timeframe, exit_price=current_price, exit_reason=exit_reason)
                     return 
+
+                # 2.5 Check for Profit Lock-in & Dynamic TP Extension (v3.0)
+                # Proactively adjust SL/TP if profit threshold reached
+                res_val = last_row.get('resistance_level')
+                sup_val = last_row.get('support_level')
+                atr_val = last_row.get('ATR_14')
+                
+                await self.trader.adjust_sl_tp_for_profit_lock(
+                    pos_key, 
+                    current_price, 
+                    resistance=res_val, 
+                    support=sup_val, 
+                    atr=atr_val
+                )
 
                 # 3. Check for Signal Reversal (Early Exit)
                 # Use cached features
@@ -711,13 +726,13 @@ class TradingBot:
                             if self.balance_tracker:
                                 self.balance_tracker.release(self.trader.exchange_name, estimated_margin_cost)
 
-
+                        if res:
                             mode_label = "🟢 LIVE" if not self.trader.dry_run else "🧪 TEST"
                             # Status: PENDING for limit, FILLED for market
-                            if order_type == 'limit':
-                                status_label = "📌 PENDING"
-                            else:
-                                status_label = "✅ FILLED"
+                            # Use status from result if available
+                            status = res.get('status', 'unknown').upper()
+                            status_label = f"📌 {status}" if status == 'PENDING' or order_type == 'limit' else f"✅ {status}"
+                            
                             # Escape symbol for Telegram (replace / with -)
                             safe_symbol = self.symbol.replace('/', '-')
                             msg = (
@@ -729,6 +744,8 @@ class TradingBot:
                             )
                             print(msg)
                             await send_telegram_message(msg, exchange_name=self.trader.exchange.name)
+                        else:
+                            print(f"❌ [{self.symbol}] Order placement failed (See warning logs).")
                         
                         # NOTE: SL/TP setup is already handled in execution.py:420
                         # No need to call setup_sl_tp_for_pending() here to avoid duplicates
@@ -818,13 +835,15 @@ async def main():
     
     print(f"🚀 Initializing parallel bots for {len(traders)} exchanges: {list(traders.keys())}")
     
-    # Sync server time for each exchange
+    # Sync server time and LOAD MARKETS for each exchange
     for name, trader in traders.items():
-        print(f"⏰ Synchronizing with {name} server time...")
+        print(f"⏰ Synchronizing with {name} server time & markets...")
         try:
             await trader.exchange.sync_time()
+            # CRITICAL: Load markets to populate precision/limits for amount_to_precision
+            await trader.exchange.load_markets()
         except Exception as e:
-            print(f"⚠️ [{name}] Time sync failed: {e}")
+            print(f"⚠️ [{name}] Initialization failed: {e}")
 
     # Initialize Bot instances per exchange/symbol/timeframe
     bots = []
@@ -890,6 +909,23 @@ async def main():
                 if df is None or df.empty: continue
                 
                 last_row = df.iloc[-1]
+                
+                # --- NEW: Dynamic Risk Management v3.0 (Positive SL & Dynamic TP) ---
+                current_price = last_row.get('close')
+                resistance = last_row.get('resistance_level')
+                support = last_row.get('support_level')
+                atr = last_row.get('ATR_14')
+                
+                if current_price:
+                    await trader.adjust_sl_tp_for_profit_lock(
+                        pos_key, 
+                        current_price, 
+                        resistance=resistance, 
+                        support=support, 
+                        atr=atr
+                    )
+                
+                # --- Adaptive Logic from v2.0 ---
                 # We need to find the matching bot to use its strategy (or just use a generic one)
                 # For now, we'll look for any bot that matches symbol/timeframe
                 matching_bot = next((b for b in bots if b.symbol == symbol and b.trader == trader), None)

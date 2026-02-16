@@ -18,6 +18,28 @@ class BaseExchangeClient:
         self._time_synced = False
         self._server_offset_ms = 0 # Manual offset: serverTime - localTime
         
+        # Permissions / Capabilities System
+        # Default to restricted until explicitly promoted by Factory
+        self.permissions = {
+            'can_trade': False,          # Can place/cancel orders
+            'can_view_balance': False,   # Can fetch account balance/positions
+            'can_use_private': False,    # Can use any private endpoints
+            'is_public_only': True       # Is this a read-only observer?
+        }
+
+    def set_permissions(self, can_trade: bool, can_view_balance: bool):
+        """Configure adapter permissions based on credentials."""
+        self.permissions['can_trade'] = can_trade
+        self.permissions['can_view_balance'] = can_view_balance
+        self.permissions['can_use_private'] = can_trade or can_view_balance
+        self.permissions['is_public_only'] = not (can_trade or can_view_balance)
+        
+    @property
+    def can_trade(self): return self.permissions['can_trade']
+    
+    @property
+    def is_public_only(self): return self.permissions['is_public_only']
+        
     async def sync_server_time(self) -> bool:
         """Sync local time with exchange server manually to ensure absolute accuracy."""
         try:
@@ -113,9 +135,12 @@ class BaseExchangeClient:
                             if attempt < max_retries - 1:
                                 continue
 
-                        # Silence known "informational" errors to avoid user confusion
-                        silence_errors = ["-4067", "-4046", "-4061", "no change", "side cannot be changed"]
-                        if not any(s in error_msg for s in silence_errors):
+                        # Silence known "informational" or handled errors to avoid user confusion
+                        silence_errors = [
+                            "-4067", "-4046", "-4061", "no change", "side cannot be changed",
+                            "last 500 orders", "acknowledged", "already", "not modified"
+                        ]
+                        if not any(s.lower() in error_msg for s in silence_errors):
                             print(f"[API ERROR] Non-timestamp error, not retrying: {str(e)[:100]}")
                     else:
                         print(f"[TIMESTAMP ERROR] Max retries reached, giving up: {str(e)[:100]}")
