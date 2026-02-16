@@ -23,9 +23,24 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         # Initialize BaseAdapter for standard interface
         BaseAdapter.__init__(self, exchange_client)
 
+    async def fetch_balance(self) -> Dict:
+        """Fetch account balance."""
+        try:
+            return await self.exchange.fetch_balance()
+        except Exception as e:
+            # Using print for consistency with other error messages in this file
+            print(f"⚠️ [BinanceAdapter] Fetch balance failed: {e}")
+            return {}
+
     async def sync_time(self) -> bool:
-        """Sync time with Binance server (via BaseExchangeClient)."""
-        return await self.sync_server_time()
+        """Sync time and load markets."""
+        try:
+            await self.sync_server_time()
+            await self.exchange.load_markets()
+            return True
+        except Exception as e:
+            print(f"⚠️ [BinanceAdapter] Failed to sync time or markets: {e}")
+            return False
 
     def __getattr__(self, name):
         """Proxy unknown attributes to the underlying exchange object (ccxt)."""
@@ -144,29 +159,33 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
                 params
             )
 
-    async def set_leverage(self, symbol: str, leverage: int):
+    async def set_leverage(self, symbol: str, leverage: int, params: Dict = {}):
         """Set leverage using signed POST."""
         path = '/fapi/v1/leverage'
         base = 'https://fapi.binance.com'
-        params = {
+        # Merge with passed params if any
+        payload = {
             'symbol': symbol.replace('/', ''),
             'leverage': int(leverage),
             'recvWindow': 60000,
             'timestamp': self.get_synced_timestamp()
         }
-        return await self._binance_signed_post(base + path, params)
+        payload.update(params)
+        return await self._binance_signed_post(base + path, payload)
 
-    async def set_margin_mode(self, symbol: str, mode: str):
+    async def set_margin_mode(self, symbol: str, mode: str, params: Dict = {}):
         """Set margin mode using signed POST."""
         path = '/fapi/v1/marginType'
         base = 'https://fapi.binance.com'
-        params = {
+        payload = {
             'symbol': symbol.replace('/', ''),
             'marginType': mode.upper(), # ISOLATED or CROSSED
             'recvWindow': 60000,
             'timestamp': self.get_synced_timestamp()
         }
-        return await self._binance_signed_post(base + path, params)
+        # Merge with passed params if any
+        payload.update(params)
+        return await self._binance_signed_post(base + path, payload)
 
     async def batch_create_orders(self, orders: List[Dict]):
         """Create multiple orders atomically."""

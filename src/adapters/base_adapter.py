@@ -11,6 +11,14 @@ class BaseAdapter(ABC):
         self.exchange = exchange_client
         self.name = exchange_client.id.upper() if exchange_client else "UNKNOWN"
 
+    @property
+    def is_authenticated(self) -> bool:
+        """Check if the exchange client has API credentials."""
+        if not self.exchange:
+            return False
+        api_key = getattr(self.exchange, 'apiKey', None)
+        return api_key is not None and len(str(api_key)) > 10 and 'your_' not in str(api_key)
+
     @abstractmethod
     async def sync_time(self) -> bool:
         """Sync time with exchange server."""
@@ -52,11 +60,16 @@ class BaseAdapter(ABC):
         pass
 
     @abstractmethod
-    async def set_leverage(self, symbol: str, leverage: int):
+    async def set_leverage(self, symbol: str, leverage: int, params: Dict = {}):
         """Set leverage for a symbol."""
         pass
         
     @abstractmethod
-    async def set_margin_mode(self, symbol: str, mode: str):
+    async def set_margin_mode(self, symbol: str, mode: str, params: Dict = {}):
         """Set margin mode (ISOLATED/CROSS)."""
+        pass
+
+    @abstractmethod
+    async def fetch_balance(self) -> Dict:
+        """Fetch account balance."""
         pass

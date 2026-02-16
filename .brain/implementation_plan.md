@@ -48,5 +48,45 @@ Following the initial deployment, we identified race conditions and data synchro
 - [x] `positions.json` now correctly shows all concurrent symbols across timeframes.
 - [x] Telegram logs match local storage 1:1.
 - [x] Bot no longer enters a coin if another timeframe already holds it.
-- [x] Analyzer enables signals only with 2+ timeframe confirmation.
-- [x] More signals pass validation (30%+ increase expected) due to lowered threshold.
+## Reinforcement Learning (RL) 2.0 Upgrade
+
+We upgraded the strategy layer with a lightweight Neural Network (MLP) to act as a "Veto/Boost" layer, improving trade quality based on historical performance.
+
+### Components
+1. **Neural Brain (`neural_brain.py`)**:
+   - Lightweight MLP built using only `numpy` (inference <1ms).
+   - 12-node input layer (capturing 40+ indicators normalized into 12 features).
+   - Hidden layer (ReLU) and Sigmoid output layer.
+2. **Strategy Integration (`strategy.py`)**:
+   - `WeightedScoringStrategy` now queries the Brain for a confidence score (0.0 to 1.0).
+   - **Veto Logic**: Score < 0.3 blocks the entry.
+   - **Boost Logic**: Score > 0.8 provides a +20% confidence boost.
+3. **Training System (`train_brain.py`)**:
+   - Simple SGD optimizer that trains on `signal_performance.json` snapshots.
+   - Targets: 1.0 for WINS, 0.0 for LOSSES.
+
+### Verification Status
+- [x] Brain successfully loads `brain_weights.json`.
+- [x] Inference time verified at <0.5ms.
+- [x] `train_brain.py` correctly parses snapshots and completes 100 epochs.
+
+## Standardizing Exchange Symbols & Analyzer Logic (Current)
+
+Following the Bybit integration, we standardized symbol handling and made the optimization layer fully exchange-aware to handle different fee structures and liquidity.
+
+### Improvements
+1. **Symbol Segregation**: 
+   - `BINANCE_SYMBOLS` and `BYBIT_SYMBOLS` defined separately in `config.py`.
+   - Allows targeting exchange-specific tokens (e.g., $HYPE on Bybit).
+2. **Exchange-Aware Optimization**:
+   - `StrategyAnalyzer` now saves weights with exchange prefixes (e.g., `BYBIT_BTC/USDT_1h`).
+   - Prevents weights from one exchange overwriting another.
+3. **Data Persistence**:
+   - DataManager saves candles as `{EXCHANGE}_{SYMBOL}_{TF}.csv` for clear isolation.
+4. **Bybit 8h Mapping**:
+   - Automatically maps unsupported '8h' timeframe to '4h' for Bybit API compatibility.
+
+### Verification Status
+- [x] Analyzer saves separate sections in `strategy_config.json`.
+- [x] DataManager fetches and saves data with exchange namespaces.
+- [x] Bot instances use the correct exchange context for PnL and signal checks.

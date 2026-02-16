@@ -11,9 +11,10 @@ def get_exchange_adapter(name=ACTIVE_EXCHANGE):
     """
     Returns the appropriate Exchange Adapter based on name.
     """
-    if name == 'BYBIT':
+    norm_name = name.upper()
+    if norm_name == 'BYBIT':
         return BybitAdapter()
-    else:
+    elif norm_name == 'BINANCE':
         # Default to Binance
         options = {
             'defaultType': 'future',
@@ -26,6 +27,8 @@ def get_exchange_adapter(name=ACTIVE_EXCHANGE):
             'enableRateLimit': True,
         })
         return BinanceAdapter(client)
+    else:
+        raise ValueError(f"Unknown exchange: {name}")
 
 def get_active_exchanges_map():
     """
@@ -34,7 +37,21 @@ def get_active_exchanges_map():
     from config import ACTIVE_EXCHANGES
     adapters = {}
     for name in ACTIVE_EXCHANGES:
-        name = name.strip()
+        name = name.strip().upper()
         if not name: continue
-        adapters[name] = get_exchange_adapter(name)
+        
+        # Check for credentials before initializing
+        if name == 'BINANCE':
+            if not BINANCE_API_KEY or 'your_' in BINANCE_API_KEY:
+                print(f"📡 [Factory] BINANCE: Active (Public Mode - Trading Disabled)")
+        elif name == 'BYBIT':
+            if not BYBIT_API_KEY or 'your_' in BYBIT_API_KEY:
+                print(f"📡 [Factory] BYBIT: Active (Public Mode - Trading Disabled)")
+
+                
+        try:
+            adapters[name] = get_exchange_adapter(name)
+        except Exception as e:
+            print(f"❌ [Factory] Failed to initialize {name}: {e}")
+            
     return adapters

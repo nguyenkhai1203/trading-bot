@@ -32,12 +32,48 @@ from notification_helper import format_order_cancelled, format_position_filled, 
 from signal_tracker import tracker as signal_tracker
 
 # ...
+class BalanceTracker:
+    """
+    Manages shared balance state across multiple bots to prevent race conditions.
+    Ensures that when one bot reserves funds for an order, others see the reduced balance immediately.
+    """
+    def __init__(self):
+        self.balances = {} # {exchange_name: {'total': 0.0, 'reserved': 0.0, 'locked': 0.0}}
+        
+    def update_balance(self, exchange_name, total_equity):
+        if exchange_name not in self.balances:
+            self.balances[exchange_name] = {'total': 0.0, 'reserved': 0.0}
+        
+        # We only update TOTAL. Reserved is tracked separately until cleared.
+        # However, a fresh fetch from exchange might already reflect used funds if orders were filled.
+        # But for 'reserved' (pending orders not yet placed), we must persist reservation.
+        self.balances[exchange_name]['total'] = total_equity
+        
+    def get_available(self, exchange_name):
+        if exchange_name not in self.balances: return 0.0
+        b = self.balances[exchange_name]
+        return max(0.0, b['total'] - b['reserved'])
+
+    def reserve(self, exchange_name, amount):
+        """Try to reserve funds. Returns True if successful."""
+        avail = self.get_available(exchange_name)
+        if avail >= amount:
+            self.balances[exchange_name]['reserved'] += amount
+            return True
+        return False
+
+    def release(self, exchange_name, amount):
+        """Release reserved funds (e.g. after order placement or failure)."""
+        if exchange_name in self.balances:
+            self.balances[exchange_name]['reserved'] = max(0.0, self.balances[exchange_name]['reserved'] - amount)
 
 class TradingBot:
-    def __init__(self, symbol, timeframe, data_manager, trader):
+    def __init__(self, symbol, timeframe, data_manager, trader, balance_tracker=None):
         self.symbol = symbol
         self.timeframe = timeframe
         self.data_manager = data_manager 
+        self.balance_tracker = balance_tracker
+# ...
         # Features are now computed and cached in data_manager (shared across all bots)
         self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe) 
         # Weights are loaded automatically in __init__ now
@@ -50,7 +86,7 @@ class TradingBot:
         """Get sizing tier based on confidence score."""
         return self.strategy.get_sizing_tier(score)
 
-    async def run_step(self, current_equity, circuit_breaker_triggered=False):
+    async def run_step(self, current_equity=None, circuit_breaker_triggered=False):
         # Circuit breaker is checked ONCE in main(), passed here as flag
         try:
             if circuit_breaker_triggered:
@@ -60,6 +96,17 @@ class TradingBot:
             df = self.data_manager.get_data(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
             if df is None or df.empty:
                 return
+
+            # Determine Available Equity from Tracker if possible
+            if self.balance_tracker:
+                 current_equity = self.balance_tracker.get_available(self.trader.exchange_name)
+            elif current_equity is None:
+                 current_equity = 0.0
+
+            # Low Funds Guard: Skip if less than $1 total equity
+            if current_equity < 1.0 and not circuit_breaker_triggered:
+                 print(f"⏹️ [{self.trader.exchange_name}] [{self.symbol}] Insufficient funds for trading (${current_equity:.2f}). Skipping.")
+                 return
 
             # Ensure current_price is available for all checks
             current_price = df.iloc[-1]['close']
@@ -503,8 +550,20 @@ class TradingBot:
                         if is_reversal:
                             actual_cost *= 0.5 # 50% size for early reversal entries
                         
+                        # Ensure we don't exceed available balance if it's very low
+                        # but NEVER exceed the user's hard cap of $5
+                        if actual_cost > current_equity:
+                             safe_cost = max(0, current_equity * 0.98) # Reduced buffer to 2% for fees (was 5%)
+                             print(f"⚠️ [{self.symbol}] Scaling down Margin: ${actual_cost:.2f} -> ${safe_cost:.2f} (Available: ${current_equity:.2f})")
+                             actual_cost = safe_cost
+                        
+                        # Minimum Notional Check: If after scale-down it's too small, skip
+                        if actual_cost < 1.0:
+                             print(f"⏹️ [{self.symbol}] Scale-down resulted in margin too low (${actual_cost:.2f}). Skipping trade.")
+                             return
+
                         qty = self.risk_manager.calculate_size_by_cost(current_price, actual_cost, target_lev)
-                        risk_info = f"${actual_cost:.1f} (REVERSAL SAFE)" if is_reversal else f"${target_cost}"
+                        risk_info = f"${actual_cost:.1f} Margin" if is_reversal else f"${target_cost} Margin"
                     else:
                         # Fallback to Risk %
                         use_risk = target_risk if target_risk else 0.01
@@ -514,9 +573,44 @@ class TradingBot:
                             current_equity, current_price, sl, 
                             leverage=target_lev, risk_pct=use_risk
                         )
-                        risk_info = f"{use_risk*100}% (REVERSAL SAFE)" if is_reversal else f"{use_risk*100}%"
+                        risk_info = f"{use_risk*100}% Risk"
+                    
+                    # === MINIMUM NOTIONAL FLOOR ===
+                    # Exchanges have minimum notional (Qty * Price) requirements.
+                    # We check the exchange metadata to find the exact floor (e.g., $5 for XRP, $20 for ETH on Binance).
+                    try:
+                        market = self.trader.exchange.market(self.symbol)
+                        min_cost = market.get('limits', {}).get('cost', {}).get('min', 5.0) or 5.0
+                    except:
+                        min_cost = 5.50 # Fallback
+                        
+                    actual_notional = qty * current_price
+                    if qty > 0 and actual_notional < min_cost:
+                        # ATTEMPT TO FORCE MINIMUM
+                        # Check if we have enough equity to just barely meet the min notional
+                        required_margin = min_cost / target_lev
+                        # Use 1% buffer for fees
+                        if current_equity >= (required_margin * 1.01):
+                            print(f"⚠️ [{self.symbol}] Notional value ${actual_notional:.2f} < Min ${min_cost}. Bumping Margin to ${required_margin * 1.01:.2f} to meet min...")
+                            actual_cost = required_margin * 1.01 # Add tiny buffer
+                            qty = self.risk_manager.calculate_size_by_cost(current_price, actual_cost, target_lev)
+                            actual_notional = qty * current_price
+                            if actual_notional < min_cost:
+                                msg = f"[{self.symbol}] Still below min notional after force (${actual_notional:.2f} < ${min_cost}). Skipping."
+                                self.logger.warning(msg)
+                                print(f"⏹️ {msg}")
+                                qty = 0
+                        else:
+                             msg = f"[{self.symbol}] Notional value ${actual_notional:.2f} < Min ${min_cost}. Insufficient equity (${current_equity:.2f}) to cover required margin (${required_margin:.2f}). Skipping."
+                             self.logger.warning(msg)
+                             print(f"⏹️ {msg}")
+                             qty = 0 # Skip
                     
                     if qty > 0:
+                        # Calculate estimated margin cost for reservation
+                        estimated_margin_cost = (qty * current_price) / target_lev
+                        print(f"💰 [{self.symbol}] Trade Plan: Margin ${estimated_margin_cost:.2f} | Notional ${actual_notional:.2f} | Lev x{target_lev}")
+                        
                         exec_side = side.lower()
                         
                         # === DUPLICATE PREVENTION ===
@@ -580,20 +674,44 @@ class TradingBot:
                         # Extract snapshot (features) for training
                         snapshot = signal_data.get('snapshot')
                         
-                        res = await self.trader.place_order(
-                            self.symbol, exec_side, qty, 
-                            timeframe=self.timeframe, 
-                            order_type=order_type,
-                            price=entry_price, 
-                            sl=sl, tp=tp,
-                            timeout=LIMIT_ORDER_TIMEOUT if order_type == 'limit' else None,
-                            leverage=target_lev,
-                            signals_used=signals_used,
-                            entry_confidence=conf,  # For adaptive position adjustment
-                            snapshot=snapshot       # Save features for RL training
-                        )
-                        
-                        if res:
+                        # === BALANCE RESERVATION ===
+                        # Prevent race conditions by locking estimated funds
+                        if self.trader.exchange.is_authenticated or self.trader.dry_run:
+                            if self.balance_tracker:
+                                if not self.balance_tracker.reserve(self.trader.exchange_name, estimated_margin_cost):
+                                    print(f"⚠️ [{self.symbol}] Reservation failed. Insufficient shared funds for ${estimated_margin_cost:.2f}. Skipping.")
+                                    return
+
+                        # === PUBLIC MODE GUARD ===
+                        if not self.trader.dry_run and not self.trader.exchange.is_authenticated:
+                            print(f"📢 [{self.symbol} {self.timeframe}] SIGNAL FOUND (Public Mode): {side} @ {entry_price:.3f} | Signal broadcast only.")
+                            await send_telegram_message(f"📢 [PUBLIC] {self.symbol} {side} Signal @ {entry_price:.3f}", exchange_name=self.trader.exchange.name)
+                            return
+
+                        try:
+                            res = await self.trader.place_order(
+                                self.symbol, exec_side, qty, 
+                                timeframe=self.timeframe, 
+                                order_type=order_type,
+                                price=entry_price, 
+                                sl=sl, tp=tp,
+                                timeout=LIMIT_ORDER_TIMEOUT if order_type == 'limit' else None,
+                                leverage=target_lev,
+                                signals_used=signals_used,
+                                entry_confidence=conf,  # For adaptive position adjustment
+                                snapshot=snapshot       # Save features for RL training
+                            )
+                        except Exception as e:
+                            # Re-raise to be caught by outer loop, but ensure finally runs
+                            raise e
+                        finally:
+                            # ALWAYS release reservation.
+                            # If order succeeded, exchange balance will decrease, and next update will be correct.
+                            # If failed, we must unlock funds.
+                            if self.balance_tracker:
+                                self.balance_tracker.release(self.trader.exchange_name, estimated_margin_cost)
+
+
                             mode_label = "🟢 LIVE" if not self.trader.dry_run else "🧪 TEST"
                             # Status: PENDING for limit, FILLED for market
                             if order_type == 'limit':
@@ -687,13 +805,16 @@ async def main():
         config.DRY_RUN = False
         print("🚩 Command-line override: Live Mode (--live)")
 
-    # Initialize Global Manager
+    # Initialize Global Manager and Balance Tracker
+
+    # Initialize Global Manager and Balance Tracker
     manager = MarketDataManager()
+    balance_tracker = BalanceTracker()
     
     # Initialize Traders for each Active Exchange
     from exchange_factory import get_active_exchanges_map
     ex_adapters = get_active_exchanges_map()
-    traders = {name: Trader(adapter, dry_run=DRY_RUN, data_manager=manager) for name, adapter in ex_adapters.items()}
+    traders = {name: Trader(adapter, dry_run=config.DRY_RUN, data_manager=manager) for name, adapter in ex_adapters.items()}
     
     print(f"🚀 Initializing parallel bots for {len(traders)} exchanges: {list(traders.keys())}")
     
@@ -708,24 +829,38 @@ async def main():
     # Initialize Bot instances per exchange/symbol/timeframe
     bots = []
     for ex_name, trader in traders.items():
-        # Setup margin modes and leverage for LIVE
-        if not trader.dry_run:
-            print(f"🔧 [{ex_name}] Setting up margin modes and leverage...")
-            await manager.set_isolated_margin_mode(TRADING_SYMBOLS, exchange=ex_name)
-            await trader.enforce_isolated_on_startup(TRADING_SYMBOLS)
-            print(f"🔄 [{ex_name}] Synchronizing positions...")
-            await trader.reconcile_positions()
-            
         from config import BINANCE_SYMBOLS, BYBIT_SYMBOLS
         exchange_symbol_map = {
             'BINANCE': BINANCE_SYMBOLS,
             'BYBIT': BYBIT_SYMBOLS
         }
+        # Determine strict symbols for this exchange
         active_symbols = exchange_symbol_map.get(ex_name, TRADING_SYMBOLS)
+        # Filter to ensure we only use symbols present in the global TRADING_SYMBOLS if disjoint
+        active_symbols = [s for s in active_symbols if s in TRADING_SYMBOLS]
+
+        # Setup margin modes and leverage for LIVE (skip if unauthenticated)
+        if not trader.dry_run and trader.exchange.is_authenticated:
+            print(f"🔧 [{ex_name}] Setting up margin modes and leverage...")
+            # Capture failed symbols (e.g. invalid permissions)
+            failed_symbols = await manager.set_isolated_margin_mode(active_symbols, exchange=ex_name)
+            
+            if failed_symbols:
+                print(f"⚠️ [{ex_name}] Removing {len(failed_symbols)} failed symbols from active list.")
+                active_symbols = [s for s in active_symbols if s not in failed_symbols]
+
+            if not active_symbols:
+                print(f"❌ [{ex_name}] No valid symbols remaining after initialization checks.")
+                continue
+
+            await trader.enforce_isolated_on_startup(active_symbols)
+            print(f"🔄 [{ex_name}] Synchronizing positions...")
+            await trader.reconcile_positions()
 
         for symbol in active_symbols:
             for tf in TRADING_TIMEFRAMES:
-                bot = TradingBot(symbol, tf, manager, trader)
+                # Pass shared balance_tracker to each bot
+                bot = TradingBot(symbol, tf, manager, trader, balance_tracker=balance_tracker)
                 bots.append(bot)
                 
     print(f"✅ Total {len(bots)} bot tasks initialized.")
@@ -793,8 +928,8 @@ async def main():
     print("✅ Adaptive Learning v2.0 callbacks registered")
     # ========== END ADAPTIVE LEARNING SETUP ==========
 
-    # Shared RiskManager for circuit breaker
-    risk_manager = RiskManager(risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE)
+    # Per-Exchange RiskManager for circuit breaker
+    risk_managers = {name: RiskManager(risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE) for name in traders}
     initial_balance = 1000
 
     def get_current_balance():
@@ -869,8 +1004,10 @@ async def main():
             if curr_time - main.last_deep_sync >= 600:
                 print("🔄 [SELF-HEALING] Running Deep Sync...")
                 for ex_name, trader in traders.items():
-                    try: await trader.reconcile_positions(auto_fix=True)
-                    except: pass
+                    # Only sync if authenticated or dry_run
+                    if trader.dry_run or trader.exchange.is_authenticated:
+                        try: await trader.reconcile_positions(auto_fix=True)
+                        except: pass
                 main.last_deep_sync = curr_time
 
             # 1. Update Market Data
@@ -878,24 +1015,83 @@ async def main():
             await manager.update_data(TRADING_SYMBOLS, TRADING_TIMEFRAMES)
             
             # 1.5. Reload config
+            # Check strategy_config.json
             current_config_mtime = os.path.getmtime(config_path) if os.path.exists(config_path) else 0
+            
+            # Check src/config.py
+            import config
+            import importlib
+            src_config_path = os.path.abspath(config.__file__)
+            current_src_config_mtime = os.path.getmtime(src_config_path) if os.path.exists(src_config_path) else 0
+            
             if current_config_mtime != last_config_mtime:
-                print("🔄 Config changed, reloading...")
+                print("🔄 Strategy Config changed, reloading...")
                 for bot in bots: bot.strategy.reload_config()
                 last_config_mtime = current_config_mtime
+                
+            if current_src_config_mtime != getattr(main, 'last_src_config_mtime', 0):
+                if hasattr(main, 'last_src_config_mtime'): # Skip first run
+                     print("🔄 Main Config (config.py) changed, reloading...")
+                     importlib.reload(config)
+                     # Re-apply global settings if needed, though strategy reads from config module directly now
+                main.last_src_config_mtime = current_src_config_mtime
             
-            # 2. Check Circuit Breaker
-            balances = {}
+            # 2. Update and Check Balances
+            # balances = {} <--- Removed local dict
             for ex_name, trader in traders.items():
-                balances[ex_name] = get_current_balance() # Simplified: uses same total bal
-                stop_trading, cb_reason = risk_manager.check_circuit_breaker(balances[ex_name])
+                current_bal = 0.0
+                if trader.dry_run:
+                    current_bal = get_current_balance()
+                elif not trader.exchange.is_authenticated:
+                    current_bal = 0.0
+                else:
+                    try:
+                        # Fetch real balance from exchange
+                        bal_data = await trader.exchange.fetch_balance()
+                        # Get total USDT equity
+                        current_bal = float(bal_data.get('total', {}).get('USDT', 0))
+                        
+                        # If 0, try 'free' as a fallback
+                        if current_bal == 0:
+                             current_bal = float(bal_data.get('free', {}).get('USDT', 0))
+                        
+                        # LOG THE TOTAL EQUITY BEING USED
+                        # print(f"💰 [{ex_name}] Total Equity: {current_bal:.2f} USDT")
+                    except Exception as e:
+                        print(f"⚠️ [{ex_name}] Failed to fetch real balance: {e}")
+                        # FORCE 0 for live trades if fetch fails
+                        current_bal = 0.0 
+
+                # Update shared tracker
+                balance_tracker.update_balance(ex_name, current_bal)
+                
+                # Check Circuit Breaker (Per Exchange)
+                # Only check if authenticated/dry_run AND we have a valid balance
+                stop_trading = False
+                cb_reason = ""
+                
+                if (trader.exchange.is_authenticated or trader.dry_run) and current_bal > 0:
+                    rm = risk_managers.get(ex_name)
+                    if rm:
+                        stop_trading, cb_reason = rm.check_circuit_breaker(current_bal)
+                
                 if stop_trading:
                     print(f"🚨 [{ex_name}] CIRCUIT BREAKER: {cb_reason}")
                     await send_telegram_message(f"🚨 [{ex_name}] CIRCUIT BREAKER: {cb_reason}", exchange_name=ex_name)
 
             # 3. Run Logic for all bots
-            tasks = [bot.run_step(balances[bot.trader.exchange.name]) for bot in bots if bot.running]
-            if tasks: await asyncio.gather(*tasks)
+            # SKIP unauthenticated exchanges to prevent pointless signal analysis/errors
+            active_tasks = []
+            for bot in bots:
+                if not bot.running: continue
+                
+                ex_name = bot.trader.exchange_name
+                # Only run if it's paper trading OR authenticated live trading OR PUBLIC MODE (Task requirement)
+                # Public mode allowed: we just skip ordering logic inside run_step
+                active_tasks.append(bot.run_step())
+                
+            if active_tasks: 
+                await asyncio.gather(*active_tasks)
             
             # 4. Fast Deep Sync
             for ex_name, trader in traders.items():

@@ -50,7 +50,11 @@ class Trader:
         self._missing_order_counts = {} # { order_id: missing_cycle_count }
         self._pos_action_timestamps = {} # { pos_key_action: timestamp_ms } to prevent rapid spam
         
-        # CLEANUP LEGACY KEYS: Remove or migrate keys with special suffixes
+        # Public Mode detection
+        from config import BINANCE_API_KEY
+        self.is_public_binance = (self.exchange_name == 'BINANCE' and (not BINANCE_API_KEY or 'your_' in BINANCE_API_KEY))
+        
+        # ...
         legacy_keys = [k for k in self.active_positions.keys() if '_sync' in k or '_adopted' in k]
         if legacy_keys:
             self.logger.info(f"[CLEANUP] Found {len(legacy_keys)} legacy position keys. Migrating...")
@@ -117,44 +121,67 @@ class Trader:
             return default
 
     async def _execute_with_timestamp_retry(self, api_call, *args, **kwargs):
-        """Execute exchange API call with timestamp error retry using shared data_manager."""
-        return await self.data_manager._execute_with_timestamp_retry(api_call, *args, **kwargs)
+        """Execute exchange API call with timestamp error retry using this specific exchange's adapter."""
+        # Directly use the adapter's implementation instead of delegating to DataManager's default adapter
+        return await self.exchange._execute_with_timestamp_retry(api_call, *args, **kwargs)
 
     def _load_positions(self):
-        """Loads positions from the JSON file."""
+        """Loads positions and pending orders from the JSON file."""
         if os.path.exists(self.positions_file):
             try:
                 with open(self.positions_file, 'r', encoding='utf-8') as f:
                     content = f.read().strip()
-                    # Handle empty file gracefully
                     if not content:
-                        self.logger.warning("[WARN] positions.json is empty, initializing with {}")
                         self.active_positions = {}
-                        self._save_positions()  # Write {} to file
+                        self.pending_orders = {}
+                        self._save_positions()
                         return self.active_positions
-                    self.active_positions = json.loads(content)
+                    
+                    data = json.loads(content)
+                    
+                    # Backward compatibility check
+                    if 'active_positions' in data or 'pending_orders' in data:
+                        # New Format
+                        self.active_positions = data.get('active_positions', {})
+                        self.pending_orders = data.get('pending_orders', {})
+                        if self.pending_orders:
+                            self.logger.info(f"Loaded {len(self.active_positions)} active positions and {len(self.pending_orders)} pending orders.")
+                    else:
+                        # Old Format (Flat dict of active positions)
+                        self.active_positions = data
+                        self.pending_orders = {}
+                        
             except json.JSONDecodeError as e:
                 self.logger.error(f"Error loading positions file: {e}")
-                self.logger.warning("[WARN] Initializing with empty positions")
                 self.active_positions = {}
-                self._save_positions()  # Write {} to file
+                self.pending_orders = {}
+                self._save_positions()
             except Exception as e:
                 self.logger.error(f"Error loading positions file: {e}")
                 self.active_positions = {}
+                self.pending_orders = {}
         else:
             self.active_positions = {}
-            self._save_positions()  # Create file with {}
+            self.pending_orders = {}
+            self._save_positions()
         return self.active_positions
 
     def _save_positions(self):
-        """Saves current active positions to the JSON file."""
+        """Saves current active positions AND pending orders to the JSON file."""
         import time
+        
+        # Prepare data structure
+        data = {
+            'active_positions': self.active_positions,
+            'pending_orders': self.pending_orders
+        }
+        
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 tmp = self.positions_file + '.tmp'
                 with open(tmp, 'w', encoding='utf-8') as f:
-                    json.dump(self.active_positions, f, indent=4)
+                    json.dump(data, f, indent=4)
                     f.flush()
                     try:
                         os.fsync(f.fileno())
@@ -206,8 +233,32 @@ class Trader:
                 self.logger.info(f"[SYNC] Order {order_id} is {status}. Clearing from local state.")
                 if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
                 return None
+                if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
+                return None
         except Exception as e:
             err_str = str(e).lower()
+            
+            # BYBIT 500-ORDER LIMIT FIX
+            # Error: "can only access an order if it is in last 500 orders"
+            if "last 500 orders" in err_str or "acknowledged" in err_str:
+                try:
+                    self.logger.info(f"[SYNC] {symbol} order {order_id} not in last 500. Falling back to open/closed search.")
+                    # 1. Try Open Orders
+                    open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
+                    for o in open_orders:
+                        if str(o.get('id')) == str(order_id) or str(o.get('clientOrderId')) == str(order_id):
+                            self._missing_order_counts[order_id] = 0
+                            return order_id
+                            
+                    # 2. Try Closed Orders (Recent)
+                    closed_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_closed_orders, symbol, limit=50)
+                    for o in closed_orders:
+                         if str(o.get('id')) == str(order_id) or str(o.get('clientOrderId')) == str(order_id):
+                            self._missing_order_counts[order_id] = 0
+                            return order_id
+                            
+                except Exception as fb_e:
+                    self.logger.warning(f"[SYNC] Fallback search failed for {order_id}: {fb_e}")
             
             # FALLBACK: If standard fetch failed, try Algo Orders endpoint if it's a conditional order
             if 'not found' in err_str or 'order does not exist' in err_str:
@@ -379,7 +430,7 @@ class Trader:
                 return True
         
         # 2. Check Exchange (Account Level)
-        if not self.dry_run:
+        if not self.dry_run and not self.is_public_binance:
             try:
                 # Use standard fetch_positions and filter locally for robustness
                 positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
@@ -396,13 +447,13 @@ class Trader:
         exchange_name = getattr(self.exchange, 'name', 'BINANCE')
         key = f"{exchange_name}_{symbol}_{timeframe}" if timeframe else f"{exchange_name}_{symbol}"
         
-        if self.dry_run:
+        if self.dry_run or self.is_public_binance:
             return key in self.active_positions
 
         try:
             # LIVE Mode: Always check exchange 
             positions = await self._execute_with_timestamp_retry(
-                self.exchange.fetch_positions, [symbol]
+                self.exchange.fetch_positions
             )
             found_on_exchange = False
             for pos in positions:
@@ -429,6 +480,38 @@ class Trader:
             self.logger.error(f"Error fetching position from exchange for {symbol}: {e}")
             return key in self.active_positions
 
+    def _check_min_notional(self, symbol, price, qty):
+        """
+        Check if order meets exchange minimum notional/amount requirements.
+        Returns (is_valid, reason, correct_qty)
+        """
+        # If no price (market order), assumes checking against recent price
+        if not price or price <= 0:
+            return True, "Price unknown", qty
+            
+        market = self.exchange.market(symbol)
+        min_cost = 0
+        min_amount = 0
+        
+        if 'limits' in market:
+            min_cost = market['limits'].get('cost', {}).get('min', 0) or 0
+            min_amount = market['limits'].get('amount', {}).get('min', 0) or 0
+        
+        # fallback defaults if exchange info missing
+        if min_cost == 0: min_cost = 5.0 
+            
+        notional = price * qty
+        
+        # 1. Check Amount
+        if qty < min_amount:
+            return False, f"Qty {qty} < Min Amount {min_amount}", 0
+            
+        # 2. Check Cost (Notional)
+        if notional < min_cost:
+            return False, f"Value ${notional:.2f} < Min Cost ${min_cost:.2f}", 0
+            
+        return True, "OK", qty
+
     async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None):
         """Places an order and updates persistent storage. For limit orders, monitors fill in background."""
         # Validate qty - reject invalid orders
@@ -436,32 +519,44 @@ class Trader:
             self.logger.warning(f"Rejected order: invalid qty={qty} for {symbol}")
             return None
         
-        # Dynamic decimal places based on price (high-price coins need more decimals)
-        qty_decimals = 6 if price and price > 1000 else 3
-        qty_rounded = round(qty, qty_decimals)
-        
+        # Dynamic decimal places based on exchange metadata
+        try:
+            # Use CCXT's built-in precision handling if available
+            # amount_to_precision returns a string, we need to pass it as is or float?
+            # CCXT create_order expects amount as float usually, but some exchanges accept string.
+            # actually amount_to_precision returns a string.
+            # Let's try to convert back to float for checks, but pass string to create_order?
+            # safest is to round using the precision info.
+            
+            # actually, let's just use the string for the order param if possible, 
+            # but we need to do math on it.
+            # Standard pattern:
+            qty_str = self.exchange.amount_to_precision(symbol, qty)
+            qty_rounded = float(qty_str)
+        except Exception as e:
+            self.logger.warning(f"amount_to_precision failed for {symbol}: {e}. Fallback to naive rounding.")
+            # Fallback
+            qty_decimals = 6 if price and price > 1000 else 3
+            qty_rounded = round(qty, qty_decimals)
+            
         # Validate minimum qty after rounding
         if qty_rounded <= 0:
             self.logger.warning(f"Rejected order: qty too small after rounding ({qty} -> {qty_rounded}) for {symbol}")
             return None
-        
-        # MINIMUM NOTIONAL CHECK (Safety against exchange rejections/spam)
-        # Most exchanges (Binance/Bybit) require at least $5-10 notional value.
-        # If order is too small, it will fail anyway. Catch it here to avoid spam.
-        price_to_check = price if price and price > 0 else 0
-        if price_to_check <= 0:
-            # Fallback to ticker if price not provided (for market orders)
-            try:
-                # This is a sync check but trader usually has latest data or can fetch
-                # For now, if we don't have price, we might skip this specific check or use a default
-                pass
-            except Exception: pass
             
-        if price_to_check > 0:
-            notional = qty_rounded * price_to_check
-            if notional < 5.1: # $5.1 threshold (safe margin over $5.0 min)
-                self.logger.warning(f"Rejected order: Notional ${notional:.2f} too small (< $5.1) for {symbol}")
-                print(f"⚠️ [{symbol}] Order rejected: Notional ${notional:.2f} < $5.1 min requirement.")
+        # UPDATE QTY TO ROUNDED VALUE FOR API CALLS
+        qty = qty_rounded 
+        
+        # STRICT NOTIONAL CHECK (Safety against exchange rejections/spam)
+        price_to_check = price
+        if not price_to_check or price_to_check <= 0:
+            pass
+            
+        if price_to_check and price_to_check > 0:
+            is_valid, reason, _ = self._check_min_notional(symbol, price_to_check, qty)
+            if not is_valid:
+                self.logger.warning(f"Rejected order {symbol}: {reason}")
+                print(f"⚠️ [{symbol}] Order rejected: {reason}")
                 return None
         
         exchange_name = getattr(self.exchange, 'name', 'BINANCE')
@@ -502,21 +597,58 @@ class Trader:
         if sl: params['stopLoss'] = str(sl)
         if tp: params['takeProfit'] = str(tp)
 
+        # BYBIT: Force 'linear' category for USDT Perpetuals
+        if self.exchange_name == 'BYBIT':
+            params['category'] = 'linear'
+
         # Determine and clamp leverage to allowed range
         use_leverage = self._clamp_leverage(leverage)
 
         try:
             # Ensure margin mode & leverage set on exchange for LIVE orders
             if not self.dry_run:
+                margin_params = {}
+                lev_params = {}
+                if self.exchange_name == 'BYBIT':
+                    margin_params = {'category': 'linear'}
+                    lev_params = {'category': 'linear'}
+
                 try:
-                    await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, 'isolated', symbol)
-                except Exception:
-                    # fallback signature variation handled elsewhere
-                    pass
-                try:
-                    await self._execute_with_timestamp_retry(self.exchange.set_leverage, use_leverage, symbol)
+                    if not self.is_public_binance:
+                        # 1. Set Margin Mode (Best Effort)
+                        # BYBIT: Skip set_margin_mode, as set_leverage handles it or it's account-level
+                        if self.exchange_name != 'BYBIT':
+                            try:
+                                await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, symbol, 'isolated', margin_params)
+                            except Exception:
+                                pass # Often fails if already set, ignore
+
+                        # 2. Set Leverage (CRITICAL - Retry Loop for Bybit)
+                        lev_success = False
+                        if self.exchange_name == 'BYBIT':
+                            # Bybit sometimes needs a retry or specific category
+                            for i in range(3):
+                                try:
+                                    print(f"🔧 [BYBIT] Setting Leverage to x{use_leverage} for {symbol} (Attempt {i+1})...")
+                                    await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, use_leverage, lev_params)
+                                    lev_success = True
+                                    break
+                                except Exception as e:
+                                    if "not modified" in str(e).lower():
+                                        lev_success = True
+                                        break
+                                    print(f"⚠️ [BYBIT] Failed to set leverage: {e}")
+                                    import asyncio
+                                    await asyncio.sleep(0.5)
+                        else:
+                            # Standard for others
+                            lev_success = True
+                            await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, use_leverage, lev_params)
+
                 except Exception as e:
-                    self.logger.warning(f"Failed to set leverage for {symbol}: {e}")
+                    # reduce log spam if "not modified"
+                    if "not modified" not in str(e).lower():
+                        self.logger.warning(f"Failed to set leverage for {symbol}: {e}")
 
             if order_type == 'market':
                 # Generate Client Order ID for recovery
@@ -532,9 +664,28 @@ class Trader:
                 
                 order = None
                 try:
+                    # ---------------------------------------------------------
+                    # [DEBUG] LOG REQUEST FOR USER
+                    # ---------------------------------------------------------
+                    print(f"\n🚀 [API REQUEST] create_order")
+                    print(f"   Symbol: {symbol}")
+                    print(f"   Type:   {order_type}")
+                    print(f"   Side:   {side}")
+                    print(f"   Qty:    {qty}")
+                    print(f"   Price:  {price}")
+                    print(f"   Params: {params}  <-- Check 'category' here")
+                    # ---------------------------------------------------------
+
                     order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, order_type, side, qty, params=params
+                        self.exchange.create_order, symbol, order_type, side, qty, price, params=params
                     )
+
+                    # ---------------------------------------------------------
+                    # [DEBUG] LOG RESPONSE FOR USER
+                    # ---------------------------------------------------------
+                    print(f"✅ [API RESPONSE] Order ID: {order.get('id')}")
+                    print(f"   Full Response: {order}\n")
+                    # ---------------------------------------------------------
                 except Exception as e:
                     # TIMEOUT RECOVERY: If request timed out, check if order was actually placed using client_id
                     self.logger.warning(f"Order creation failed/timed out for {client_id}. Attempting recovery... Error: {e}")
@@ -578,6 +729,25 @@ class Trader:
                             
                     except Exception as recovery_error:
                         self.logger.error(f"Recovery failed for {client_id}: {recovery_error}")
+                        # If insufficient balance, log current balance to help debug
+                        if "insufficient balance" in str(e).lower() or "170131" in str(e):
+                            try:
+                                # CALL ADAPTER fetch_balance
+                                bal = await self.exchange.fetch_balance()
+                                curr_bal = bal.get('total', {}).get('USDT', 'N/A')
+                                # Calculate approximate required margin
+                                req_margin = "N/A"
+                                try:
+                                    # qty * price / leverage
+                                    # price might be None if market order fails at different stage, using current price if possible
+                                    req_margin = (qty * (price or 0)) / (leverage or 1)
+                                    req_margin = f"${req_margin:.2f}"
+                                except: pass
+                                
+                                self.logger.error(f"❌ [INSUFFICIENT BALANCE] Exchange: {self.exchange_name} | Required Margin: ~{req_margin} | Available Equity: {curr_bal} USDT")
+                                print(f"❌ [{self.exchange_name}] Insufficient balance: Need ~{req_margin}, have {curr_bal} USDT")
+                            except Exception as bal_err:
+                                self.logger.error(f"Diagnostics: fetch_balance failed: {bal_err}")
                         raise e # Re-raise original error
                 
                 try:
@@ -661,6 +831,12 @@ class Trader:
                     self._debug_log('place_order:limit:response', order)
                 except Exception:
                     pass
+                    
+                # SAFETY CHECK: Ensure we have a valid order ID
+                if not order or not order.get('id'):
+                    self.logger.error(f"❌ Failed to get valid order ID for {symbol} limit order. Request may have failed silently.")
+                    return None
+
                 order_id = order['id']
 
                 # Save to pending orders (in-memory)
@@ -1053,6 +1229,8 @@ class Trader:
             )
             
             del self.active_positions[pos_key]
+            if pos_key in self.pending_orders:
+                del self.pending_orders[pos_key]
             self._save_positions()
             self.logger.info(f"Force closed {pos_key}: {reason}, order={order['id']}")
             return True
@@ -1085,10 +1263,13 @@ class Trader:
         """Sets leverage and margin mode."""
         if self.dry_run: return
         try:
-            await self._execute_with_timestamp_retry(self.exchange.set_leverage, leverage, symbol)
+            # Correct Adapter Order: (symbol, value)
+            await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, leverage)
             try:
-                await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, 'isolated', symbol)
-            except Exception: pass
+                if self.exchange_name == 'BINANCE':
+                    await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, symbol, 'isolated')
+            except Exception:
+                pass # Margin mode might fail if already set or account level, ignore
         except Exception as e:
             self.logger.warning(f"Failed to set mode for {symbol}: {e}")
 
@@ -1240,40 +1421,61 @@ class Trader:
         """Ensure margin mode is isolated and leverage set for `symbol` on exchange (LIVE only)."""
         if self.dry_run:
             return
+            
         try:
-            # Try REST calls to Binance Futures first (signed requests)
-            try:
-                await self._execute_with_timestamp_retry(self._set_margin_type_rest, symbol, 'ISOLATED')
-            except Exception as e:
-                self.logger.debug(f"REST set_margin_type failed for {symbol}: {e}")
-                # Fallback to CCXT
+            # 1. MARGIN MODE SETUP
+            # Try REST calls to Binance Futures only if it's Binance and we have keys
+            is_real_binance = (self.exchange_name == 'BINANCE' and BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY)
+            
+            if is_real_binance:
                 try:
-                    # CCXT unified method: set_margin_mode(marginMode, symbol)
-                    await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, 'isolated', symbol)
+                    await self._execute_with_timestamp_retry(self._set_margin_type_rest, symbol, 'ISOLATED')
                 except Exception as e:
-                    err = str(e).lower()
-                    if "-4067" in err or "side cannot be changed" in err:
-                        print(f"ℹ️  {symbol}: Margin mode preserved (open orders/positions exist)")
-                    elif "no change" in err or "already" in err:
-                        pass # Already set, ignore
-                    else:
-                        print(f"⚠️  Could not set margin mode for {symbol}: {e}")
-
+                    self.logger.debug(f"REST set_margin_type failed for {symbol}: {e}")
+            
+            # CCXT Adapter Call (for Bybit, or if Binance REST was skipped/failed)
             try:
-                safe_lev = self._safe_int(leverage, default=10)
-                await self._execute_with_timestamp_retry(self._set_leverage_rest, symbol, safe_lev)
+                # Adapter signature is set_margin_mode(symbol, mode)
+                await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, symbol, 'isolated')
             except Exception as e:
-                err_str = str(e).lower()
-                # Handle Binance Error -4161: Leverage reduction not supported with open positions
-                if "-4161" in err_str or "leverage reduction is not supported" in err_str:
-                    server_lev = 0
-                    try:
-                        lev_info = await self.exchange.fetch_leverage(symbol)
-                        server_lev = int(lev_info.get('leverage', 0))
-                    except: pass
-                    print(f"⚠️  {symbol}: Leverage reduction blocked (Open Position). Kept at {server_lev}x")
+                err = str(e).lower()
+                if "-4067" in err or "side cannot be changed" in err:
+                    print(f"ℹ️  {symbol}: Margin mode preserved (open orders/positions exist)")
+                elif "no change" in err or "already" in err:
+                    pass # Already set, ignore
                 else:
-                    self.logger.warning(f"Failed to set leverage for {symbol}: {e}")
+                    print(f"⚠️  Could not set margin mode for {symbol}: {e}")
+
+            # 2. LEVERAGE SETUP
+            safe_lev = self._safe_int(leverage, default=10)
+            
+            # Try REST calls to Binance first if appropriate
+            if is_real_binance:
+                try:
+                    await self._execute_with_timestamp_retry(self._set_leverage_rest, symbol, safe_lev)
+                except Exception as e:
+                    err_str = str(e).lower()
+                    if "-4161" in err_str or "leverage reduction is not supported" in err_str:
+                        # Fallback to fetch current leverage for logging
+                        cur_lev = "?"
+                        try:
+                            l_info = await self.exchange.fetch_leverage(symbol)
+                            cur_lev = str(l_info.get('leverage', '?'))
+                        except: pass
+                        print(f"⚠️  {symbol}: Leverage reduction blocked (Open Position). Kept at {cur_lev}x")
+                    else:
+                        self.logger.warning(f"REST set_leverage failed for {symbol}: {e}")
+            
+            # CCXT Adapter Call (for Bybit, or if Binance REST was skipped/failed)
+            # We skip this for Binance if we successfully did REST, but generally safe to try both or gate
+            if self.exchange_name == 'BYBIT':
+                try:
+                    # Correct Adapter Order: (symbol, leverage)
+                    await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, safe_lev)
+                except Exception as e:
+                    if "not modified" not in str(e).lower():
+                        self.logger.warning(f"[Bybit] Set leverage failed for {symbol}: {e}")
+
         except Exception as e:
             self.logger.error(f"Error ensuring isolated/leverage for {symbol}: {e}")
 
@@ -1361,6 +1563,9 @@ class Trader:
 
     async def _create_sl_tp_orders_for_position(self, pos_key):
         """Create SL/TP reduce-only orders for a filled position and persist the order ids."""
+        if self.dry_run or self.is_public_binance:
+            return {'skipped': True}
+            
         # Respect the global flag: if auto-create disabled, skip creating orders here.
         if not AUTO_CREATE_SL_TP:
             self.logger.info(f"AUTO_CREATE_SL_TP disabled; skipping auto SL/TP for {pos_key}")
@@ -1427,6 +1632,14 @@ class Trader:
         Verify if there are any active positions or open orders for the symbol on exchange.
         This acts as a 'Pre-Trade Check' to prevent Dual Orders.
         """
+        if self.dry_run or self.is_public_binance:
+            # Assume clean state in dry/public mode if not in local storage
+            return {
+                'active_exists': False,
+                'order_exists': False,
+                'position': None,
+                'orders': []
+            }
         try:
             # Check Open Orders
             open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
@@ -1451,7 +1664,11 @@ class Trader:
             return None
 
     async def reconcile_positions(self, auto_fix=True):
-        """Attempt to synchronize local `active_positions` with exchange state.
+        """Attempt to synchronize local `active_positions` with exchange state."""
+        if self.dry_run or self.is_public_binance:
+            return
+            
+        """
         - Recover missing order_ids for pending entries
         - Ensure filled positions have SL/TP orders on-exchange
         - AUTO-ADOPT: If position exists on exchange but not locally, add it.
@@ -1841,11 +2058,10 @@ class Trader:
         return res
 
     async def recreate_missing_sl_tp(self, pos_key, recreate_sl=True, recreate_tp=True, recreate_sl_force=False, recreate_tp_force=False):
-        """Recreate missing SL/TP orders for a given position.
-        This will actually place orders on exchange and persist new ids.
-        Only runs when `self.dry_run` is False. Returns dict of results.
-        Uses per-position locking to prevent concurrent recreation.
-        """
+        """Recreate missing SL/TP orders for a given position."""
+        if self.dry_run or self.is_public_binance:
+            return {'sl_recreated': False, 'tp_recreated': False, 'status': 'skipped'}
+            
         # Acquire per-position lock to prevent race conditions
         async with self._get_position_lock(pos_key):
             result = {'sl_recreated': False, 'tp_recreated': False, 'errors': []}
@@ -2060,11 +2276,11 @@ class Trader:
             return True
 
         except Exception as e:
-            print(f"[ERROR] Failed to modify SL/TP for {pos_key}: {e}")
+            self.logger.error(f"Failed to modify SL/TP for {pos_key}: {e}")
             return False
 
     async def close(self):
-        """Close underlying exchange connector to avoid unclosed connector warnings."""
+        """Close exchange connection to release resources."""
         try:
             if hasattr(self.exchange, 'close'):
                 await self.exchange.close()

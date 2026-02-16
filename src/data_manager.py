@@ -45,7 +45,7 @@ class MarketDataManager:
         
         self.data_store = {} # { 'EXCHANGE_symbol_timeframe': df }
         self.features_cache = {}  # { 'EXCHANGE_symbol_timeframe': df_with_features }
-        self._last_ohlcv_update = 0  # Timestamp for throttled candle updates
+        self._last_ohlcv_update = 0.0  # Timestamp for throttled candle updates
         self.listeners = []
         self._isolated_margin_set = False
         self._update_counter = 0  # Track cycles for periodic disk save
@@ -66,21 +66,60 @@ class MarketDataManager:
         """Delegate timestamp generation to adapter."""
         return self.adapter.get_synced_timestamp()
 
-    async def set_isolated_margin_mode(self, symbols):
+    async def set_isolated_margin_mode(self, symbols, exchange=None):
         """Sets margin mode to ISOLATED for given symbols (Live only)."""
         from config import DRY_RUN
+        
+        target_adapter = self.adapters.get(exchange) if exchange else self.adapter
+        
         # Check apiKey via adapter proxy
-        if DRY_RUN or not self.adapter.apiKey:
+        if DRY_RUN or not target_adapter or not target_adapter.apiKey:
             return
             
+        failed_symbols = []
         for symbol in symbols:
             try:
+                # If Binance and missing keys, skip margin setup (it will fail anyway)
+                is_binance = target_adapter.name == 'BINANCE'
+                from config import BINANCE_API_KEY
+                if is_binance and (not BINANCE_API_KEY or 'your_' in BINANCE_API_KEY):
+                    # Public mode: skip setup, don't fail
+                    continue
+
                 # Use Adapter method
-                await self.adapter.set_margin_mode(symbol, 'ISOLATED')
-                print(f"✅ {symbol} set to ISOLATED margin")
+                await target_adapter.set_margin_mode(symbol, 'ISOLATED')
+                print(f"✅ [{target_adapter.name}] {symbol} set to ISOLATED margin")
             except Exception as e:
-                # Often fails if already set, which is fine
-                pass
+                err_str = str(e).lower()
+                # Check for critical API errors that imply symbol is invalid for this key
+                # Binance: -2014, -2015, "api-key format invalid", "permission denied"
+                # Bybit: 10003 ("api key invalid"), 33004 ("api key expired"), "permission denied"
+                if ("api-key" in err_str and "invalid" in err_str) or \
+                   ("permission" in err_str and "denied" in err_str) or \
+                   "code': -2014" in err_str or \
+                   "code': 10003" in err_str or \
+                   "code': 33004" in err_str:
+                     print(f"⚠️ [{target_adapter.name}] Skipping {symbol}: Invalid permissions/key format.")
+                     failed_symbols.append(symbol)
+                elif "no need to change" in err_str or "already" in err_str:
+                    pass # harmless
+                else:
+                    # Log other errors but maybe don't blacklist immediately unless repeated? 
+                    # For now, user said "warn once and skip", so we blacklist on API errors.
+                    pass
+        
+        return failed_symbols
+
+    async def close(self):
+        """Close all exchange connections."""
+        if hasattr(self, 'adapters') and self.adapters:
+            for name, adapter in self.adapters.items():
+                print(f"🔌 Closing connection to {name}...")
+                await adapter.close()
+        elif hasattr(self, 'adapter') and self.adapter:
+             await self.adapter.close()
+             
+        self.initialized = False
 
     async def fetch_ticker(self, symbol, exchange=None):
         """Fetch ticker deeply delegated to adapter."""

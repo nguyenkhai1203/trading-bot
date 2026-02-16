@@ -3,12 +3,14 @@ import asyncio
 import logging
 from typing import Dict, List, Optional, Any
 from .base_adapter import BaseAdapter
+from base_exchange_client import BaseExchangeClient
 from config import BYBIT_API_KEY, BYBIT_API_SECRET
 
-class BybitAdapter(BaseAdapter):
+class BybitAdapter(BaseExchangeClient, BaseAdapter):
     """
     Bybit Adapter implementation using CCXT.
     Focuses on USDT Perpetual Futures (Linear).
+    BaseExchangeClient provides time synchronization and retry logic.
     """
 
     def __init__(self, exchange_client=None):
@@ -16,9 +18,12 @@ class BybitAdapter(BaseAdapter):
         Initialize Bybit adapter.
         If exchange_client is provided, use it. Otherwise create new ccxt.bybit instance.
         """
-        if exchange_client:
-            super().__init__(exchange_client)
-        else:
+        # Initialize BaseAdapter (wrapper)
+        BaseAdapter.__init__(self, exchange_client)
+        self.name = 'BYBIT'
+
+        client = exchange_client
+        if not client:
             # Initialize CCXT Bybit instance
             options = {
                 'defaultType': 'swap',  # USDT Perpetual
@@ -31,18 +36,27 @@ class BybitAdapter(BaseAdapter):
                 'options': options,
                 'enableRateLimit': True,
             })
-            super().__init__(client)
+            # Update BaseAdapter's exchange ref
+            self.exchange = client
+        
+        # Initialize BaseExchangeClient (functionality)
+        BaseExchangeClient.__init__(self, client)
         
         self.logger = logging.getLogger(__name__)
+
+    def __getattr__(self, name):
+        """Proxy unknown attributes to the underlying exchange object (ccxt)."""
+        return getattr(self.exchange, name)
 
     async def sync_time(self) -> bool:
         """Sync time and load markets."""
         try:
+            # BaseExchangeClient.sync_server_time handles the heavy lifting
+            await self.sync_server_time()
             await self.exchange.load_markets()
-            # self.exchange.msg(f"Market data loaded: {len(self.exchange.markets)} symbols")
             return True
         except Exception as e:
-            self.logger.error(f"[Bybit] Sync time failed: {e}")
+            self.logger.error(f"[Bybit] Sync time/markets failed: {e}")
             return False
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> List[list]:
@@ -114,28 +128,75 @@ class BybitAdapter(BaseAdapter):
             self.logger.error(f"[Bybit] Cancel order failed for {symbol}: {e}")
             raise e
 
-    async def set_leverage(self, symbol: str, leverage: int):
-        """Set leverage for a symbol."""
+    async def set_leverage(self, symbol: str, leverage: int, params: Dict = {}):
+        """Set leverage for a symbol (V5 linear)."""
         try:
-            await self.exchange.set_leverage(leverage, symbol)
+            # Resolve to native Bybit ID (e.g. LTCUSDT) for V5 API compatibility
+            # CCXT bybit set_leverage is strict about symbol format
+            try:
+                market = self.exchange.market(symbol)
+                native_symbol = market.get('id', symbol)
+            except:
+                native_symbol = symbol.replace('/', '').replace(':USDT', '')
+
+            # Merge with passed params if any
+            extra = {'category': 'linear'}
+            extra.update(params)
+            
+            # CCXT Bybit V5 set_leverage(leverage, symbol, params)
+            self.logger.debug(f"[Bybit] Calling CCXT set_leverage({leverage}, {native_symbol}, {extra})")
+            await self.exchange.set_leverage(leverage, native_symbol, params=extra)
         except Exception as e:
-            # Bybit throws error if leverage is already set to that value, usually safe to ignore or log warning
-            if "not modified" not in str(e).lower():
+            # Bybit throws error if leverage is already set to that value
+            if "not modified" not in str(e).lower() and "already" not in str(e).lower():
                 self.logger.warning(f"[Bybit] Set leverage failed for {symbol}: {e}")
 
-    async def set_margin_mode(self, symbol: str, mode: str):
-        """Set margin mode (ISOLATED/CROSS)."""
+    async def fetch_balance(self) -> Dict:
+        """Fetch balance for UNIFIED account (V5 linear)."""
         try:
-            # 'ISOLATED' or 'CROSS'
-            await self.exchange.set_margin_mode(mode.upper(), symbol)
+            # Bybit V5 often needs accountType=UNIFIED specified
+            res = await self.exchange.fetch_balance(params={'accountType': 'UNIFIED'})
+            
+            # Diagnostic Log: See exactly what CCXT found
+            total_usdt = res.get('total', {}).get('USDT', 0)
+            free_usdt = res.get('free', {}).get('USDT', 0)
+            self.logger.debug(f"[Bybit] Balance Fetched | Total USDT: {total_usdt} | Free USDT: {free_usdt}")
+            
+            return res
         except Exception as e:
-             if "not modified" not in str(e).lower():
-                self.logger.warning(f"[Bybit] Set margin mode failed for {symbol}: {e}")
+            self.logger.error(f"[Bybit] Fetch balance failed: {e}")
+            return {}
+
+    async def set_margin_mode(self, symbol: str, mode: str, params: Dict = {}):
+        """Set margin mode (ISOLATED/CROSS)."""
+        # Resolve to native Bybit ID (e.g. LTCUSDT)
+        try:
+            market = self.exchange.market(symbol)
+            native_symbol = market.get('id', symbol)
+        except:
+            native_symbol = symbol.replace('/', '').replace(':USDT', '')
+
+        # Try both lowercase and uppercase as Bybit V5 can be picky based on account type
+        modes_to_try = [mode.lower(), mode.upper()]
+        last_err = None
+        
+        for m in modes_to_try:
+            try:
+                extra = {'category': 'linear'}
+                extra.update(params)
+                # Bybit V5 set_margin_mode(margin_mode, symbol, params)
+                self.logger.debug(f"[Bybit] Calling CCXT set_margin_mode({m}, {native_symbol}, {extra})")
+                await self.exchange.set_margin_mode(m, native_symbol, params=extra)
+                return # Success
+            except Exception as e:
+                last_err = e
+                err_str = str(e).lower()
+                if "not modified" in err_str or "already" in err_str:
+                    return # Already set
+                continue # Try next casing
+        
+        self.logger.warning(f"[Bybit] Set margin mode failed for {symbol}: {last_err}")
 
     async def close(self):
         """Close exchange connection."""
         await self.exchange.close()
-    
-    def __getattr__(self, name):
-        """Proxy unknown attributes to the underlying exchange object (ccxt)."""
-        return getattr(self.exchange, name)

@@ -95,31 +95,38 @@ class WeightedScoringStrategy(Strategy):
         print(f"🔄 [{self.symbol} {self.timeframe}] Config reloaded.")
 
     def get_sizing_tier(self, score):
-        # Default fallback
-        res = { "leverage": 1, "risk_pct": 0.01 }
+        # Default fallback (Use LOW tier to ensure min notional is met)
+        # Low Tier: Lev 3, Cost 3 -> Notional 9 > 5 (Ok)
+        # Old Fallback: Lev 1, Cost 5 -> Notional 5 (Borderline/Fail)
+        res = { "leverage": 3, "cost_usdt": 3.0 } 
         
         if not hasattr(self, 'config_data') or 'tiers' not in self.config_data:
-            from config import LEVERAGE as GLOBAL_MAX_LEV
-            # Fallback hardcoded if config missing
-            if score >= 7.0: 
-                lev = min(5, GLOBAL_MAX_LEV)
-                return { "leverage": lev, "cost_usdt": 5.0 }
-            else: 
-                lev = min(3, GLOBAL_MAX_LEV)
-                return { "leverage": lev, "cost_usdt": 3.0 }
+            import config
+            # Use CONFIDENCE_TIERS from config.py as the primary source
+            tiers = getattr(config, 'CONFIDENCE_TIERS', {})
+            
+            # Map weighted score to tier keys (high/medium/low)
+            # Strategy score is typically 0-10+. CONFIDENCE_TIERS uses 'min_confidence' (0-1) or we map score.
+            # Adaptation: Map Score to Confidence Level for lookup
+            # Score 7+ -> High, 5-7 -> Medium, <5 -> Low
+            
+            # Since CONFIDENCE_TIERS is keyed by 'high', 'medium', 'low', we select based on score.
+            target_tier_key = 'low'
+            if score >= 7.0: target_tier_key = 'high'
+            elif score >= 5.0: target_tier_key = 'medium'
+            
+            selected_tier = tiers.get(target_tier_key, tiers.get('low', res))
+            
+            # Ensure return has required keys
+            return {
+                "leverage": selected_tier.get('leverage', 3),
+                "cost_usdt": selected_tier.get('cost_usdt', 3.0) 
+            }
             
         tiers = self.config_data['tiers']
         
-        # Check tiers in order: high -> low -> minimum (fallback)
-        # Check tiers in order: high -> low -> minimum (fallback)
+        # Check tiers in order from strategy_config.json
         selected_tier = res # default
-        
-        if 'high' in tiers and score >= tiers['high'].get('min_score', 999):
-            selected_tier = tiers['high']
-        elif 'low' in tiers and score >= tiers['low'].get('min_score', 999):
-            selected_tier = tiers['low']
-        elif 'minimum' in tiers and score >= tiers['minimum'].get('min_score', 0):
-            selected_tier = tiers['minimum']
              
         # GLOBAL OVERRIDE: Clamp to config safety settings
         from config import GLOBAL_MAX_LEVERAGE, GLOBAL_MAX_COST_PER_TRADE

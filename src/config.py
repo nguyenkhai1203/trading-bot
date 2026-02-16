@@ -23,7 +23,7 @@ ACTIVE_EXCHANGE = ACTIVE_EXCHANGES[0] if ACTIVE_EXCHANGES else 'BINANCE'
 # NOTE: USE_TESTNET is DEPRECATED - Binance removed Testnet Futures support
 # Bot will now ALWAYS use LIVE exchange (set dry_run=True in bot.py for simulation)
 USE_TESTNET = False  # Deprecated - keep False for Live trading
-DRY_RUN = True  # Set to True for paper trading (simulation mode)
+DRY_RUN = False  # Set to True for paper trading (simulation mode)
 
 # Trading Settings
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
@@ -38,11 +38,12 @@ BINANCE_SYMBOLS = [
     'TIA/USDT', 'JUP/USDT', 'SEI/USDT', 'FIL/USDT'
 ]
 
-# Bybit supports unique gems like HYPE
+# Bybit supports unique gems like HYPE (Updated User Request: Top 20 Stable High-Vol)
 BYBIT_SYMBOLS = [
-    'ETH/USDT', 'BTC/USDT', 'SOL/USDT', 'XRP/USDT', 'HYPE/USDT',
-    'BNB/USDT', 'SUI/USDT', 'NEAR/USDT', 'FET/USDT', 'ARB/USDT',
-    'JUP/USDT'
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT',
+    'DOGE/USDT', 'ADA/USDT', 'TRX/USDT', 'AVAX/USDT', 'LINK/USDT',
+    'DOT/USDT', 'POL/USDT', 'LTC/USDT', 'BCH/USDT', 'UNI/USDT',
+    'XLM/USDT', 'NEAR/USDT', 'ATOM/USDT', 'APT/USDT', 'ARB/USDT'
 ]
 
 # Unified list for general manager usage (union of both)
@@ -88,18 +89,18 @@ OHLCV_REFRESH_INTERVAL = 60  # OHLCV data refresh interval in seconds (1 minute)
 CONFIDENCE_TIERS = {
     "high": {
         "min_confidence": 0.70,  # 70%+ confidence
-        "leverage": 5,          # Conservative max leverage
-        "cost_usdt": 5.0         # $5 per trade (conservative)
+        "leverage": 5,          # Max leverage
+        "cost_usdt": 5.0         # $4 per trade (Base Max)
     },
     "medium": {
         "min_confidence": 0.50,  # 50-70% confidence
         "leverage": 4,           # Medium leverage
-        "cost_usdt": 4.0         # $4 per trade
+        "cost_usdt": 4.0         # $4 per trade (Base)
     },
     "low": {
         "min_confidence": 0.30,  # 30-50% confidence
         "leverage": 3,           # Low leverage for safety
-        "cost_usdt": 3.0         # $3 per trade (minimum)
+        "cost_usdt": 3.0         # $3 per trade (Lower than base)
     }
 }
 MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade

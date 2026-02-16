@@ -26,7 +26,7 @@
   - **Result**: Determines **Tier selection** (Sizing & Leverage) at the moment of entry.
 
 ## System Architecture: 3-Layer Scale
-1.  **Data Layer (`MarketDataManager`)**: Centralized fetching to prevent 429 Rate Limits. Shares RAM among all TF bots.
+1.  **Data Layer (`MarketDataManager`)**: Centralized fetching with **Exchange Namespacing** (e.g., `BINANCE_BTCUSDT_1h`). Prevents 429 Rate Limits and ensures clean data separation per exchange.
 2.  **Logic Layer (`Strategy` / `Analyzer`)**: Periodically (2x daily) optimizes weights based on win-rate trends.
 3.  **Execution Layer (`Trader`)**: 
     - **Shared Memory**: Unified `active_positions` across all timeframes.
@@ -464,47 +464,54 @@ All 15 key features verified ✅:
 | Limit order fill check | ✅ | Dry run simulates fills when price reaches target |
 
 ## Critical Stability Fixes (Feb 13, 2026)
-**Session focused on "Order Spam" and "Timestamp Errors":**
-
-### 1. Timestamp Sync Conflict (Error -1021)
-- **Problem**: CCXT's auto-sync (`adjustForTimeDifference=True`) conflicted with our `BaseExchangeClient` manual sync.
-- **Result**: "Double sync" pushed timestamp into the future -> Rejected by Binance.
-- **Solution**:
-  - Disabled CCXT sync: `adjustForTimeDifference: False` in `data_manager.py`.
-  - Enforced manual sync: `_server_offset_ms` calculated once at startup with **-5000ms safety buffer**.
-
-### 2. Algo Order Visibility (Standard vs Conditional)
-- **Problem**: Bot placed SL/TP (Algo Orders) but only checked Standard Orders (`fetch_open_orders`).
-- **Result**: Bot thought orders were missing -> Infinite "Repair Loop" (Order Spam).
-- **Solution**:
-  - **Unified Polling**: Check BOTH `fetch_open_orders` AND `fetch_open_algo_orders`.
-  - **Unified ID Matching**: Check all ID fields: `id`, `orderId`, `algoId`, `clientAlgoId`.
-  - **Diagnostic Tool**: Created `scripts/dump_all_orders.py` to see ALL orders.
-
-### 3. Creation Loop (Race Condition)
-- **Problem**: API latency means an order placed at T=0 might not appear in `fetch` at T=0.1s.
-- **Result**: Bot placed order -> Verified immediately -> Not found -> Placed again (Spam).
-- **Solution**:
-  - **Creation Cooldown**: After creating SL/TP, ignore that position's missing status for **20 seconds**.
-  - **Trust Mechanism**: Assume order exists during cooldown to prevent duplicate creation.
+- **Timestamp Sync Conflict**: Disabled CCXT auto-sync; implemented manual sync with -5000ms safety buffer in `data_manager.py`.
+- **Algo Order Visibility**: Unified polling for standard and conditional orders. Diagnostic tool `scripts/dump_all_orders.py` created.
+- **Creation Loop Prevention**: Added 20s cooldown after SL/TP creation.
 
 ## Market Reversal Safeguards (Feb 14, 2026)
-### 1. Signal Flip Early Exit
-- **Problem**: Bot continued to hold positions during aggressive trend reversals.
-- **Solution**: 
-  - Monitoring loop in `bot.py` now monitors for *opposite* signals while a position is open.
-  - If a BUY position exists but a SELL signal (score >= `exit_score`) emerges, the bot triggers `force_close_position()`.
-  
-### 2. Universal Reaper (103+ Order Cleanup)
-- **Problem**: Default Reaper only scanned current `TRADING_SYMBOLS`, leaving "orphaned" orders from removed coins.
-- **Solution**: 
-  - Modified `reconcile_positions` to scan ALL open orders in the account.
-  - Automatically cancels any conditional (STOP/TAKE) order not managed by `active_positions`.
-  - Added 100ms rate limiting between cancels to avoid DDoS protection.
+- **Universal Reaper**: Modified `execution.py` to scan all symbols every 5 minutes with throttling (20 orders per batch) to cleanup orphaned orders.
+- **Signal Flip Early Exit**: Position force-closed if an opposite signal (score >= `exit_score`) emerges.
+- **Safe Reversal Entry**: 
+  - Leverage reduced by 40%, Cost by 50%.
+  - Tighter Initial Stop Loss (40% reduced) for confirmed trend reversal entries.
 
-### 3. Safe Reversal Entry ("Double-Safe")
-- **Problem**: Entering a trade immediately after a trend reversal is high-risk.
-- **Solution**:
-  - **Trend Check**: Bot checks `signal_tracker` for the previous trade's side.
-  - **Reversal Reduction**: If new trade flips the side (e.g., Short -> Long), it applies a **0.6x Leverage multiplier** and **0.5x Cost multiplier**.
-  - **Tighter Protection**: Initial Stop Loss is reduced by **40%** (Tighter) for all reversal entries to minimize exposure until the new trend is confirmed.
+## System Evolution: Phase 2 & 3 (Multi-Exchange & RL Brain)
+### 1. Multi-Exchange & Symbol Standardization
+- **Base Interface**: `src/adapters/base_adapter.py` ensures unified behavior across all exchanges.
+- **Symbol Segregation**: `config.py` now uses separate lists (`BINANCE_SYMBOLS`, `BYBIT_SYMBOLS`) for targeted trading.
+- **Exchange-Aware Config**: `strategy_config.json` stores optimized weights with exchange prefixes, allowing independent tuning for different market conditions (Bybit vs Binance).
+- **Bybit Adaptations**:
+    - **Timeframe Mapping**: Automatically maps unsupported '8h' to '4h' to prevent API errors.
+    - **Isolated Margin**: Automatically enforced at startup.
+
+### 2. Neural Brain (RL Model)
+- **Architecture**: MLP (Multi-Layer Perceptron) built with `numpy`.
+- **Input**: 12 Normalized Features (RSI, MACD, BB, Volume, Portfolio State).
+- **Integration**:
+  - `src/strategy.py`: Extracts snapshots, queries Brain for score.
+  - **VETO**: Score < 0.3 -> Block.
+  - **BOOST**: Score > 0.8 -> +20% confidence.
+- **Training**: `src/train_brain.py` uses SGD on history snapshots.
+- **Status**: Backend implemented; requires data collection (~50 snapshots) for full training.
+
+## System Updates (Feb 15, 2026)
+### 1. Robust Order Persistence
+- **Problem**: Pending limit orders were lost during bot restarts (only `filled` positions were saved).
+- **Solution**: Updated `execution.py` to persist `pending_orders` to `positions.json`.
+- **Detail**:
+  - `place_order` now saves order state immediately.
+  - `_load_positions` restores both active and pending orders.
+  - `_monitor_limit_order_fill` automatically resumes monitoring restored orders.
+
+### 2. Strict Notional Validation
+- **Problem**: Exchanges reject orders below min notional (e.g., $5.00), causing API errors.
+- **Solution**: Added `_check_min_notional` to `Trader` class.
+- **Logic**:
+  - Fetches `market['limits']` (cost/amount) from exchange.
+  - Falls back to $5.00 safe limit if undefined.
+  - Rejects invalid orders *locally* before sending to API (prevents bans).
+
+### 3. Bybit Integration & Token Curation
+- **Refinement**: Curated `BYBIT_SYMBOLS` to Top 20 High-Volume Stable Pairs (BTC, ETH, SOL, etc.).
+- **Filtering**: Removed volatile meme coins to ensure stability.
+- **Normalization**: Standardized symbol formats (`BTC/USDT` vs `BTCUSDT`) across system.

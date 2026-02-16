@@ -158,18 +158,16 @@ tradingBot/
 ## 🎯 How It Works
 
 ### Smart Limit Order System
-
-**Entry Flow:**
-1. **Signal Detection** → 40+ indicators analyze market
-2. **Limit Order** → Placed at 1.5% better price than market
-3. **Background Monitor** → Checks every 3 seconds
-4. **Validation** → Cancels if signal invalidates
-5. **Fill** → Moves to active position tracking
-
-**No Arbitrary Timeouts:**
-- Orders wait until filled or invalidated
-- No 90-second timeout
-- Better entry prices
+**Robust & Persistent:**
+- **Entry Flow:**
+    1. **Signal Detection** → 40+ indicators analyze market
+    2. **Limit Order** → Placed at 1.5% better price (adjustable)
+    3. **Background Monitor** → Checks fill status continuously
+    4. **Persistence** → Pending orders saved to `positions.json`, survive restarts
+- **Safety First:**
+    - **Strict Notional Check**: Validates order size against exchange limits (e.g., $5 min)
+    - **Safe Execution**: Rejects invalid orders locally to prevent API bans
+    - **No timeouts**: Orders wait until filled or invalidated by strategy
 
 ### Dynamic Leverage Tiers (Score-Based)
 
@@ -209,8 +207,14 @@ If a new signal flips the trend (Short -> Long or vice versa), the bot automatic
 
 ### Environment Variables (`.env`)
 ```bash
-BINANCE_API_KEY=your_api_key
-BINANCE_API_SECRET=your_secret
+# Exchange Keys (Required if using)
+BINANCE_API_KEY=your_binance_key
+BINANCE_API_SECRET=your_binance_secret
+
+BYBIT_API_KEY=your_bybit_key
+BYBIT_API_SECRET=your_bybit_secret
+
+# Notifications
 TELEGRAM_BOT_TOKEN=your_token
 TELEGRAM_CHAT_ID=your_chat_id
 ```

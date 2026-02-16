@@ -31,14 +31,16 @@ class RiskManager:
             self.peak_balance = current_balance
             
         # 1. Max Drawdown Check (from Peak)
-        drawdown = (self.peak_balance - current_balance) / self.peak_balance
-        if drawdown >= self.max_drawdown_pct:
-            return True, f"Max Drawdown Hit: {drawdown*100:.2f}%"
+        if self.peak_balance > 0:
+            drawdown = (self.peak_balance - current_balance) / self.peak_balance
+            if drawdown >= self.max_drawdown_pct:
+                return True, f"Max Drawdown Hit: {drawdown*100:.2f}%"
             
         # 2. Daily Loss Limit (from Day Start)
-        daily_loss = (self.starting_balance_day - current_balance) / self.starting_balance_day
-        if daily_loss >= self.daily_loss_limit_pct:
-            return True, f"Daily Loss Limit Hit: {daily_loss*100:.2f}%"
+        if self.starting_balance_day and self.starting_balance_day > 0:
+            daily_loss = (self.starting_balance_day - current_balance) / self.starting_balance_day
+            if daily_loss >= self.daily_loss_limit_pct:
+                return True, f"Daily Loss Limit Hit: {daily_loss*100:.2f}%"
             
         return False, "OK"
 
@@ -81,7 +83,7 @@ class RiskManager:
         Position Value = Cost * Leverage
         Size = Position Value / Price
         """
-        if entry_price <= 0: return 0
+        if entry_price <= 0 or cost_usdt <= 0: return 0
         
         position_value = cost_usdt * leverage
         qty = position_value / entry_price
