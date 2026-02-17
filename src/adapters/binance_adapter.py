@@ -22,6 +22,10 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         BaseExchangeClient.__init__(self, exchange_client)
         # Initialize BaseAdapter for standard interface
         BaseAdapter.__init__(self, exchange_client)
+        
+        # Explicitly suppress FetchOpenOrders warning for Binance
+        if hasattr(self.exchange, 'options'):
+            self.exchange.options['warnOnFetchOpenOrdersWithoutSymbol'] = False
 
     async def fetch_balance(self) -> Dict:
         """Fetch account balance."""
@@ -227,6 +231,9 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             full = f"{u}?{query}&signature={signature}"
             r = requests.post(full, headers=headers, timeout=10)
             if r.status_code >= 400:
+                # Silence "No need to change margin type"
+                if any(s in r.text.lower() for s in ["-4046", "no need to change", "not need to change", "already"]):
+                    return {"code": 200, "msg": "No change needed"}
                 raise Exception(f"Binance API Error {r.status_code}: {r.text}")
             return r.json()
 

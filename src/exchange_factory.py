@@ -19,6 +19,7 @@ def get_exchange_adapter(name=ACTIVE_EXCHANGE):
         options = {
             'defaultType': 'future',
             'adjustForTimeDifference': True,
+            'warnOnFetchOpenOrdersWithoutSymbol': False,
         }
         
         # Determine valid credentials

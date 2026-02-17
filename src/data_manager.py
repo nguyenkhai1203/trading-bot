@@ -166,7 +166,7 @@ class MarketDataManager:
         from config import OHLCV_REFRESH_INTERVAL
         curr_time = time.time()
         if not force and (curr_time - self._last_ohlcv_update < OHLCV_REFRESH_INTERVAL):
-            return 
+            return False 
 
         self._last_ohlcv_update = curr_time
         MAX_CANDLES = 1000 
@@ -231,6 +231,8 @@ class MarketDataManager:
         
         if save_to_disk:
             print(f"💾 Data saved to disk (cycle {self._update_counter})")
+        
+        return True
 
     async def load_from_disk(self, symbols, timeframes):
         """Load historical data from disk only (for dry_run mode)."""

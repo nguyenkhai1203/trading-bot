@@ -251,14 +251,16 @@ class Trader:
                         pass
 
     async def _verify_or_clear_id(self, pos_key, order_id, symbol, orders_in_snap):
-        """Authoritative check for order existence with indexing grace period."""
-        if not order_id: return None
+        """Authoritative check for order existence. Returns (verified_id, order_data)."""
+        if not order_id: return None, None
         
         # 1. Fast path: Check global snapshot
-        # Check ALL possible ID fields: id, orderId, algoId, clientAlgoId
-        if any(str(o.get('id') or o.get('orderId') or o.get('algoId') or o.get('clientAlgoId')) == str(order_id) for o in orders_in_snap or []):
-            self._missing_order_counts[order_id] = 0
-            return order_id
+        for o in orders_in_snap or []:
+            # Check ALL possible ID fields: id, orderId, algoId, clientAlgoId
+            chk_id = str(o.get('id') or o.get('orderId') or o.get('algoId') or o.get('clientAlgoId'))
+            if chk_id == str(order_id):
+                self._missing_order_counts[order_id] = 0
+                return order_id, o
             
         # 2. Authoritative path: Targeted fetch
         try:
@@ -266,13 +268,11 @@ class Trader:
             status = o_info.get('status', '').lower()
             if status in ['open', 'untouched', 'new', 'partially_filled']:
                 self._missing_order_counts[order_id] = 0
-                return order_id
+                return order_id, o_info
             else:
                 self.logger.info(f"[SYNC] Order {order_id} is {status}. Clearing from local state.")
                 if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
-                return None
-                if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
-                return None
+                return None, None
         except Exception as e:
             err_str = str(e).lower()
             
@@ -285,17 +285,17 @@ class Trader:
                     # 1. Try Open Orders (If it's not open, and it's too old for Bybit to fetch recent history, 
                     # we can usually assume it's closed/filled/cancelled if we don't see it in open orders)
                     open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
-                    is_open = any(str(o.get('id')) == str(order_id) or str(o.get('clientOrderId')) == str(order_id) for o in open_orders)
+                    found_o = next((o for o in open_orders if str(o.get('id')) == str(order_id) or str(o.get('clientOrderId')) == str(order_id)), None)
                     
-                    if is_open:
+                    if found_o:
                         self._missing_order_counts[order_id] = 0
-                        return order_id
+                        return order_id, found_o
                     else:
                         # If not in open orders and too old for Bybit's fetchOrder, we "ghost" it
                         # as it's likely gone. But we do it only if we've seen this error.
                         self.logger.info(f"[SYNC] Order {order_id} not in open orders and too old for Bybit Fetch/History. Clearing.")
                         if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
-                        return None
+                        return None, None
                         
                 except Exception as fb_e:
                     self.logger.warning(f"[SYNC] Fallback search failed for {order_id}: {fb_e}")
@@ -305,9 +305,10 @@ class Trader:
                 try:
                     # Check Algo orders directly for this symbol
                     algo_orders = await self._execute_with_timestamp_retry(self.exchange.fapiPrivateGetOpenAlgoOrders, {'symbol': self._normalize_symbol(symbol)})
-                    if any(str(o.get('id')) == str(order_id) for o in algo_orders):
+                    found_algo = next((o for o in algo_orders if str(o.get('id')) == str(order_id)), None)
+                    if found_algo:
                         self._missing_order_counts[order_id] = 0
-                        return order_id
+                        return order_id, found_algo
                 except Exception: pass # If algo check fails, proceed to grace period
 
                 # 3. Grace Period path: Handle exchange indexing lag
@@ -315,15 +316,15 @@ class Trader:
                 self._missing_order_counts[order_id] = count
                 if count < 3:
                      self.logger.warning(f"[SYNC] {symbol} order {order_id} NOT FOUND (Cycle {count}/3). Keeping in Grace Period...")
-                     return order_id # Assume ALIVE during grace period
+                     return order_id, None # Assume ALIVE during grace period (No data)
                 else:
                      self.logger.warning(f"[SYNC] {symbol} order {order_id} NOT FOUND after 3 cycles. Wiping ID.")
                      if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
-                     return None
+                     return None, None
             else:
                 # Network error or other API issue: Keep for safety
                 self.logger.warning(f"[SYNC] Transient error verifying {order_id} for {symbol}: {e}")
-                return order_id 
+                return order_id, None 
 
     def _normalize_symbol(self, symbol):
         """Standardize symbol format for reliable comparison (ARBUSDT style)."""
@@ -1658,7 +1659,7 @@ class Trader:
                 err = str(e).lower()
                 if "-4067" in err or "side cannot be changed" in err:
                     print(f"ℹ️  {symbol}: Margin mode preserved (open orders/positions exist)")
-                elif "no change" in err or "already" in err:
+                elif any(s in err for s in ["no change", "already", "-4046", "not need to change", "no need to change"]):
                     pass # Already set, ignore
                 else:
                     print(f"⚠️  Could not set margin mode for {symbol}: {e}")
@@ -1739,6 +1740,9 @@ class Trader:
             full = f"{u}?{query}&signature={signature}"
             r = requests.post(full, headers=headers, timeout=10)
             if r.status_code >= 400:
+                # Silence "No need to change margin type"
+                if any(s in r.text.lower() for s in ["-4046", "no need to change", "not need to change", "already"]):
+                    return {"code": 200, "msg": "No change needed"}
                 raise Exception(f"Binance API Error {r.status_code}: {r.text}")
             return r.json()
 
@@ -2147,10 +2151,27 @@ class Trader:
                             continue
 
                         # 1. VERIFY SL (With Grace Period)
-                        found_sl = await self._verify_or_clear_id(pos_key, found_sl, symbol, symbol_orders)
+                        # 1. VERIFY SL (With Grace Period)
+                        found_sl, sl_order = await self._verify_or_clear_id(pos_key, found_sl, symbol, symbol_orders)
                         
                         # 2. VERIFY TP (With Grace Period)
-                        found_tp = await self._verify_or_clear_id(pos_key, found_tp, symbol, symbol_orders)
+                        found_tp, tp_order = await self._verify_or_clear_id(pos_key, found_tp, symbol, symbol_orders)
+
+                        # SYNC PRICES FROM EXCHANGE (If verified)
+                        prices_changed = False
+                        if sl_order:
+                            new_sl = float(sl_order.get('stopPrice') or sl_order.get('triggerPrice') or 0)
+                            if new_sl > 0 and new_sl != pos.get('sl'):
+                                self.logger.info(f"[SYNC] Updating SL price for {pos_key}: {pos.get('sl')} -> {new_sl}")
+                                pos['sl'] = new_sl
+                                prices_changed = True
+
+                        if tp_order:
+                            new_tp = float(tp_order.get('stopPrice') or tp_order.get('triggerPrice') or tp_order.get('price') or 0)
+                            if new_tp > 0 and new_tp != pos.get('tp'):
+                                self.logger.info(f"[SYNC] Updating TP price for {pos_key}: {pos.get('tp')} -> {new_tp}")
+                                pos['tp'] = new_tp
+                                prices_changed = True
 
                         # 3. DISCOVERY (If local missing, check sàn using normalized symbols)
                         if not found_sl or not found_tp:
@@ -2158,17 +2179,22 @@ class Trader:
                                 # ROBUST Algo ID Matching
                                 o_id = str(o.get('algoId') or o.get('orderId') or o.get('id') or o.get('info', {}).get('orderId', ''))
                                 o_type = str(o.get('type') or o.get('info', {}).get('type', '') or o.get('algoType', '')).upper()
-                                o_symbol = self._normalize_symbol(o.get('symbol'))
                                 
-                                if not found_sl and ('STOP' in o_type or o.get('algoType') == 'STOP_LOSS'):
+                                # BROADER CHECK for STOP orders
+                                is_stop = ('STOP' in o_type or o.get('algoType') == 'STOP_LOSS')
+                                
+                                # BROADER CHECK for TP orders (Include LIMIT for manual TP)
+                                is_tp = ('TAKE' in o_type or 'LIMIT' in o_type or o.get('algoType') == 'TAKE_PROFIT')
+                                
+                                if not found_sl and is_stop:
                                     found_sl = o_id
                                     self.logger.info(f"[SYNC] Discovered existing SL for {pos_key}: {o_id}")
-                                elif not found_tp and ('TAKE' in o_type or o.get('algoType') == 'TAKE_PROFIT'):
+                                elif not found_tp and is_tp:
                                     found_tp = o_id
                                     self.logger.info(f"[SYNC] Discovered existing TP for {pos_key}: {o_id}")
 
                         # Update persistence if changed
-                        if found_sl != pos.get('sl_order_id') or found_tp != pos.get('tp_order_id'):
+                        if found_sl != pos.get('sl_order_id') or found_tp != pos.get('tp_order_id') or prices_changed:
                             pos['sl_order_id'] = found_sl
                             pos['tp_order_id'] = found_tp
                             self.active_positions[pos_key] = pos
@@ -2280,14 +2306,14 @@ class Trader:
 
         # Use helper for authoritative verification
         if sl_id:
-            verified_sl = await self._verify_or_clear_id(pos_key, sl_id, symbol, orders_in_snap)
+            verified_sl, _ = await self._verify_or_clear_id(pos_key, sl_id, symbol, orders_in_snap)
             if verified_sl:
                 res['sl_exists'] = True
             else:
                 pos['sl_order_id'] = None # Clear if definitively gone
 
         if tp_id:
-            verified_tp = await self._verify_or_clear_id(pos_key, tp_id, symbol, orders_in_snap)
+            verified_tp, _ = await self._verify_or_clear_id(pos_key, tp_id, symbol, orders_in_snap)
             if verified_tp:
                 res['tp_exists'] = True
             else:

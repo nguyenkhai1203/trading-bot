@@ -158,7 +158,7 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         """Fetch balance for UNIFIED account (V5 linear)."""
         try:
             # Bybit V5 often needs accountType=UNIFIED specified
-            res = await self.exchange.fetch_balance(params={'accountType': 'UNIFIED'})
+            res = await self.exchange.fetch_balance()
             
             # Diagnostic Log: See exactly what CCXT found
             total_usdt = res.get('total', {}).get('USDT', 0)
@@ -199,6 +199,17 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                 continue # Try next casing
         
         self.logger.warning(f"[Bybit] Set margin mode failed for {symbol}: {last_err}")
+
+    async def fetch_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
+        """Fetch order with Bybit-specific acknowledgment to hide warnings."""
+        extra_params = {'acknowledged': True}
+        extra_params.update(params)
+        return await self._execute_with_timestamp_retry(
+            self.exchange.fetch_order,
+            order_id,
+            symbol,
+            extra_params
+        )
 
     async def close(self):
         """Close exchange connection."""

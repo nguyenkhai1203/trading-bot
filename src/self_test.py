@@ -236,6 +236,139 @@ class SelfTest:
             print(f"\n⚠️  {self.failed} TEST(S) FAILED. Review errors above.")
             return False
 
+    async def test_profit_lock_simulation(self):
+        """Test 6: Simulation of Profit Lock Logic (v3.0)."""
+        print("\n" + "="*70)
+        print("[TEST 6] Profit Lock Logic Simulation")
+        print("="*70)
+        
+        try:
+            from execution import Trader
+            
+            # Mock Exchange for Simulation
+            class MockExchange:
+                def __init__(self):
+                    self.name = 'BYBIT'
+                    self.is_public_only = False
+                    self.can_trade = True
+                    self.is_authenticated = True
+                    self.apiKey = 'mock_key' 
+                    self.secret = 'mock_secret'
+                async def fetch_ticker(self, symbol): return {'last': 100.0}
+                async def cancel_order(self, order_id, symbol): return True
+                async def create_order(self, symbol, type, side, qty, price=None, params=None):
+                    return {'id': 'mock_order_id'}
+                async def fetch_leverage(self, symbol): return {'leverage': 5}
+
+            mock_ex = MockExchange()
+            trader = Trader(mock_ex, dry_run=False) # Use live logic with mock API
+            
+            # Setup Mock Position
+            symbol = "BTC/USDT"
+            pos_key = f"BYBIT_{symbol}_1h"
+            trader.active_positions[pos_key] = {
+                'symbol': symbol,
+                'side': 'BUY',
+                'entry_price': 100.0,
+                'tp': 110.0,
+                'sl': 95.0,
+                'qty': 0.1,
+                'status': 'filled',
+                'sl_order_id': 'initial_sl_id',
+                'tp_order_id': 'initial_tp_id'
+            }
+            
+            # Simulate Price Movement triggering profit lock
+            # Price 108.5 > 100 + (10 * 0.8) [108.0]
+            price = 108.5
+            resistance = 115.0
+            atr = 2.0
+            
+            updated = await trader.adjust_sl_tp_for_profit_lock(
+                pos_key, price, resistance=resistance, support=None, atr=atr
+            )
+            
+            if updated:
+                pos = trader.active_positions[pos_key]
+                if pos['sl'] > 100.0 and pos['tp'] == 115.0:
+                    self.log_test("Profit Lock Trigger", True, f"SL moved to {pos['sl']}, TP extended to {pos['tp']}")
+                else:
+                     self.log_test("Profit Lock Trigger", False, f"Logic triggered but values incorrect: SL={pos['sl']}, TP={pos['tp']}")
+            else:
+                self.log_test("Profit Lock Trigger", False, "Failed to trigger profit lock at target price")
+                
+        except Exception as e:
+            self.log_test("Profit Lock Simulation", False, str(e))
+
+    async def test_live_execution(self):
+        """Test 7: LIVE/DRY-RUN Execution Test (Optional)."""
+        # Only run if explicitly requested via env var to avoid accidental orders
+        if os.getenv('RUN_LIVE_TEST', 'false').lower() != 'true':
+            return
+
+        print("\n" + "="*70)
+        print("[TEST 7] Advanced Order Execution (Live/Dry-Run)")
+        print("="*70)
+        
+        try:
+            import ccxt.async_support as ccxt
+            from dotenv import load_dotenv
+            load_dotenv()
+            
+            api_key = os.getenv('BYBIT_API_KEY')
+            api_secret = os.getenv('BYBIT_API_SECRET')
+            
+            if not api_key:
+                self.log_test("Live Execution", False, "Skipping: No API keys found")
+                return
+
+            exchange = ccxt.bybit({
+                'apiKey': api_key,
+                'secret': api_secret,
+                'options': {'defaultType': 'future'},
+            })
+            
+            symbol = 'XRP/USDT' # Cheap test symbol
+            
+            # 1. Setup
+            try:
+                await exchange.set_margin_mode('isolated', symbol)
+                await exchange.set_leverage(10, symbol)
+            except Exception: pass # Might already be set
+            
+            # 2. Limit Buy Order (Deep limit to avoid fill)
+            ticker = await exchange.fetch_ticker(symbol)
+            price = ticker['last'] * 0.8 # 20% below market
+            qty = 10.0 / price # ~$10 notional
+            if qty < 1: qty = 1
+            qty = int(qty)
+            
+            params = {
+                'stopLoss': str(round(price * 0.9, 4)),
+                'takeProfit': str(round(price * 1.1, 4)),
+            }
+            
+            print(f"      Placing Test Order: {symbol} @ {price}")
+            order = await exchange.create_order(symbol, 'limit', 'buy', qty, price, params=params)
+            
+            # 3. Verify
+            await asyncio.sleep(1)
+            orders = await exchange.fetch_open_orders(symbol)
+            my_order = next((o for o in orders if str(o['id']) == str(order['id'])), None)
+            
+            if my_order:
+                self.log_test("Order Placement", True, f"Order {order['id']} created with SL/TP")
+                # 4. Cancel
+                await exchange.cancel_order(order['id'], symbol)
+                self.log_test("Order Cancellation", True, "Order cancelled successfully")
+            else:
+                 self.log_test("Order Placement", False, "Order created but not found in open orders")
+            
+            await exchange.close()
+            
+        except Exception as e:
+            self.log_test("Live Execution", False, str(e))
+
 async def main():
     """Run all self-tests."""
     print("="*70)
@@ -251,6 +384,8 @@ async def main():
     tester.test_strategy_config()
     tester.test_positions_integrity()
     tester.test_module_imports()
+    await tester.test_profit_lock_simulation()
+    await tester.test_live_execution()
     
     # Print summary
     success = tester.print_summary()

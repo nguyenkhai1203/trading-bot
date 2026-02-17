@@ -33,6 +33,7 @@ class NeuralBrain:
         }
         
         self.model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'brain_weights.json')
+        self.is_trained = False
         self.load_model()
 
     def relu(self, z):
@@ -93,6 +94,7 @@ class NeuralBrain:
             self.weights['b1'] = np.array(data['b1'])
             self.weights['W2'] = np.array(data['W2'])
             self.weights['b2'] = np.array(data['b2'])
+            self.is_trained = True
             print("🧠 Brain loaded successfully.")
         except Exception as e:
             print(f"⚠️ Failed to load brain ({e}). Using random weights.")

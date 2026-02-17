@@ -27,8 +27,15 @@ from data_manager import MarketDataManager
 from strategy import WeightedScoringStrategy 
 from risk_manager import RiskManager
 from execution import Trader
-from notification import send_telegram_message
-from notification_helper import format_order_cancelled, format_position_filled, format_position_closed
+from notification import (
+    send_telegram_message,
+    format_pending_order,
+    format_position_filled,
+    format_position_closed,
+    format_order_cancelled,
+    format_status_update,
+    format_adaptive_trigger
+)
 from signal_tracker import tracker as signal_tracker
 
 # ...
@@ -66,6 +73,13 @@ class BalanceTracker:
         """Release reserved funds (e.g. after order placement or failure)."""
         if exchange_name in self.balances:
             self.balances[exchange_name]['reserved'] = max(0.0, self.balances[exchange_name]['reserved'] - amount)
+
+    def reset_reservations(self):
+        """Reset all reservations. Should be called periodically to clear leaks."""
+        for ex in self.balances:
+            if self.balances[ex]['reserved'] > 0:
+                print(f"🧹 [BALANCE] Clearing leaked reservations for {ex}: ${self.balances[ex]['reserved']:.2f} -> $0.00")
+            self.balances[ex]['reserved'] = 0.0
 
 class TradingBot:
     def __init__(self, symbol, timeframe, data_manager, trader, balance_tracker=None):
@@ -279,12 +293,16 @@ class TradingBot:
                                 new_tp=e_tp
                             )
                             if success:
-                                # Update local cache immediately
-                                existing_pos = self.trader.active_positions.get(pos_key, existing_pos)
-                                existing_pos['sl'] = e_sl
-                                existing_pos['tp'] = e_tp
-                                self.trader.active_positions[pos_key] = existing_pos
-                                sl, tp = e_sl, e_tp
+                                # Update local variables for the rest of this loop iteration
+                                # modify_sl_tp now returns the updated position dict
+                                if isinstance(success, dict):
+                                    existing_pos = success
+                                    sl = existing_pos.get('sl')
+                                    tp = existing_pos.get('tp')
+                                else:
+                                    # Fallback if it returns boolean
+                                    existing_pos = self.trader.active_positions.get(pos_key, existing_pos)
+                                    sl, tp = e_sl, e_tp
 
                 # Calculate unrealized PnL for monitoring (with leverage)
                 if side == 'BUY':
@@ -530,14 +548,22 @@ class TradingBot:
                     last_trade_side = signal_tracker.get_last_trade_side(self.symbol)
                     is_reversal = last_trade_side and last_trade_side != side
                     
+                    # Get exchange min cost early to support floor-aware reduction
+                    try:
+                        market = self.trader.exchange.market(self.symbol)
+                        exchange_min_notional = float(market.get('limits', {}).get('cost', {}).get('min', 5.0) or 5.0)
+                    except:
+                        exchange_min_notional = 5.0
+
                     # Dynamic Tier Sizing - Get leverage early for display
                     score = conf * 10
                     tier = self.get_tier_config(score)
                     target_lev = tier.get('leverage', LEVERAGE)
                     
                     if is_reversal:
-                        print(f"⚠️ [{self.symbol} {self.timeframe}] REVERSAL DETECTED ({last_trade_side} -> {side}). Reduction: x{target_lev} -> x{max(3, int(target_lev*0.6))}")
-                        target_lev = max(3, int(target_lev * 0.6)) # Reduce leverage for early reversal protection
+                        new_lev = max(3, int(target_lev * 0.6))
+                        print(f"⚠️ [{self.symbol} {self.timeframe}] REVERSAL DETECTED ({last_trade_side} -> {side}). Reduction: x{target_lev} -> x{new_lev}")
+                        target_lev = new_lev
                     
                     tech_info = f" ({', '.join(confirm_signals)})" if confirm_signals else ""
                     print(f"🎯 [{self.symbol} {self.timeframe}] SIGNAL FOUND: {side} x{target_lev}{tech_info} | Conf: {conf:.2f} | Price: {current_price:.3f}")
@@ -563,13 +589,29 @@ class TradingBot:
                         # Fixed Margin Mode (User Preferred)
                         actual_cost = target_cost
                         if is_reversal:
-                            actual_cost *= 0.5 # 50% size for early reversal entries
+                            # Safely reduce cost while respecting exchange floor
+                            unreduced_notional = target_cost * target_lev
+                            reduced_cost = target_cost * 0.5
+                            reduced_notional = reduced_cost * target_lev
+                            
+                            if reduced_notional < exchange_min_notional and unreduced_notional >= exchange_min_notional:
+                                # Compensate to exactly meet the floor + small buffer
+                                actual_cost = (exchange_min_notional * 1.05) / target_lev
+                                print(f"⛽ [{self.symbol}] Floor Protection: Adjusting reversal cost to ${actual_cost:.2f} to meet ${exchange_min_notional} min.")
+                            else:
+                                actual_cost = reduced_cost # Normal 50% reduction
                         
                         # Ensure we don't exceed available balance if it's very low
                         # but NEVER exceed the user's hard cap of $5
                         if actual_cost > current_equity:
                              safe_cost = max(0, current_equity * 0.98) # Reduced buffer to 2% for fees (was 5%)
-                             print(f"⚠️ [{self.symbol}] Scaling down Margin: ${actual_cost:.2f} -> ${safe_cost:.2f} (Available: ${current_equity:.2f})")
+                             if self.balance_tracker:
+                                 b = self.balance_tracker.balances.get(self.trader.exchange_name, {})
+                                 total = b.get('total', 0)
+                                 reserved = b.get('reserved', 0)
+                                 print(f"⚠️ [{self.symbol}] Scaling down Margin: ${actual_cost:.2f} -> ${safe_cost:.2f} (Total Equity: ${total:.2f} | Reserved: ${reserved:.2f} | Available: ${current_equity:.2f})")
+                             else:
+                                 print(f"⚠️ [{self.symbol}] Scaling down Margin: ${actual_cost:.2f} -> ${safe_cost:.2f} (Available: ${current_equity:.2f})")
                              actual_cost = safe_cost
                         
                         # Minimum Notional Check: If after scale-down it's too small, skip
@@ -592,34 +634,18 @@ class TradingBot:
                     
                     # === MINIMUM NOTIONAL FLOOR ===
                     # Exchanges have minimum notional (Qty * Price) requirements.
-                    # We check the exchange metadata to find the exact floor (e.g., $5 for XRP, $20 for ETH on Binance).
-                    try:
-                        market = self.trader.exchange.market(self.symbol)
-                        min_cost = market.get('limits', {}).get('cost', {}).get('min', 5.0) or 5.0
-                    except:
-                        min_cost = 5.50 # Fallback
-                        
+                    # We already fetched exchange_min_notional earlier.
+                    strict_min_notional = exchange_min_notional
+                    exchange_min_cost = exchange_min_notional # For logging compatibility
+
                     actual_notional = qty * current_price
-                    if qty > 0 and actual_notional < min_cost:
-                        # ATTEMPT TO FORCE MINIMUM
-                        # Check if we have enough equity to just barely meet the min notional
-                        required_margin = min_cost / target_lev
-                        # Use 1% buffer for fees
-                        if current_equity >= (required_margin * 1.01):
-                            print(f"⚠️ [{self.symbol}] Notional value ${actual_notional:.2f} < Min ${min_cost}. Bumping Margin to ${required_margin * 1.01:.2f} to meet min...")
-                            actual_cost = required_margin * 1.01 # Add tiny buffer
-                            qty = self.risk_manager.calculate_size_by_cost(current_price, actual_cost, target_lev)
-                            actual_notional = qty * current_price
-                            if actual_notional < min_cost:
-                                msg = f"[{self.symbol}] Still below min notional after force (${actual_notional:.2f} < ${min_cost}). Skipping."
-                                self.logger.warning(msg)
-                                print(f"⏹️ {msg}")
-                                qty = 0
-                        else:
-                             msg = f"[{self.symbol}] Notional value ${actual_notional:.2f} < Min ${min_cost}. Insufficient equity (${current_equity:.2f}) to cover required margin (${required_margin:.2f}). Skipping."
-                             self.logger.warning(msg)
-                             print(f"⏹️ {msg}")
-                             qty = 0 # Skip
+                    
+                     # Allow a tiny Floating Point tolerance (e.g. 9.99 vs 10.0)
+                    if qty > 0 and actual_notional < (strict_min_notional * 0.99):
+                         msg = f"[{self.symbol}] Calculated Size ${actual_notional:.2f} < Strict Min ${strict_min_notional:.2f} (Exch: ${exchange_min_cost}). Skipping (Strict Rule)."
+                         self.logger.warning(msg)
+                         print(f"⏹️ {msg}")
+                         qty = 0 # STRICT SKIP
                     
                     if qty > 0:
                         # Calculate estimated margin cost for reservation
@@ -1008,6 +1034,10 @@ async def main():
         while True:
             curr_time = time.time()
             
+            # -1. Reset Reservations (Self-Healing)
+            # Since main loop waits for all bots to finish each cycle, any leftover reservations are leaks.
+            balance_tracker.reset_reservations()
+            
             # 0. Sync Server Time
             if curr_time - last_time_sync >= 3600:
                 print("⏲ Syncing server time for all exchanges...")
@@ -1048,7 +1078,7 @@ async def main():
 
             # 1. Update Market Data
             await manager.update_tickers(TRADING_SYMBOLS)
-            await manager.update_data(TRADING_SYMBOLS, TRADING_TIMEFRAMES)
+            data_updated = await manager.update_data(TRADING_SYMBOLS, TRADING_TIMEFRAMES)
             
             # 1.5. Reload config
             # Check strategy_config.json
@@ -1079,6 +1109,7 @@ async def main():
                 if trader.dry_run:
                     current_bal = get_current_balance()
                 elif not trader.exchange.is_authenticated:
+                    print(f"⚠️ [{ex_name}] Not Authenticated - Defaulting balance to 0.0")
                     current_bal = 0.0
                 else:
                     try:
@@ -1091,10 +1122,11 @@ async def main():
                         if current_bal == 0:
                              current_bal = float(bal_data.get('free', {}).get('USDT', 0))
                         
-                        # LOG THE TOTAL EQUITY BEING USED
-                        # print(f"💰 [{ex_name}] Total Equity: {current_bal:.2f} USDT")
+                        # LOG THE TOTAL EQUITY (DEBUG)
+                        print(f"💰 [{ex_name}] Balance Fetch: {current_bal:.2f} USDT")
+
                     except Exception as e:
-                        print(f"⚠️ [{ex_name}] Failed to fetch real balance: {e}")
+                        print(f"⚠️ [{ex_name}] Failed to fetch real balance details: {e}")
                         # FORCE 0 for live trades if fetch fails
                         current_bal = 0.0 
 
@@ -1134,8 +1166,10 @@ async def main():
                 try: await trader.reconcile_positions()
                 except: pass
             
-            from config import HEARTBEAT_INTERVAL
-            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            from config import HEARTBEAT_INTERVAL, FAST_HEARTBEAT_INTERVAL
+            # Dynamic Sleep: Fast if no data update, Slow if data updated
+            sleep_time = HEARTBEAT_INTERVAL if data_updated else FAST_HEARTBEAT_INTERVAL
+            await asyncio.sleep(sleep_time)
             
     except KeyboardInterrupt:
         print("Stopping...")

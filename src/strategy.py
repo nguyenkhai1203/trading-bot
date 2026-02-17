@@ -272,29 +272,41 @@ class WeightedScoringStrategy(Strategy):
             final_side = 'BUY'
             base_conf = min(score_long / 10.0, 1.0)
             
-            if neural_score < 0.3:
-                final_side = 'SKIP'
-                comment = f"Brain VETO (Score {neural_score:.2f}) on Long"
-            elif neural_score > 0.8:
-                final_conf = min(base_conf * 1.2, 1.0) # 20% Boost
-                comment = f"Long Score {score_long:.1f} + Brain {neural_score:.2f} 🚀"
+            # --- BRAIN INTERVENTION (Only if trained) ---
+            if self.use_brain and self.brain.is_trained:
+                if neural_score < 0.3:
+                    final_side = 'SKIP'
+                    comment = f"Brain VETO (Score {neural_score:.2f}) on Long"
+                elif neural_score > 0.8:
+                    final_conf = min(base_conf * 1.2, 1.0) # 20% Boost
+                    comment = f"Long Score {score_long:.1f} + Brain {neural_score:.2f} 🚀"
+                else:
+                    final_conf = base_conf
+                    comment = f"Long Score {score_long:.1f} ({','.join(reasons_long)})"
             else:
                 final_conf = base_conf
-                comment = f"Long Score {score_long:.1f} ({','.join(reasons_long)})"
+                brain_status = "WaitData" if (self.use_brain and not self.brain.is_trained) else "Off"
+                comment = f"Long Score {score_long:.1f} (Brain:{brain_status})"
 
         elif score_short >= entry_thresh:
             final_side = 'SELL'
             base_conf = min(score_short / 10.0, 1.0)
             
-            if neural_score < 0.3:
-                final_side = 'SKIP'
-                comment = f"Brain VETO (Score {neural_score:.2f}) on Short"
-            elif neural_score > 0.8:
-                final_conf = min(base_conf * 1.2, 1.0) # 20% Boost
-                comment = f"Short Score {score_short:.1f} + Brain {neural_score:.2f} 🚀"
+            # --- BRAIN INTERVENTION (Only if trained) ---
+            if self.use_brain and self.brain.is_trained:
+                if neural_score < 0.3:
+                    final_side = 'SKIP'
+                    comment = f"Brain VETO (Score {neural_score:.2f}) on Short"
+                elif neural_score > 0.8:
+                    final_conf = min(base_conf * 1.2, 1.0) # 20% Boost
+                    comment = f"Short Score {score_short:.1f} + Brain {neural_score:.2f} 🚀"
+                else:
+                    final_conf = base_conf
+                    comment = f"Short Score {score_short:.1f} ({','.join(reasons_short)})"
             else:
                 final_conf = base_conf
-                comment = f"Short Score {score_short:.1f} ({','.join(reasons_short)})"
+                brain_status = "WaitData" if (self.use_brain and not self.brain.is_trained) else "Off"
+                comment = f"Short Score {score_short:.1f} (Brain:{brain_status})"
                 
         signal = {
             'side': final_side,

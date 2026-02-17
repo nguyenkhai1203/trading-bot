@@ -81,7 +81,8 @@ REQUIRE_TECHNICAL_CONFIRMATION = False  # Require Fibo/S/R alignment before entr
 # Signal Quality Filter
 MIN_WINRATE_THRESHOLD = 0.50  # Minimum winrate (50%) required to trade a signal
 # Bot will check signal_performance.json and only trade signals with winrate >= this threshold
-HEARTBEAT_INTERVAL = 5  # Main loop interval in seconds
+HEARTBEAT_INTERVAL = 5  # Main loop interval in seconds (Slow loop)
+FAST_HEARTBEAT_INTERVAL = 1.0  # Fast loop interval when data is fresh (Quick check)
 OHLCV_REFRESH_INTERVAL = 60  # OHLCV data refresh interval in seconds (1 minute)
 
 # Confidence-Based Position Sizing (Conservative Settings)
@@ -90,17 +91,17 @@ CONFIDENCE_TIERS = {
     "high": {
         "min_confidence": 0.70,  # 70%+ confidence
         "leverage": 5,          # Max leverage
-        "cost_usdt": 5.0         # $4 per trade (Base Max)
+        "cost_usdt": 5.0         # $5 per trade (Matches Global Max)
     },
     "medium": {
         "min_confidence": 0.50,  # 50-70% confidence
         "leverage": 4,           # Medium leverage
-        "cost_usdt": 4.0         # $4 per trade (Base)
+        "cost_usdt": 4.0         # $3 per trade
     },
     "low": {
         "min_confidence": 0.30,  # 30-50% confidence
-        "leverage": 3,           # Low leverage for safety
-        "cost_usdt": 3.0         # $3 per trade (Lower than base)
+        "leverage": 4,           # Low leverage for safety
+        "cost_usdt": 3.0         # $2 per trade (Allows smaller entries)
     }
 }
 MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade
