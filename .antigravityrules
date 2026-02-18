@@ -5,6 +5,7 @@
 - **Navigation:** Use `walkthrough.md` as the GPS to locate the correct module and its mindset map.
 - **Strategy:** Consult `knowledge.md` to ensure logic aligns with the core Trading Strategy and to avoid repeating mistakes documented in "Lessons Learned."
 - **Structure:** Follow the technical patterns (Adapters, Singletons, Syncing) defined in `architecture.md`.
+- **FUND** If the exchange requirenfund more than the bot can pay as leverage * cost, need to ignore the trade.
 
 ## 2. FILE HYGIENE (ZERO JUNK POLICY)
 - **Prohibition:** NO creation of temporary `.txt`, `.md`, or `.log` files outside of the `.brain/` folder for explanations or backups.

@@ -83,7 +83,7 @@ async def get_status_message() -> str:
         ex_name = ex_name.upper()
         
         # Detect Public Mode
-        is_public = not adapter.exchange.apiKey or adapter.exchange.get('is_public_only', False)
+        is_public = not adapter.exchange.apiKey or getattr(adapter, 'is_public_only', False)
         if is_public:
             is_virtual_any = True
             header = f"🏦 *{ex_name}* (VIRTUAL)"

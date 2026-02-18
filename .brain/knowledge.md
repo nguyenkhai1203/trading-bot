@@ -15,7 +15,7 @@
 
 ---
 
-## 🩸 Lessons Learned & "Vết sẹo" History
+## 🩸 Lessons Learned & bug History
 
 This section documents critical lessons learned through debugging sessions to ensure we never repeat past mistakes.
 

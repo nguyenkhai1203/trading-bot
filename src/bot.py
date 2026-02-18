@@ -760,10 +760,18 @@ class TradingBot:
 
                         if res:
                             mode_label = "🟢 LIVE" if not self.trader.dry_run else "🧪 TEST"
-                            # Status: PENDING for limit, FILLED for market
-                            # Use status from result if available
-                            status = (res.get('status') or 'unknown').upper()
-                            status_label = f"📌 {status}" if status == 'PENDING' or order_type == 'limit' else f"✅ {status}"
+                            # Status Mapping: Map CCXT variations to user-friendly labels
+                            raw_status = (res.get('status') or '').lower()
+                            if raw_status in ['open', 'pending']:
+                                status = 'PENDING'
+                            elif raw_status in ['closed', 'filled']:
+                                status = 'FILLED'
+                            elif order_type == 'limit':
+                                status = 'PENDING' # Default for limit
+                            else:
+                                status = 'FILLED' # Default for market
+                                
+                            status_label = f"📌 {status}" if status == 'PENDING' else f"✅ {status}"
                             
                             # Escape symbol for Telegram (replace / with -)
                             safe_symbol = self.symbol.replace('/', '-')

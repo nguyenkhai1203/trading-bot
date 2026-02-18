@@ -42,6 +42,21 @@ Handles the complexity of "Algo Orders":
 - **Algo Cancellation**: Uses specialized `fapiPrivateDeleteAlgoOrder` for TP/SL.
 - **Symbol Normalization**: Maps unified symbols to Binance internal formats (e.g., `BTC/USDT:USDT` -> `BTCUSDT`).
 
+### 4. Dynamic Order Updates & Market Adaptation
+The system employs a dual-logic approach to manage active positions based on both strategy confidence and technical market structure.
+
+#### **A. TA-Driven Extensions (Market Structure)**
+- **Logic**: Uses Technical Analysis to expand profits when momentum is strong.
+- **TP Extensions**: If Resistance (for Buy) or Support (for Sell) is detected beyond the initial TP, the bot extends the target up to 1.5x the original distance.
+- **ATR Fallback**: If structural levels (S/R) are unavailable, uses `ATR * ATR_EXT_MULTIPLIER` for dynamic expansion.
+- **Profit Lock**: Automatically moves SL to a "Positive Profit Zone" once the trade reaches 80% of its target (Profit Lock Level).
+
+#### **B. Emergency Adaptive Shielding (`tighten_sl`)**
+- **Mental Model**: This is a **Safety Buffer**, NOT a primary strategy move. 
+- **Trigger**: Activated only when the **Strategy Confidence** drops significantly (e.g., < 50% of entry confidence) or market delta shifts against the trade.
+- **Mechanical Factor (0.5)**: Acts as an emergency shield by moving the SL 50% closer to the entry price to minimize drawdown when the underlying signal becomes "shaky."
+- **Function**: `trader.tighten_sl(pos_key, factor=0.5)` - strictly for risk mitigation when technical entry conditions start to fade.
+
 ---
 
 ## 3. Position & Order Synchronization
