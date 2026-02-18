@@ -25,6 +25,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from config import BINANCE_API_KEY, BINANCE_API_SECRET
 from execution import Trader
 from data_manager import MarketDataManager
+from analyzer import run_global_optimization
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -55,133 +56,158 @@ async def close():
 
 # ============== STATUS MESSAGE ==============
 async def get_status_message() -> str:
-    """Generate beautiful status message with P&L"""
-    # Read positions from the shared JSON file - use absolute path for reliability
+    """Generate authoritative status message by fetching live data from exchanges."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     positions_file = os.path.join(script_dir, 'positions.json')
     
-    # Try multiple times in case of file access conflicts
-    all_positions = {}
-    max_retries = 5
-    
-    # Log to file for debugging
-    log_file = os.path.join(script_dir, 'telegram_debug.log')
-    with open(log_file, 'a', encoding='utf-8') as log:
-        log.write(f"{datetime.now()}: Starting position read attempt\n")
-    
-    for attempt in range(max_retries):
-        try:
-            if os.path.exists(positions_file) and os.path.getsize(positions_file) > 0:
-                with open(positions_file, 'r', encoding='utf-8') as f:
-                    all_positions = json.load(f)
-                    with open(log_file, 'a', encoding='utf-8') as log:
-                        log.write(f"{datetime.now()}: SUCCESS - Loaded {len(all_positions)} positions\n")
-                    break
-            else:
-                all_positions = {}
-                with open(log_file, 'a', encoding='utf-8') as log:
-                    log.write(f"{datetime.now()}: File empty or missing\n")
-                break
-        except (json.JSONDecodeError, IOError, UnicodeDecodeError) as e:
-            with open(log_file, 'a', encoding='utf-8') as log:
-                log.write(f"{datetime.now()}: Attempt {attempt + 1} failed: {e}\n")
-            import asyncio
-            await asyncio.sleep(0.25 * (attempt + 1))
-    else:
-        all_positions = {}
-    
-    # Separate active and pending positions
-    active = {k: v for k, v in all_positions.items() if v.get('status') == 'filled'}
-    pending_pos = {k: v for k, v in all_positions.items() if v.get('status') == 'pending'}
-    
+    # 1. Load local metadata Draft
+    local_data = {}
+    try:
+        if os.path.exists(positions_file) and os.path.getsize(positions_file) > 0:
+            with open(positions_file, 'r', encoding='utf-8') as f:
+                local_data = json.load(f)
+    except Exception as e:
+        logging.error(f"Failed to load positions.json: {e}")
+
+    local_active = local_data.get('active_positions', {})
+    local_pending = local_data.get('pending_orders', {})
+
     now = datetime.now().strftime('%d/%m %H:%M')
-    lines = [f"📊 *TRADING STATUS* - {now}", ""]
+    lines = [f"📊 *AUTHORITATIVE STATUS* - {now}", ""]
     
-    total_pnl = 0
-    total_pnl_pct = 0
+    # 2. Fetch LIVE data from all adapters
+    is_virtual_any = False
+    is_live_any = False
     
-    # Active positions
-    if active:
-        lines.append(f"🟢 *ACTIVE ({len(active)})*")
-        lines.append("─" * 20)
+    for ex_name, adapter in data_manager.adapters.items():
+        ex_name = ex_name.upper()
         
-        for key, pos in active.items():
-            symbol = pos.get('symbol', key.split('_')[0])
-            side = pos.get('side', 'N/A')
-            entry = float(pos.get('entry_price', 0))
-            qty = float(pos.get('qty') or pos.get('amount', 0))
-            leverage = int(pos.get('leverage', 10))
-            sl = float(pos.get('sl') or 0.0)
-            tp = float(pos.get('tp') or 0.0)
+        # Detect Public Mode
+        is_public = not adapter.exchange.apiKey or adapter.exchange.get('is_public_only', False)
+        if is_public:
+            is_virtual_any = True
+            header = f"🏦 *{ex_name}* (VIRTUAL)"
+        else:
+            is_live_any = True
+            header = f"🏦 *{ex_name}*"
             
-            try:
-                ticker = await data_manager.fetch_ticker(symbol)
-                current = float(ticker['last']) if ticker else entry
-            except:
-                current = entry
+        lines.append(header)
+        
+        try:
+            live_positions = {}
+            pending_entries = []
             
-            if side.upper() == 'BUY':
-                pnl_pct = ((current - entry) / entry) * 100 * leverage
+            if is_public:
+                # --- PUBLIC MODE: Use Local Data as Source of Truth ---
+                # Filter local_active for this exchange
+                for l_key, l_pos in local_active.items():
+                    if l_key.startswith(f"{ex_name}_"):
+                        norm_sym = trader._normalize_symbol(l_pos.get('symbol'))
+                        # Convert to same format as fetch_positions result for reuse
+                        live_positions[norm_sym] = {
+                            'symbol': l_pos.get('symbol'),
+                            'side': l_pos.get('side'),
+                            'entryPrice': float(l_pos.get('entry_price') or 0),
+                            'contracts': float(l_pos.get('qty') or 0),
+                            'leverage': int(l_pos.get('leverage') or 1),
+                            'unrealizedPnl': 0, # Will calc below
+                            'timeframe': l_pos.get('timeframe', 'N/A'),
+                            'stopLoss': float(l_pos.get('sl') or 0),
+                            'takeProfit': float(l_pos.get('tp') or 0)
+                        }
+                
+                # Filter local_pending for this exchange
+                for l_key, l_ord in local_pending.items():
+                    if l_key.startswith(f"{ex_name}_"):
+                        pending_entries.append(l_ord)
             else:
-                pnl_pct = ((entry - current) / entry) * 100 * leverage
+                # --- LIVE MODE: Authoritative Exchange Fetch ---
+                live_positions_list = await adapter.fetch_positions()
+                live_positions = {trader._normalize_symbol(p['symbol']): p for p in live_positions_list if trader._safe_float(p.get('contracts'), 0) > 0}
+                
+                live_orders = await adapter.fetch_open_orders()
+                pending_entries = [o for o in live_orders if str(o.get('type')).upper() in ['LIMIT'] and not o.get('reduceOnly')]
             
-            # USD P&L based on notional value (entry * qty)
-            notional = entry * qty
-            pnl_usd = (pnl_pct / 100) * notional / leverage  # Actual USD gain
-            total_pnl += pnl_usd
-            total_pnl_pct += pnl_pct
+            # --- ACTIVE POSITIONS ---
+            lines.append("🟢 *ACTIVE POSITIONS*")
+            lines.append("─" * 15)
             
-            # Try to get timeframe and confidence if available
-            timeframe = pos.get('timeframe', '1h')
-            conf = pos.get('confidence', 0)
-            conf_str = f"{conf:.1f}" if conf else "Auto"
-            
-            emoji = "🟢" if pnl_pct >= 0 else "🔴"
-            side_emoji = "📈" if side.upper() == 'BUY' else "📉"
-            
-            lines.append(f"{side_emoji} *{side.upper()} - {symbol} - {timeframe} - {conf_str}* ({leverage}x)")
-            lines.append(f"   `{entry:.4f}` → `{current:.4f}` ({emoji}{pnl_pct:+.2f}%)")
-            lines.append(f"   🎯 TP: {tp:.4f} | 🛡 SL: {sl:.4f}")
+            if live_positions:
+                for norm_sym, ex_p in live_positions.items():
+                    symbol = ex_p.get('symbol')
+                    side = ex_p.get('side', 'N/A').upper()
+                    entry = float(ex_p.get('entryPrice') or 0)
+                    contracts = float(ex_p.get('contracts') or 0)
+                    lev = int(ex_p.get('leverage') or 1)
+                    
+                    # Merge with local metadata if exists
+                    timeframe = ex_p.get('timeframe', "N/A")
+                    sl = float(ex_p.get('stopLoss') or 0)
+                    tp = float(ex_p.get('takeProfit') or 0)
+                    
+                    if not is_public:
+                        # Try to find matching metadata in local_active (for timeframe/SL/TP fallback)
+                        for l_key, l_pos in local_active.items():
+                            if trader._normalize_symbol(l_pos.get('symbol')) == norm_sym:
+                                timeframe = l_pos.get('timeframe', timeframe)
+                                if sl == 0: sl = float(l_pos.get('sl') or 0)
+                                if tp == 0: tp = float(l_pos.get('tp') or 0)
+                                break
+                    
+                    # Calculate P&L % using live ticker
+                    ticker = await data_manager.fetch_ticker(symbol, exchange=ex_name)
+                    current = float(ticker['last']) if ticker else entry
+                    
+                    if entry > 0:
+                        pnl_pct = ((current - entry) / entry) * 100 * lev * (1 if side == 'BUY' else -1)
+                    else:
+                        pnl_pct = 0
+                        
+                    side_emoji = "📈" if side == 'BUY' else "📉"
+                    pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
+                    
+                    lines.append(f"{side_emoji} *{symbol}* [{timeframe}] ({lev}x) | {pnl_emoji}*{pnl_pct:+.2f}%*")
+                    lines.append(f"   `{entry:.6f}` → `{current:.6f}`")
+                    if sl > 0 or tp > 0:
+                        lines.append(f"   🎯 TP: {tp:.6f} | 🛡 SL: {sl:.6f}")
+            else:
+                lines.append("   _None_")
+
+            # --- PENDING ORDERS ---
             lines.append("")
-    else:
-        lines.append("🟢 *ACTIVE*: _None_")
+            lines.append("⏳ *PENDING ORDERS*")
+            lines.append("─" * 15)
+            
+            if pending_entries:
+                for o in pending_entries:
+                    sym = o.get('symbol')
+                    side = o.get('side', 'N/A').upper()
+                    price = float(o.get('price') or 0)
+                    qty = float(o.get('amount') or 0)
+                    
+                    lines.append(f"   {side} {sym} @ `{price:.6f}` (Qty: {qty})")
+            else:
+                lines.append("   _None_")
+                
+        except Exception as e:
+            lines.append(f"❌ Error fetching {ex_name}: {str(e)[:100]}")
+            
         lines.append("")
-    
-    # Pending orders
-    if pending_pos:
-        lines.append(f"🟡 *PENDING ({len(pending_pos)})*")
-        lines.append("─" * 20)
-        
-        for key, pos in pending_pos.items():
-            symbol = pos.get('symbol', key.split('_')[0])
-            side = pos.get('side', 'N/A')
-            price = float(pos.get('price') or pos.get('entry_price', 0))
-            leverage = int(pos.get('leverage', 10))
-            
-            try:
-                ticker = await data_manager.fetch_ticker(symbol)
-                current = float(ticker['last']) if ticker else price
-            except:
-                current = price
-            
-            timeframe = pos.get('timeframe', '1h')
-            tp = float(pos.get('tp') or 0.0)
-            sl = float(pos.get('sl') or 0.0)
-            
-            side_emoji = "⏳"
-            
-            lines.append(f"{side_emoji} *{side.upper()} - {symbol} - {timeframe}* ({leverage}x)")
-            lines.append(f"   Entry: `{price:.4f}` | Now: `{current:.4f}`")
-            lines.append(f"   🎯 TP: {tp:.4f} | 🛡 SL: {sl:.4f}")
-            lines.append("")
-    else:
-        lines.append("🟡 *PENDING*: _None_")
-        lines.append("")
-    
-    # Summary
+
     lines.append("─" * 20)
-    pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
-    lines.append(f"{pnl_emoji} *TOTAL: {total_pnl_pct:+.2f}% (${total_pnl:+.2f})*")
+    if is_live_any and is_virtual_any:
+        lines.append("📡 *Hybrid Reality Active* (Live + Virtual)")
+    elif is_virtual_any:
+        lines.append("🛡️ *Virtual Reality Active* (Simulation Mode)")
+    else:
+        lines.append("📡 *Exchange-First Reality Active*")
+    
+    return "\n".join(lines)
+    
+    return "\n".join(lines)
+
+    lines.append("─" * 20)
+    lines.append("📡 *Signal Channel Mode Active*")
     
     return "\n".join(lines)
 
@@ -258,6 +284,14 @@ async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         msg = f"❌ Sync failed: {e}"
     await update.message.reply_text(msg)
+async def optimize_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Trigger global optimization and brain training."""
+    await update.message.reply_text("🚀 Starting Global Optimization & Neural Brain Training...\n_This may take a few minutes._", parse_mode='Markdown')
+    try:
+        # We run it as a task to not block the bot if it takes long
+        asyncio.create_task(run_global_optimization())
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to start optimization: {e}")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -294,8 +328,13 @@ async def periodic_report_loop(application: Application):
         await asyncio.sleep(7200) # 2 hours
         try:
             if CHAT_ID:
-                msg = await get_status_message()
-                await application.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+                # 1. Send Active Status (Hybrid Reality)
+                status_msg = await get_status_message()
+                await application.bot.send_message(chat_id=CHAT_ID, text=status_msg, parse_mode='Markdown')
+                
+                # 2. Send Performance Summary
+                summary_msg = await get_summary_message('month')
+                await application.bot.send_message(chat_id=CHAT_ID, text=summary_msg, parse_mode='Markdown')
         except Exception as e:
             print(f"⚠️ Auto-report failed: {e}")
 
@@ -324,6 +363,7 @@ def main():
         app.add_handler(CommandHandler("status", status_cmd))
         app.add_handler(CommandHandler("sync", sync_cmd))
         app.add_handler(CommandHandler("summary", summary_cmd))
+        app.add_handler(CommandHandler("optimize", optimize_cmd))
         app.add_handler(CallbackQueryHandler(button_handler))
         app.add_error_handler(error_handler)
         

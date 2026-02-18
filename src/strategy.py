@@ -16,13 +16,14 @@ import json
 import os
 
 class WeightedScoringStrategy(Strategy):
-    def __init__(self, symbol="default", timeframe="1h"):
+    def __init__(self, symbol="default", timeframe="1h", exchange=None):
         super().__init__(name=f"WeightedScoringStrategy_{symbol}_{timeframe}")
         self.symbol = symbol
         self.timeframe = timeframe
+        self.exchange = exchange
         self.config_mtime = 0  # Track config file modification time
         self.config_version = 0  # Version number for positions to reference
-        self.weights = self.load_weights(symbol, timeframe)
+        self.weights = self.load_weights(symbol, timeframe, exchange)
         
         # RL BRAIN (Input Size = 12 Normalized Features)
         try:
@@ -32,7 +33,7 @@ class WeightedScoringStrategy(Strategy):
             print(f"⚠️ Failed to init NeuralBrain: {e}")
             self.use_brain = False
         
-    def load_weights(self, symbol, timeframe):
+    def load_weights(self, symbol, timeframe, exchange=None):
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
         if not os.path.exists(config_path):
             print("Config not found, using defaults")
@@ -48,16 +49,20 @@ class WeightedScoringStrategy(Strategy):
             self.config_version += 1
             self.config_mtime = mtime
             
-        # Try specific symbol_timeframe, then symbol, then default
-        key = f"{symbol}_{timeframe}"
-        if key in data:
-            self.config_data = data[key]
+        # Try specific exchange_symbol_timeframe, then symbol_timeframe, then symbol, then default
+        key_ex = f"{exchange}_{symbol}_{timeframe}" if exchange else None
+        key_tf = f"{symbol}_{timeframe}"
+        
+        if key_ex and key_ex in data:
+            self.config_data = data[key_ex]
+        elif key_tf in data:
+            self.config_data = data[key_tf]
         elif symbol in data:
             self.config_data = data[symbol]
         elif 'default' in data:
-             self.config_data = data['default']
+            self.config_data = data['default']
         else:
-             self.config_data = {}
+            self.config_data = {}
         
         # Load Risk Settings
         risk = self.config_data.get('risk', {})
@@ -68,9 +73,7 @@ class WeightedScoringStrategy(Strategy):
         return self.config_data.get('weights', self.get_default_weights())
     
     def reload_weights_if_changed(self):
-        """Check if config file changed, reload if needed.
-        Option 3: Allow existing positions to continue, but block new positions if disabled.
-        """
+        """Check if config file changed, reload if needed."""
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
         if not os.path.exists(config_path):
             return
@@ -81,7 +84,7 @@ class WeightedScoringStrategy(Strategy):
         # Check if config file was modified
         if current_mtime != self.config_mtime:
             print(f"[CONFIG RELOAD] {self.symbol}_{self.timeframe} - Config file changed, reloading...")
-            self.load_weights(self.symbol, self.timeframe)
+            self.load_weights(self.symbol, self.timeframe, self.exchange)
     
     def is_enabled(self):
         """Check if this strategy config is enabled.
@@ -91,7 +94,7 @@ class WeightedScoringStrategy(Strategy):
 
     def reload_config(self):
         """Reloads parameters from strategy_config.json"""
-        self.weights = self.load_weights(self.symbol, self.timeframe)
+        self.weights = self.load_weights(self.symbol, self.timeframe, self.exchange)
         print(f"🔄 [{self.symbol} {self.timeframe}] Config reloaded.")
 
     def get_sizing_tier(self, score):

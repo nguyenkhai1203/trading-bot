@@ -6,7 +6,7 @@ import tempfile
 import asyncio
 
 from config import (
-    LEVERAGE, BINANCE_API_KEY, BINANCE_API_SECRET, AUTO_CREATE_SL_TP,
+    LEVERAGE, GLOBAL_MAX_LEVERAGE, BINANCE_API_KEY, BINANCE_API_SECRET, AUTO_CREATE_SL_TP,
     ENABLE_PROFIT_LOCK, PROFIT_LOCK_THRESHOLD, PROFIT_LOCK_LEVEL,
     MAX_TP_EXTENSIONS, ATR_EXT_MULTIPLIER
 )
@@ -332,6 +332,36 @@ class Trader:
         # Remove :USDT suffix (CCXT linear) then remove slashes
         return symbol.split(':')[0].replace('/', '').upper()
 
+    def _get_unified_symbol(self, symbol):
+        """Map a native or partial symbol back to its unified format (e.g. BTC/USDT:USDT)."""
+        if not symbol: return ""
+        try:
+            # Check if already unified
+            if '/' in symbol and ':' in symbol:
+                return symbol
+            
+            # Use market data from exchange if available
+            if hasattr(self.exchange, 'markets') and self.exchange.markets:
+                # Try direct hit
+                if symbol in self.exchange.markets:
+                    return self.exchange.markets[symbol].get('symbol', symbol)
+                
+                # Try finding by 'id' (native)
+                for m in self.exchange.markets.values():
+                    if m.get('id') == symbol:
+                        return m.get('symbol', symbol)
+            
+            return symbol # Fallback
+        except Exception:
+            return symbol
+
+    def _get_pos_key(self, symbol, timeframe=None):
+        """Standardized position key: exchange_symbol_timeframe"""
+        exchange_name = getattr(self.exchange, 'name', self.exchange_name)
+        if timeframe:
+            return f"{exchange_name}_{symbol}_{timeframe}"
+        return f"{exchange_name}_{symbol}"
+
     def _clamp_leverage(self, lev):
         """Clamp leverage to allowed range (default 5-20)."""
         # Import dynamically to ensure we get latest config value
@@ -388,7 +418,7 @@ class Trader:
         self._save_cooldowns()  # Persist to file
         hours = SL_COOLDOWN_SECONDS / 3600
         self.logger.info(f"[COOLDOWN] {symbol} blocked for {hours:.1f} hours after SL")
-        print(f"⏸️ [{symbol}] Cooldown activated for {hours:.1f} hours after SL")
+        print(f"⏸️ [{self.exchange_name}] [{symbol}] Cooldown activated for {hours:.1f} hours after SL")
 
     def is_in_cooldown(self, symbol):
         """Check if symbol is in cooldown period after SL."""
@@ -417,7 +447,7 @@ class Trader:
         [DRY RUN] Check if a pending limit order should be filled based on current price.
         Returns True if the order got filled, False otherwise.
         """
-        pos_key = f"{symbol}_{timeframe}"
+        pos_key = self._get_pos_key(symbol, timeframe)
         
         if pos_key not in self.active_positions:
             return False
@@ -448,7 +478,7 @@ class Trader:
             pos['status'] = 'filled'
             pos['filled_at'] = current_price
             self._save_positions()
-            print(f"✅ [DRY RUN] Limit order FILLED: {symbol} {side} @ {limit_price:.3f} (current: {current_price:.3f})")
+            print(f"✅ [{self.exchange_name}] [DRY RUN] Limit order FILLED: {symbol} {side} @ {limit_price:.3f} (current: {current_price:.3f})")
             return True
         
         return False
@@ -462,32 +492,44 @@ class Trader:
         return {k: v for k, v in self.active_positions.items() if v.get('status') == 'filled'}
 
     async def has_any_symbol_position(self, symbol):
-        """Checks if ANY position for the symbol exists (across any timeframe)."""
+        """
+        Checks if ANY position or order for the symbol exists (across any timeframe).
+        This is a 'Readiness Check' used to prevent dual-orders and timeframe conflicts.
+        """
         norm_target = self._normalize_symbol(symbol)
         
-        # 1. Check local storage (normalized)
+        # 1. Check local storage (Active Positions)
         for p in self.active_positions.values():
-            if self._normalize_symbol(p.get('symbol')) == norm_target:
+            if self._normalize_symbol(p.get('symbol', '')) == norm_target:
                 return True
         
-        # 2. Check Exchange (Account Level)
-        live_positions = []
+        # 2. Check local storage (Pending Orders)
+        for p in self.pending_orders.values():
+            if self._normalize_symbol(p.get('symbol', '')) == norm_target:
+                return True
+        
+        # 3. Check Exchange (Account Level) - Only if live
         if not self.dry_run and self.exchange.can_trade:
              try:
+                 # Check Positions
                  live_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
+                 for pos in live_positions:
+                     if self._normalize_symbol(pos.get('symbol', '')) == norm_target and float(pos.get('contracts', 0)) > 0:
+                         return True
+                 
+                 # Check Open Orders
+                 live_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
+                 if live_orders:
+                     return True
+                     
              except Exception as e:
-                self.logger.error(f"Error checking exchange for symbol {symbol}: {e}")
-        for pos in live_positions:
-            if self._normalize_symbol(pos.get('symbol')) == norm_target and float(pos.get('contracts', 0)) > 0:
-                return True
+                self.logger.error(f"Error checking exchange state for {symbol}: {e}")
         
         return False
 
     async def get_open_position(self, symbol, timeframe=None):
         """Checks if there's an open position for the symbol/timeframe."""
-        exchange_name = getattr(self.exchange, 'name', 'BINANCE')
-        # 1. Check if we have the position locally
-        key = f"{exchange_name}_{symbol}_{timeframe}" if timeframe else f"{exchange_name}_{symbol}"
+        key = self._get_pos_key(symbol, timeframe)
         # 2. Check if we have it on exchange (if live & authenticated)
         
         if self.dry_run or not self.exchange.can_trade:
@@ -634,11 +676,11 @@ class Trader:
             is_valid, reason, notional = self._check_min_notional(symbol, price_to_check, qty)
             if not is_valid:
                 self.logger.warning(f"Rejected order {symbol}: {reason}")
-                print(f"⚠️ [{symbol}] Order rejected: {reason} (Notional: ${notional:.2f})")
+                print(f"⚠️ [{self.exchange_name}] [{symbol}] Order rejected: {reason} (Notional: ${notional:.2f})")
                 return None
         
-        exchange_name = getattr(self.exchange, 'name', 'BINANCE')
-        pos_key = f"{exchange_name}_{symbol}_{timeframe}" if timeframe else f"{exchange_name}_{symbol}"
+        exchange_name = getattr(self.exchange, 'name', self.exchange_name)
+        pos_key = self._get_pos_key(symbol, timeframe)
         signals = signals_used or []
         confidence = entry_confidence or 0.5
         
@@ -647,14 +689,18 @@ class Trader:
         api_qty = qty_str if 'qty_str' in locals() and qty_str else qty
         print(f"🔧 [{exchange_name}] Sending Order: {side} {symbol} Qty={api_qty} (Type={api_qty.__class__.__name__}) @ {price or 'MARKET'}")
 
-        if self.dry_run:
-            self.logger.info(f"[DRY RUN] {side} {symbol} ({timeframe}): Qty={qty}, SL={sl}, TP={tp}")
+        if self.dry_run or not self.exchange.can_trade:
+            if not self.exchange.can_trade:
+                print(f"🛡️ [PUBLIC MODE] Simulating {side} {symbol} ({timeframe}) - Simulation Active.")
+            
+            self.logger.info(f"[SIMULATION] {side} {symbol} ({timeframe}): Qty={qty}, SL={sl}, TP={tp}")
             
             # Determine status based on order type
             is_limit = order_type == 'limit'
             status = 'pending' if is_limit else 'filled'
             
-            print(f"[DRY RUN] Placed {side} {symbol} {timeframe} {qty} [{status.upper()}]")
+            if self.dry_run:
+                print(f"[{self.exchange_name}] [DRY RUN] Placed {side} {symbol} {timeframe} {qty} [{status.upper()}]")
             
             self.active_positions[pos_key] = {
                 "symbol": symbol,
@@ -677,6 +723,7 @@ class Trader:
 
         # LIVE LOGIC
         params = {}
+        tpsl_attached = False
         if sl: params['stopLoss'] = str(sl)
         if tp: params['takeProfit'] = str(tp)
 
@@ -689,6 +736,7 @@ class Trader:
                 # Recommendation: Use MarkPrice for triggers to avoid wicks
                 params['tpTriggerBy'] = 'MarkPrice'
                 params['slTriggerBy'] = 'MarkPrice'
+                tpsl_attached = True
 
             # Force One-Way Mode (positionIdx=0) by default for simplicity
             # If user is in Hedge Mode, this might fail or require 1/2.
@@ -871,10 +919,14 @@ class Trader:
                 }
                 self._save_positions()
                 # Create SL/TP reduce-only orders for the freshly opened position
-                try:
-                    await self._create_sl_tp_orders_for_position(pos_key)
-                except Exception as e:
-                    self.logger.warning(f"Failed to auto-create SL/TP for market entry {pos_key}: {e}")
+                # SKIP if already attached (Bybit V5)
+                if not tpsl_attached:
+                    try:
+                        await self._create_sl_tp_orders_for_position(pos_key)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to auto-create SL/TP for market entry {pos_key}: {e}")
+                else:
+                    self.logger.info(f"[{symbol}] TP/SL already attached to primary order, skipping secondary creation.")
 
             else:
                 # Limit order - place and track as pending
@@ -971,7 +1023,7 @@ class Trader:
                     "timestamp": order.get('timestamp', 0)
                 }
                 self._save_positions()
-                print(f"📋 Limit order placed: {order_id} | {side} {symbol} @ {price:.3f} (waiting for fill...)")
+                print(f"📋 [{self.exchange_name}] Limit order placed: {order_id} | {side} {symbol} @ {price:.3f} (waiting for fill...)")
                 self.logger.info(f"Limit order {order_id} placed, monitoring for fill")
 
                 # Start background task to monitor fill
@@ -980,10 +1032,14 @@ class Trader:
                 
                 # Create SL/TP for pending order (with proper ID tracking)
                 # This allows cancel_pending_order() to clean up SL/TP when cancelling entry
-                try:
-                    asyncio.create_task(self.setup_sl_tp_for_pending(symbol, timeframe))
-                except Exception as e:
-                    self.logger.warning(f"Failed to setup SL/TP for pending {pos_key}: {e}")
+                # SKIP if already attached (Bybit V5)
+                if not tpsl_attached:
+                    try:
+                        asyncio.create_task(self.setup_sl_tp_for_pending(symbol, timeframe))
+                    except Exception as e:
+                        self.logger.warning(f"Failed to setup SL/TP for pending {pos_key}: {e}")
+                else:
+                    self.logger.info(f"[{symbol}] TP/SL already attached to pending order, skipping secondary setup.")
 
             self.logger.info(f"Order placed: {order['id']}")
             return order
@@ -1087,7 +1143,7 @@ class Trader:
                     if pos_key in self.pending_orders:
                         del self.pending_orders[pos_key]
 
-                    print(f"✅ Limit order FILLED: {symbol} {self.active_positions[pos_key]['side']} @ {self.active_positions[pos_key]['entry_price']:.3f}")
+                    print(f"✅ [{self.exchange_name}] Limit order FILLED: {symbol} {self.active_positions[pos_key]['side']} @ {self.active_positions[pos_key]['entry_price']:.3f}")
                     self.logger.info(f"Limit order {local_order_id} filled at {self.active_positions[pos_key]['entry_price']}")
                     break
 
@@ -1129,36 +1185,56 @@ class Trader:
         
         try:
             if not self.dry_run and pending:
-                # Cancel limit order
-                await self._execute_with_timestamp_retry(
-                    self.exchange.cancel_order, order_id, symbol
-                )
+                # 1. Cancel limit order (Standard)
+                try:
+                    await self._execute_with_timestamp_retry(
+                        self.cancel_order, order_id, symbol
+                    )
+                except Exception as e:
+                    # Handle Bybit "Order not found" by retrying as conditional/trigger order
+                    if "Order not found" in str(e) and self.exchange_name == 'bybit':
+                        self.logger.info(f"Retrying Bybit cancel for {order_id} as conditional order...")
+                        await self._execute_with_timestamp_retry(
+                            self.cancel_order, order_id, symbol, params={'trigger': True}
+                        )
+                    else:
+                        raise e
                 
-                # Cancel SL order if exists
+                # 2. Cancel SL order if exists (Algo/Conditional)
                 if sl_order_id:
                     try:
+                        # Pass both Binance (is_algo) and Bybit (trigger) flags for safety
                         await self._execute_with_timestamp_retry(
-                            self.exchange.cancel_order, sl_order_id, symbol
+                            self.cancel_order, sl_order_id, symbol, params={'is_algo': True, 'trigger': True}
                         )
                         print(f"  ✓ Cancelled SL order {sl_order_id}")
                     except Exception as e:
                         self.logger.warning(f"Failed to cancel SL {sl_order_id}: {e}")
                 
-                # Cancel TP order if exists
+                # 3. Cancel TP order if exists (Algo/Conditional)
                 if tp_order_id:
                     try:
                         await self._execute_with_timestamp_retry(
-                            self.exchange.cancel_order, tp_order_id, symbol
+                            self.cancel_order, tp_order_id, symbol, params={'is_algo': True, 'trigger': True}
                         )
                         print(f"  ✓ Cancelled TP order {tp_order_id}")
                     except Exception as e:
                         self.logger.warning(f"Failed to cancel TP {tp_order_id}: {e}")
             
-            # Clean up from both sources
+            # Clean up from both sources to prevent loops
             if pos_key in self.pending_orders:
                 del self.pending_orders[pos_key]
             
-            print(f"❌ Cancelled pending order: {symbol} | Reason: {reason}")
+            # CRITICAL: Also remove from active_positions if it's a pending status
+            if pos_key in self.active_positions:
+                pos = self.active_positions[pos_key]
+                if pos.get('status') == 'pending':
+                    self.logger.info(f"Clearing pending position state for {pos_key}")
+                    del self.active_positions[pos_key]
+            
+            self._save_positions()
+            
+            print(f"❌ [{self.exchange_name}] Cancelled pending order: {symbol} | Reason: {reason}")
             self.logger.info(f"Cancelled limit order {order_id}: {reason}")
             return True
             
@@ -1175,7 +1251,7 @@ class Trader:
             return await self.exchange.cancel_order(order_id, symbol, params)
         except Exception as e:
             self.logger.error(f"❌ Cancel failed for {symbol}: {e}")
-            return None
+            raise e # Raise to allow _execute_with_timestamp_retry to function
 
     async def log_trade(self, pos_key, exit_price, exit_reason):
         """Logs a closed trade to the history file."""
@@ -1242,12 +1318,18 @@ class Trader:
 
     async def remove_position(self, symbol, timeframe=None, exit_price=None, exit_reason=None):
         """Removes a position and optionally logs it to history."""
-        key = f"{symbol}_{timeframe}" if timeframe else symbol
+        key = self._get_pos_key(symbol, timeframe)
         if key in self.active_positions:
             if exit_price is not None:
                 await self.log_trade(key, exit_price, exit_reason)
             
+            # Exchange-side cleanup: Cancel all pending orders for this symbol
+            self.logger.info(f"[CLEANUP] Removing {key}. Purging all exchange orders for {symbol}...")
+            await self.cancel_all_orders(symbol)
+            
             del self.active_positions[key]
+            if key in self.pending_orders:
+                del self.pending_orders[key]
             self._save_positions()
             self.logger.info(f"Position for {key} removed.")
             return True
@@ -1446,6 +1528,11 @@ class Trader:
             if pos_key in self.pending_orders:
                 del self.pending_orders[pos_key]
             self._save_positions()
+            
+            # Exchange-side cleanup: Cancel all pending orders for this symbol
+            self.logger.info(f"[CLEANUP] Force close for {pos_key}. Purging all exchange orders for {symbol}...")
+            await self.cancel_all_orders(symbol)
+            
             self.logger.info(f"Force closed {pos_key}: {reason}, order={order['id']}")
             return True
             
@@ -1509,7 +1596,7 @@ class Trader:
         """
         For all pending limit orders, setup SL/TP conditional orders (Binance Futures).
         """
-        pos_key = f"{symbol}_{timeframe}" if timeframe else symbol
+        pos_key = self._get_pos_key(symbol, timeframe)
         pending = self.pending_orders.get(pos_key)
         # Fallback to persisted pending in active_positions if in-memory pending not present
         if not pending:
@@ -1556,12 +1643,13 @@ class Trader:
                 qty_to_use = min(float(qty), stored_qty)
                 # Use 'market' for Bybit SL/TP conditional orders (STOP_MARKET is invalid)
                 order_type = 'market' if self.exchange_name == 'BYBIT' else 'STOP_MARKET'
+                sl_params = {'stopPrice': sl, 'reduceOnly': True}
+                if self.exchange_name == 'BYBIT':
+                    sl_params['triggerDirection'] = 'descending' if side == 'BUY' else 'ascending'
+                
                 sl_order = await self._execute_with_timestamp_retry(
                     self.exchange.create_order, symbol, order_type, close_side, qty_to_use,
-                    params={
-                        'stopPrice': sl,
-                        'reduceOnly': True
-                    }
+                    params=sl_params
                 )
                 
                 # VERIFY RESPONSE: Only save ID if exchange confirms success
@@ -1597,12 +1685,13 @@ class Trader:
                 qty_to_use = min(float(qty), stored_qty)
                 # Use 'market' for Bybit SL/TP conditional orders (TAKE_PROFIT_MARKET is invalid)
                 order_type = 'market' if self.exchange_name == 'BYBIT' else 'TAKE_PROFIT_MARKET'
+                tp_params = {'stopPrice': tp, 'reduceOnly': True}
+                if self.exchange_name == 'BYBIT':
+                    tp_params['triggerDirection'] = 'ascending' if side == 'BUY' else 'descending'
+                
                 tp_order = await self._execute_with_timestamp_retry(
                     self.exchange.create_order, symbol, order_type, close_side, qty_to_use,
-                    params={
-                        'stopPrice': tp,
-                        'reduceOnly': True
-                    }
+                    params=tp_params
                 )
                 
                 # VERIFY RESPONSE: Only save ID if exchange confirms success
@@ -1927,7 +2016,8 @@ class Trader:
         try:
             # Fetch ALL positions
             ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
-            active_ex_pos = {p['symbol']: p for p in ex_positions if self._safe_float(p.get('contracts'), 0) > 0}
+            # Normalize keys for reliable lookups
+            active_ex_pos = {self._normalize_symbol(p['symbol']): p for p in ex_positions if self._safe_float(p.get('contracts'), 0) > 0}
             
             # 1. Fetch TOTAL Open Orders (Standard + Algo via Adapter)
             try:
@@ -1949,7 +2039,9 @@ class Trader:
         if fetch_success:
             for sym, p in active_ex_pos.items():
                 # Check if we have this symbol in any timeframe
+                # Ensure we use unified symbol for adoption
                 norm_sym = self._normalize_symbol(sym)
+                unified_sym = self._get_unified_symbol(sym)
                 found = False
                 for k, local_p in self.active_positions.items():
                     # STRICT PREFIX CHECK: local_p is already filtered to this exchange's prefix
@@ -1961,22 +2053,31 @@ class Trader:
                     # Bot found a position it didn't know about - Adopt it!
                     # Initialize prefix for adopted key
                     prefix = f"{self.exchange_name}_" if self.exchange_name else ""
-                    pos_key = f"{prefix}{sym}_adopted"
-                    self.logger.info(f"[ADOPT] Found unknown position for {sym} on exchange. Adopting as {pos_key}")
+                    pos_key = f"{prefix}{unified_sym}_adopted"
+                    self.logger.info(f"[ADOPT] Found unknown position for {sym} ({unified_sym}) on exchange. Adopting as {pos_key}")
                     
                     # Fetch ACTUAL leverage setting from exchange
                     try:
                         lev_info = await self.exchange.fetch_leverage(sym)
-                        actual_leverage = int(lev_info.get('leverage', 8))
-                        self.logger.info(f"[ADOPT] Fetched actual leverage for {sym}: {actual_leverage}x")
+                        if lev_info:
+                            actual_leverage = int(lev_info.get('leverage', LEVERAGE))
+                            self.logger.info(f"[ADOPT] Fetched actual leverage for {sym}: {actual_leverage}x")
+                        else:
+                            # Use fallback from config instead of hardcoded 8
+                            actual_leverage = LEVERAGE
+                            self.logger.warning(f"[ADOPT] fetch_leverage returned None for {sym}. Using fallback: {actual_leverage}x")
                     except Exception as lev_err:
                         raw_leverage = p.get('leverage')
-                        actual_leverage = int(raw_leverage) if raw_leverage is not None else 8
+                        actual_leverage = int(raw_leverage) if raw_leverage is not None else LEVERAGE
                         self.logger.warning(f"[ADOPT] Could not fetch leverage for {sym}, using fallback: {actual_leverage}x | Error: {lev_err}")
                     
                     # Calculate entry price
                     entry_price = self._safe_float(p.get('entryPrice'), default=0)
-                    side = p['side'].upper()
+                    raw_side = p['side'].upper()
+                    # Normalize side to BUY/SELL
+                    if raw_side == 'LONG': side = 'BUY'
+                    elif raw_side == 'SHORT': side = 'SELL'
+                    else: side = raw_side
                     
                     # Initialize SL/TP placeholders
                     auto_sl = None
@@ -2029,7 +2130,7 @@ class Trader:
                             auto_tp = round(entry_price * 0.97, 5)
                     
                     self.active_positions[pos_key] = {
-                        "symbol": sym,
+                        "symbol": unified_sym,
                         "side": side,
                         "qty": self._safe_float(p.get('contracts'), default=0),
                         "entry_price": entry_price,
@@ -2045,6 +2146,71 @@ class Trader:
                     }
                     self._save_positions()
                     print(f"[ADOPT] {pos_key} adopted with leverage {actual_leverage}x, auto SL={auto_sl} TP={auto_tp}")
+
+        # 2.5 ADOPT ORDERS (Ex -> Local)
+        # If an order exists on exchange but bot doesn't know about it, adopt it.
+        if fetch_success and all_exchange_orders:
+            for o in all_exchange_orders:
+                try:
+                    o_id = str(o.get('id') or o.get('orderId'))
+                    sym = o.get('symbol')
+                    norm_sym = self._normalize_symbol(sym)
+                    unified_sym = self._get_unified_symbol(sym)
+                    
+                    # Filter out SL/TP/Reduction orders (we only adopt standard entry orders)
+                    o_type = str(o.get('type') or '').upper()
+                    is_reduce = o.get('reduceOnly') or o.get('info', {}).get('reduceOnly') == 'true'
+                    if 'STOP' in o_type or 'TAKE' in o_type or is_reduce:
+                        continue
+                        
+                    # Check if we already know about this order
+                    known = False
+                    # Check pending_orders map
+                    for p_key, p_val in self.pending_orders.items():
+                        if str(p_val.get('order_id')) == o_id:
+                            known = True
+                            break
+                    if known: continue
+                    
+                    # Check active_positions (status=pending)
+                    for p_key, p_val in self.active_positions.items():
+                        if str(p_val.get('order_id')) == o_id:
+                            known = True
+                            break
+                    if known: continue
+                    
+                    # Stray entry order found! Adopt it.
+                    prefix = f"{self.exchange_name}_" if self.exchange_name else ""
+                    pos_key = f"{prefix}{unified_sym}_sync_adopted"
+                    
+                    # Avoid collision if we already 'own' this symbol path
+                    if pos_key in self.pending_orders or pos_key in self.active_positions:
+                        continue
+                        
+                    self.logger.info(f"[ADOPT-ORDER] Found unidentified entry order {o_id} for {sym}. Adopting as {pos_key}")
+                    
+                    side = o.get('side').upper()
+                    qty = self._safe_float(o.get('amount') or o.get('info', {}).get('origQty'))
+                    price = self._safe_float(o.get('price'))
+                    
+                    # Add to both trackers
+                    order_data = {
+                        'order_id': o_id,
+                        'symbol': unified_sym,
+                        'side': side,
+                        'price': price,
+                        'qty': qty,
+                        'timeframe': 'sync',
+                        'status': 'pending',
+                        'timestamp': o.get('timestamp') or self.exchange.milliseconds()
+                    }
+                    self.pending_orders[pos_key] = order_data
+                    self.active_positions[pos_key] = order_data
+                    self._save_positions()
+                    print(f"📦 [ADOPT] Adopted stray order {o_id} for {sym} as {pos_key}")
+                    
+                except Exception as e:
+                    self.logger.error(f"Error during order adoption for {o.get('id')}: {e}")
 
         # 3. SYNC & REPAIR (Local <-> Ex)
         for pos_key, pos in list(self.active_positions.items()):
@@ -2150,12 +2316,32 @@ class Trader:
                             # self.logger.info(f"[SYNC] Skipping verification for {pos_key} (In Grace Period)")
                             continue
 
+                        # 0.5 BYBIT SPECIAL: Check for attached SL/TP on positions
+                        if "BYBIT" in self.exchange_name.upper() and symbol in active_ex_pos:
+                            ex_p = active_ex_pos[symbol]
+                            attached_sl = self._safe_float(ex_p.get('stopLoss'))
+                            attached_tp = self._safe_float(ex_p.get('takeProfit'))
+                            
+                            if attached_sl > 0:
+                                found_sl = "attached"
+                                pos['sl'] = attached_sl
+                                # self.logger.info(f"[SYNC] {symbol} has attached SL: {attached_sl}")
+                            if attached_tp > 0:
+                                found_tp = "attached"
+                                pos['tp'] = attached_tp
+                                # self.logger.info(f"[SYNC] {symbol} has attached TP: {attached_tp}")
+
                         # 1. VERIFY SL (With Grace Period)
-                        # 1. VERIFY SL (With Grace Period)
-                        found_sl, sl_order = await self._verify_or_clear_id(pos_key, found_sl, symbol, symbol_orders)
+                        if found_sl != "attached":
+                            found_sl, sl_order = await self._verify_or_clear_id(pos_key, found_sl, symbol, symbol_orders)
+                        else:
+                            sl_order = None
                         
                         # 2. VERIFY TP (With Grace Period)
-                        found_tp, tp_order = await self._verify_or_clear_id(pos_key, found_tp, symbol, symbol_orders)
+                        if found_tp != "attached":
+                            found_tp, tp_order = await self._verify_or_clear_id(pos_key, found_tp, symbol, symbol_orders)
+                        else:
+                            tp_order = None
 
                         # SYNC PRICES FROM EXCHANGE (If verified)
                         prices_changed = False
@@ -2376,6 +2562,9 @@ class Trader:
                             cancel_params = {}
                             if self.exchange_name == 'BYBIT':
                                 cancel_params['category'] = 'linear'
+                            elif self.exchange_name == 'BINANCE':
+                                cancel_params['is_algo'] = True
+                            
                             await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_sl, symbol, params=cancel_params)
                             self.logger.info(f"[RECREATE] Cancelled old SL {old_sl} before creating new one")
                         except Exception: pass # Ignore if already gone
@@ -2398,6 +2587,7 @@ class Trader:
                         sl_params = {'stopPrice': sl, 'reduceOnly': True}
                         if self.exchange_name == 'BYBIT':
                             sl_params['triggerDirection'] = 'descending' if side == 'BUY' else 'ascending'
+                            sl_params['category'] = 'linear'
 
                         order_type = 'market' if self.exchange_name == 'BYBIT' else 'STOP_MARKET'
                         sl_order = await self._execute_with_timestamp_retry(
@@ -2423,6 +2613,9 @@ class Trader:
                             cancel_params = {}
                             if self.exchange_name == 'BYBIT':
                                 cancel_params['category'] = 'linear'
+                            elif self.exchange_name == 'BINANCE':
+                                cancel_params['is_algo'] = True
+                            
                             await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_tp, symbol, params=cancel_params)
                             self.logger.info(f"[RECREATE] Cancelled old TP {old_tp} before creating new one")
                         except Exception: pass # Ignore core errors if already gone
@@ -2468,8 +2661,9 @@ class Trader:
                     if self.exchange_name == 'BYBIT':
                         tp_params['triggerDirection'] = 'ascending' if side == 'BUY' else 'descending'
 
+                    tp_order_type = 'market' if self.exchange_name == 'BYBIT' else 'TAKE_PROFIT_MARKET'
                     tp_order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, 'TAKE_PROFIT_MARKET', close_side, qty_to_use,
+                        self.exchange.create_order, symbol, tp_order_type, close_side, qty_to_use,
                         params=tp_params
                     )
                     pos['tp_order_id'] = str(tp_order.get('id'))
@@ -2512,7 +2706,7 @@ class Trader:
         """
         Modify SL/TP for an existing position by canceling old orders and creating new ones.
         """
-        pos_key = f"{symbol}_{timeframe}" if timeframe else symbol
+        pos_key = self._get_pos_key(symbol, timeframe)
         position = self.active_positions.get(pos_key)
         if not position:
             print(f"[WARN] No active position found for {pos_key} to modify SL/TP")
@@ -2525,13 +2719,21 @@ class Trader:
             
             if old_sl_id:
                 try:
-                    await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_sl_id, symbol)
+                    c_params = {}
+                    if self.exchange_name == 'BYBIT': c_params['category'] = 'linear'
+                    elif self.exchange_name == 'BINANCE': c_params['is_algo'] = True
+                    
+                    await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_sl_id, symbol, params=c_params)
                     print(f"[MODIFY] Canceled old SL {old_sl_id} for {pos_key}")
                 except Exception: pass
             
             if old_tp_id:
                 try:
-                    await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_tp_id, symbol)
+                    c_params = {}
+                    if self.exchange_name == 'BYBIT': c_params['category'] = 'linear'
+                    elif self.exchange_name == 'BINANCE': c_params['is_algo'] = True
+                    
+                    await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_tp_id, symbol, params=c_params)
                     print(f"[MODIFY] Canceled old TP {old_tp_id} for {pos_key}")
                 except Exception: pass
             
@@ -2562,14 +2764,16 @@ class Trader:
                 print(f"[MODIFY] New SL order placed for {symbol} at {new_sl}")
                 position['sl_order_id'] = sl_order.get('id')
 
-            # Place new TP order if provided
             if new_tp:
+                tp_params = {'stopPrice': new_tp, 'reduceOnly': True}
+                if self.exchange_name == 'BYBIT':
+                    tp_params['category'] = 'linear'
+                    tp_params['triggerDirection'] = 'ascending' if side == 'BUY' else 'descending'
+                
+                tp_order_type = 'market' if self.exchange_name == 'BYBIT' else 'TAKE_PROFIT_MARKET'
                 tp_order = await self._execute_with_timestamp_retry(
-                    self.exchange.create_order, symbol, 'TAKE_PROFIT_MARKET', close_side, qty,
-                    params={
-                        'stopPrice': new_tp,
-                        'reduceOnly': True
-                    }
+                    self.exchange.create_order, symbol, tp_order_type, close_side, qty,
+                    params=tp_params
                 )
                 print(f"[MODIFY] New TP order placed for {symbol} at {new_tp}")
                 position['tp_order_id'] = tp_order.get('id')

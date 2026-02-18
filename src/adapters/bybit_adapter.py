@@ -90,9 +90,9 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
         """Fetch open orders (all or specific symbol)."""
         try:
-            # Bybit Unified Margin often requires symbol for open orders, 
-            # but CCXT handles pagination for 'all' if symbol is None
-            return await self.exchange.fetch_open_orders(symbol)
+            # For Bybit V5, category is crucial.
+            params = {'category': 'linear'}
+            return await self.exchange.fetch_open_orders(symbol, params=params)
         except Exception as e:
             self.logger.error(f"[Bybit] Fetch open orders failed: {e}")
             return []
@@ -115,21 +115,58 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
     async def create_order(self, symbol: str, type: str, side: str, amount: float, price: Optional[float] = None, params: Dict = {}) -> Dict:
         """Create a new order."""
         try:
-            return await self.exchange.create_order(symbol, type, side, amount, price, params)
+            extra_params = {'category': 'linear'}
+            extra_params.update(params)
+            
+            # For Bybit V5, CCXT handles orderType mapping from the 'type' argument.
+            # We don't need to manually set it in params unless we want to override it.
+            # Previously this caused 'OrderType invalid' if it conflicted or was redundant.
+            
+            return await self.exchange.create_order(symbol, type, side, amount, price, extra_params)
         except Exception as e:
             self.logger.error(f"[Bybit] Create order failed for {symbol}: {e}")
             raise e
 
     async def cancel_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
-        """Cancel an order."""
+        """Cancel an order (standard or conditional trigger order)."""
+        extra_params = {'category': 'linear'}
+        extra_params.update(params)
+        
         try:
-            # Merge Bybit-specific params for linear futures
-            extra_params = {'category': 'linear'}
-            extra_params.update(params)
-            return await self.exchange.cancel_order(order_id, symbol, extra_params)
+            return await self._execute_with_timestamp_retry(
+                self.exchange.cancel_order,
+                order_id,
+                symbol,
+                extra_params
+            )
         except Exception as e:
+            err_str = str(e).lower()
+            # If Bybit says order not found, it might be an SL/TP conditional order
+            if "not found" in err_str and "trigger" not in err_str:
+                self.logger.info(f"[Bybit] Order {order_id} not found in standard queue. Retrying cancel as conditional...")
+                cond_params = extra_params.copy()
+                cond_params['trigger'] = True
+                return await self._execute_with_timestamp_retry(
+                    self.exchange.cancel_order,
+                    order_id,
+                    symbol,
+                    cond_params
+                )
             self.logger.error(f"[Bybit] Cancel order failed for {symbol}: {e}")
             raise e
+
+    async def cancel_all_orders(self, symbol: str):
+        """Cancel ALL orders for a symbol (Standard + Conditional) on Bybit V5."""
+        self.logger.info(f"[Bybit] Purging all orders for {symbol}...")
+        try:
+            # Bybit V5 cancelAll with category: linear should cancel both standard and conditional
+            # depending on CCXT implementation and account type.
+            # We explicitly pass category to be safe.
+            params = {'category': 'linear'}
+            await self._execute_with_timestamp_retry(self.exchange.cancel_all_orders, symbol, params=params)
+            self.logger.info(f"[Bybit] All orders purged for {symbol}")
+        except Exception as e:
+            self.logger.warning(f"[Bybit] Cancel all orders failed or nothing to cancel: {e}")
 
     async def set_leverage(self, symbol: str, leverage: int, params: Dict = {}):
         """Set leverage for a symbol (V5 linear)."""
@@ -201,15 +238,39 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         self.logger.warning(f"[Bybit] Set margin mode failed for {symbol}: {last_err}")
 
     async def fetch_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
-        """Fetch order with Bybit-specific acknowledgment to hide warnings."""
-        extra_params = {'acknowledged': True}
+        """Fetch order with Bybit-specific acknowledgment and conditional order retry."""
+        extra_params = {'acknowledged': True, 'category': 'linear'}
         extra_params.update(params)
-        return await self._execute_with_timestamp_retry(
-            self.exchange.fetch_order,
-            order_id,
-            symbol,
-            extra_params
-        )
+        
+        try:
+            return await self._execute_with_timestamp_retry(
+                self.exchange.fetch_order,
+                order_id,
+                symbol,
+                extra_params
+            )
+        except Exception as e:
+            err_str = str(e).lower()
+            # If Bybit says order not found, it might be an SL/TP conditional order
+            # The error usually contains 'not found' or retCode: 110001 / retMsg: Order does not exist
+            is_not_found = "not found" in err_str or "does not exist" in err_str or "110001" in err_str
+            # FIX: Only skip retry if 'trigger' was ALREADY in the params we just sent.
+            # Don't check err_str for 'trigger' because Bybit's error message suggests it!
+            if is_not_found and not extra_params.get('trigger'):
+                self.logger.info(f"[Bybit] Order {order_id} not found in normal queue. Retrying as conditional order...")
+                cond_params = extra_params.copy()
+                cond_params['trigger'] = True
+                try:
+                    return await self._execute_with_timestamp_retry(
+                        self.exchange.fetch_order,
+                        order_id,
+                        symbol,
+                        cond_params
+                    )
+                except Exception as retry_e:
+                     self.logger.warning(f"[Bybit] Conditional retry failed for {order_id}: {retry_e}")
+                     raise retry_e
+            raise e
 
     async def close(self):
         """Close exchange connection."""

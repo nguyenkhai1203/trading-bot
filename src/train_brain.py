@@ -78,52 +78,10 @@ def load_training_data():
             
     return inputs, targets
 
-def main():
-    print("🧠 Starting Neural Brain Training...")
-    
-    # 1. Load Data
-    inputs, targets = load_training_data()
-    
-    if len(inputs) < 10:
-        print(f"⚠️ Not enough training data. Found {len(inputs)} samples, need at least 10.")
-        return
-    
-    print(f"📊 Dataset size: {len(inputs)} samples")
-    
-    # 2. Split Data (80% Train, 20% Test)
-    split_idx = int(len(inputs) * 0.8)
-    indices = np.arange(len(inputs))
-    np.random.shuffle(indices)
-    
-    train_idx = indices[:split_idx]
-    test_idx = indices[split_idx:]
-    
-    X_train = np.array(inputs)[train_idx]
-    y_train = np.array(targets)[train_idx]
-    
-    X_test = np.array(inputs)[test_idx]
-    y_test = np.array(targets)[test_idx]
-    
-    # 3. Init Brain
-    brain = NeuralBrain(input_size=12)
-    print("🧠 Brain initialized.")
-    
-    # Evaluate before training
-    print("\n--- Pre-Training Evaluation ---")
-    evaluate(brain, X_test, y_test)
-    
-    # 4. Train
-    print(f"\n💪 Training on {len(X_train)} samples for 100 epochs...")
-    final_loss = brain.train(X_train.tolist(), y_train.tolist(), epochs=100)
-    print(f"✅ Training Complete. Final Loss: {final_loss:.4f}")
-    
-    # 5. Evaluate after training
-    print("\n--- Post-Training Evaluation ---")
-    evaluate(brain, X_test, y_test)
-    
     # 6. Save
     brain.save_model()
     print("💾 Brain saved successfully!")
+    return brain
 
 def evaluate(brain, X, y):
     if len(X) == 0:
@@ -147,6 +105,48 @@ def evaluate(brain, X, y):
     acc = correct / len(X) * 100
     avg_mse = mse / len(X)
     print(f"Accuracy: {acc:.1f}% | MSE: {avg_mse:.4f}")
+    return acc, avg_mse
+
+def run_nn_training(min_samples=10, epochs=100):
+    """
+    Function to be called by automated maintenance scripts.
+    """
+    print("\n" + "🧠" * 30)
+    print("🧠 STARTING AUTOMATED NEURAL BRAIN TRAINING")
+    print("🧠" * 30 + "\n")
+    
+    # 1. Load Data
+    inputs, targets = load_training_data()
+    
+    if len(inputs) < min_samples:
+        print(f"⚠️ [BRAIN] Not enough training data. Found {len(inputs)} samples, need at least {min_samples}.")
+        return False
+    
+    print(f"📊 [BRAIN] Dataset size: {len(inputs)} samples")
+    
+    # 2. Split Data
+    split_idx = int(len(inputs) * 0.8)
+    indices = np.arange(len(inputs))
+    np.random.shuffle(indices)
+    
+    X_train = np.array(inputs)[indices[:split_idx]]
+    y_train = np.array(targets)[indices[:split_idx]]
+    X_test = np.array(inputs)[indices[split_idx:]]
+    y_test = np.array(targets)[indices[split_idx:]]
+    
+    # 3. Training
+    brain = NeuralBrain(input_size=12)
+    print("💪 [BRAIN] Training model...")
+    final_loss = brain.train(X_train.tolist(), y_train.tolist(), epochs=epochs)
+    
+    # 4. Evaluation
+    print("--- Brain Performance ---")
+    acc, mse = evaluate(brain, X_test, y_test)
+    
+    # 5. Save
+    brain.save_model()
+    print("✅ [BRAIN] Neural model updated and saved.\n")
+    return {"status": "success", "accuracy": acc, "mse": mse, "samples": len(inputs)}
 
 if __name__ == "__main__":
-    main()
+    run_nn_training()

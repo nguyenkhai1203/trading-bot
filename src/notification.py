@@ -193,7 +193,8 @@ def format_pending_order(
     tp_price: float,
     score: float,
     leverage: int,
-    dry_run: bool
+    dry_run: bool,
+    exchange_name: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Format pending limit order notification.
@@ -203,16 +204,16 @@ def format_pending_order(
     """
     dir_emoji = get_direction_emoji(side)
     dir_label = get_direction_label(side)
-    mode = get_mode_label(dry_run)
     safe_symbol = format_symbol(symbol)
-    
+    mode = get_mode_label(dry_run)
+    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     terminal = (
-        f"⚪ PENDING | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
+        f"{ex_prefix}⚪ PENDING | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}"
     )
     
     telegram = (
-        f"{mode} | ⚪ PENDING\n"
+        f"{ex_prefix}{mode} | ⚪ PENDING\n"
         f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}\n"
@@ -233,7 +234,8 @@ def format_position_filled(
     tp_price: float,
     score: Optional[float],
     leverage: Optional[int],
-    dry_run: bool
+    dry_run: bool,
+    exchange_name: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Format position filled notification.
@@ -243,17 +245,17 @@ def format_position_filled(
     """
     dir_emoji = get_direction_emoji(side)
     dir_label = get_direction_label(side)
-    mode = get_mode_label(dry_run)
     safe_symbol = format_symbol(symbol)
     base_currency = symbol.split('/')[0]
-    
+    mode = get_mode_label(dry_run)
+    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     terminal = (
-        f"⚪ FILLED | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
+        f"{ex_prefix}⚪ FILLED | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
         f"Size: {format_size(size, symbol)} {base_currency}"
     )
     
     telegram = (
-        f"{mode} | ⚪ FILLED\n"
+        f"{ex_prefix}{mode} | ⚪ FILLED\n"
         f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label} ({int(score*100) if score else 0}%)\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Size: {format_size(size, symbol)} {base_currency} (${notional:.0f})\n"
@@ -274,7 +276,8 @@ def format_position_closed(
     reason: str,
     entry_time: Optional[datetime] = None,
     exit_time: Optional[datetime] = None,
-    dry_run: bool = False
+    dry_run: bool = False,
+    exchange_name: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Format position closed notification.
@@ -300,13 +303,14 @@ def format_position_closed(
     else:
         reason_label = reason.upper()
     
+    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     terminal = (
-        f"{status_emoji} [{symbol} {timeframe}] {reason_label} @ {format_price(exit_price)} | "
+        f"{ex_prefix}{status_emoji} [{symbol} {timeframe}] {reason_label} @ {format_price(exit_price)} | "
         f"PnL: {format_pnl(pnl, pnl_pct)}"
     )
     
     telegram_parts = [
-        f"{mode} | {status_emoji} {reason_label}",
+        f"{ex_prefix}{mode} | {status_emoji} {reason_label}",
         f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}",
         f"Entry: {format_price(entry_price)} → Exit: {format_price(exit_price)}",
         f"PnL: {format_pnl(pnl, pnl_pct)}"
@@ -328,7 +332,8 @@ def format_order_cancelled(
     side: str,
     entry_price: float,
     reason: str,
-    dry_run: bool
+    dry_run: bool,
+    exchange_name: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Format order cancelled notification.
@@ -338,13 +343,13 @@ def format_order_cancelled(
     """
     dir_emoji = get_direction_emoji(side)
     dir_label = get_direction_label(side)
-    mode = get_mode_label(dry_run)
     safe_symbol = format_symbol(symbol)
-    
-    terminal = f"❌ [{symbol} {timeframe}] CANCELLED | Reason: {reason}"
+    mode = get_mode_label(dry_run)
+    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
+    terminal = f"{ex_prefix}❌ [{symbol} {timeframe}] CANCELLED | Reason: {reason}"
     
     telegram = (
-        f"{mode} | ❌ CANCELLED\n"
+        f"{ex_prefix}{mode} | ❌ CANCELLED\n"
         f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Reason: {reason}"
@@ -370,7 +375,8 @@ def format_adaptive_trigger(
 def format_status_update(
     positions: list,
     total_pnl: float,
-    total_pnl_pct: float
+    total_pnl_pct: float,
+    exchange_name: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Format periodic status update.
@@ -390,14 +396,16 @@ def format_status_update(
     
     # Terminal summary
     status_icons = f"{profit_count}🟢 {loss_count}🔴 {neutral_count}⚪" if active_count > 0 else "None"
+    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     terminal = (
-        f"📊 [STATUS] {active_count} active | "
+        f"{ex_prefix}📊 [STATUS] {active_count} active | "
         f"PnL: {format_pnl(total_pnl, total_pnl_pct)} | {status_icons}"
     )
     
     # Telegram detailed
+    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     telegram_parts = [
-        "📊 POSITION STATUS UPDATE\n",
+        f"{ex_prefix}📊 POSITION STATUS UPDATE\n",
         f"Active: {active_count} positions",
         f"Total PnL: {format_pnl(total_pnl, total_pnl_pct)}\n"
     ]

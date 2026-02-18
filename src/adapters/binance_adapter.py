@@ -97,17 +97,20 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             if isinstance(std_orders_res, list):
                 all_orders.extend(std_orders_res)
             elif isinstance(std_orders_res, Exception):
-                print(f"⚠️ [BinanceAdapter] Failed to fetch standard orders: {std_orders_res}")
+                raise std_orders_res # Re-raise if standard fetch fails
 
             # Process Algo Orders
             if isinstance(algo_orders_res, list):
-                # Algo orders from raw API need some normalization to match CCXT structure if used generically
-                # But for now, we just pass them through as dicts, adding a flag
                 for o in algo_orders_res:
-                    o['algoType'] = o.get('algoType') # Ensure this field exists
+                    o['is_algo'] = True # Explicitly flag as algo for cancellation logic
+                    o['algoType'] = o.get('algoType') 
+                    if not o.get('symbol') and symbol:
+                        o['symbol'] = symbol
                     all_orders.append(o)
             elif isinstance(algo_orders_res, Exception):
-                 print(f"⚠️ [BinanceAdapter] Failed to fetch algo orders: {algo_orders_res}")
+                 # For Binance, if Algo fetch fails, we MUST NOT return just partial list
+                 # otherwise reconcile_positions might think stop orders are gone.
+                 raise algo_orders_res 
 
             return all_orders
 
@@ -132,36 +135,72 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         )
 
     async def cancel_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
-        """Cancel an order (handles both Standard and Algo if specified in params)."""
-        # Check if it's an Algo order call
-        if params.get('algoType') or params.get('stopPrice'): # Heuristic for Algo
-             # For explicit Algo Cancel, we might need fapiPrivateDeleteOrder
-             # But ccxt cancel_order usually handles it if 'type' is passed or params correctly set?
-             # Actually, execution.py used fapiPrivateDeleteOrder explicitly for algo orders
-             pass
+        """Cancel an order (handles both Standard and Algo orders)."""
+        is_algo = params.pop('is_algo', False) or params.get('algoType') is not None
         
-        # If execution.py passed 'algoType' or we know it's algo, use specific endpoint
-        # But for general compatibility, let's try standard cancel first, or rely on execution.py passing the right method?
-        # Better: Implementation Plan said "Move specific Binance logic ... into this adapter".
+        # Normalize symbol for Binance API (e.g. BTC/USDT:USDT -> BTCUSDT)
+        api_symbol = symbol.replace('/', '').split(':')[0]
         
-        # So providing a specialized method for algo cancel might be good.
-        # But 'cancel_order' signature is standard.
-        # Let's inspect params.
+        # CCXT symbol for standard orders should be unified format
+        unified_symbol = self._get_unified_symbol(symbol)
         
-        is_algo = params.pop('is_algo', False) 
+        try:
+            if is_algo:
+                 # Algo orders use a different endpoint on Binance Futures
+                 self.logger.info(f"[Binance] Cancelling ALGO order {order_id} on {api_symbol}")
+                 return await self._execute_with_timestamp_retry(
+                     self.exchange.fapiPrivateDeleteAlgoOrder,
+                     {'symbol': api_symbol, 'algoId': order_id}
+                 )
+            else:
+                # Standard limit orders
+                self.logger.info(f"[Binance] Cancelling Standard order {order_id} on {symbol}")
+                return await self._execute_with_timestamp_retry(
+                    self.exchange.cancel_order,
+                    order_id,
+                    symbol, 
+                    params
+                )
+        except Exception as e:
+            self.logger.error(f"[Binance] Cancel failed for {order_id} on {api_symbol}: {e}")
+            raise e
+
+    async def cancel_all_orders(self, symbol: str):
+        """Cancel ALL orders for a symbol, including standard and algo orders."""
+        api_symbol = symbol.replace('/', '').split(':')[0]
+        self.logger.info(f"[Binance] Purging all orders for {symbol} ({api_symbol})...")
         
-        if is_algo:
-             return await self._execute_with_timestamp_retry(
-                 self.exchange.fapiPrivateDeleteOrder,
-                 {'symbol': symbol.replace('/', ''), 'orderId': order_id}
-             )
-        else:
-            return await self._execute_with_timestamp_retry(
-                self.exchange.cancel_order,
-                order_id,
-                symbol,
-                params
+        # 1. Cancel standard orders
+        try:
+            await self._execute_with_timestamp_retry(self.exchange.cancel_all_orders, symbol)
+            self.logger.info(f"[Binance] Standard orders cancelled for {symbol}")
+        except Exception as e:
+            self.logger.warning(f"[Binance] No standard orders to cancel or fail: {e}")
+
+        # 2. Cancel algo orders (Stop Loss / Take Profit)
+        try:
+            # Fetch open algo orders
+            open_algo = await self._execute_with_timestamp_retry(
+                self.exchange.fapiPrivateGetOpenAlgoOrders,
+                {'symbol': api_symbol}
             )
+            
+            if open_algo:
+                for algo in open_algo:
+                    algo_id = algo.get('algoId')
+                    self.logger.info(f"[Binance] Purging algo order {algo_id} for {symbol}")
+                    try:
+                        await self._execute_with_timestamp_retry(
+                            self.exchange.fapiPrivateDeleteAlgoOrder,
+                            {'symbol': api_symbol, 'algoId': algo_id}
+                        )
+                    except Exception as inner_e:
+                        self.logger.warning(f"[Binance] Failed to cancel algo {algo_id}: {inner_e}")
+            else:
+                self.logger.debug(f"[Binance] No algo orders found for {symbol}")
+                
+        except Exception as e:
+            self.logger.warning(f"[Binance] Failed to fetch/cancel algo orders for {symbol}: {e}")
 
     async def set_leverage(self, symbol: str, leverage: int, params: Dict = {}):
         """Set leverage using signed POST."""
@@ -238,6 +277,15 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             return r.json()
 
         return await asyncio.to_thread(do_request, url, params)
+
+    async def fetch_leverage(self, symbol: str) -> Optional[Dict]:
+        """Fetch current leverage for a symbol."""
+        try:
+            # CCXT fetch_leverage on Binance Futures returns a single dict with leverage
+            return await self._execute_with_timestamp_retry(self.exchange.fetch_leverage, symbol)
+        except Exception as e:
+            # Silently return None to allow fallback in execution.py
+            return None
 
     async def fetch_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
         """Fetch a specific order."""

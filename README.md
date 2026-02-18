@@ -1,356 +1,61 @@
-# 🚀 Trading Bot - Quick Start Guide
+# 🚀 Advanced Crypto Trading Bot
 
-## 📋 Getting Started (First Time Setup)
+A multi-exchange, automated trading bot designed for high-frequency signal execution on Binance and Bybit Futures. 
 
-### 1. ⚙️ Environment Setup
+## 🤖 Features & Capabilities
 
-#### 🖥️ Windows
-```powershell
-# Create virtual environment
-python -m venv .venv
+- **Multi-Exchange Execution**: Native support for **Binance Futures** and **Bybit V5 API**.
+- **Wait-and-Patience Entry**: Uses smart limit orders to capture better entry prices (1-2% improvement) based on technical levels.
+- **Dynamic Risk Scaling**: Automatically adjusts position size and leverage (8x-12x) based on signal confidence.
+- **Neural Brain Integration**: Uses a lightweight RL-based scoring system to filter high-probability entries.
+- **Authoritative Sync**: Periodically reconciles local state with the exchange to ensure 100% accuracy.
+- **Telegram Command Center**: Fully remote control and status reporting via Telegram bot.
+- **isolated Margin Safety**: Forces isolated margin per position to prevent account-wide drawdown.
 
-# Activate (PowerShell)
-.\.venv\Scripts\Activate.ps1
+## 📋 Quick Start
 
-# Verify configuration
-py src/self_test.py
-```
-
-#### 🍎 macOS / 🐧 Linux
+### 1. Environment Setup
 ```bash
-# Create virtual environment
 python3 -m venv .venv
-
-# Activate
 source .venv/bin/activate
-
-# Verify configuration
 python3 src/self_test.py
 ```
 
-### 2. � Download Market Data
-**IMPORTANT: Must run this first before analyzer or backtest!**
-
+### 2. Prepare Data & Strategy
 ```bash
-# Windows
-py scripts/download_data.py
-
-# macOS / Linux
 python3 scripts/download_data.py
-```
-
-**Advanced options:**
-```bash
-python3 scripts/download_data.py --symbols BTC ETH SOL --timeframes 15m 1h --limit 1000
-```
-
-**What it does:**
-- Downloads historical OHLCV data from Binance
-- Saves to `data/` folder for offline analysis
-- Required for analyzer and backtester to work
-
-### 3. 🔍 Run Strategy Analyzer
-**Optimize signal weights and find profitable settings**
-
-```bash
-# Windows
-py src/analyzer.py
-
-# macOS / Linux
 python3 src/analyzer.py
 ```
 
-**What it does:**
-- Analyzes all symbol/timeframe combinations (~5 minutes)
-- Tests 40+ technical indicators
-- Updates `src/strategy_config.json` with best weights
-- Enables profitable pairs (✅), disables losing pairs (❌)
-- Sends Telegram summary
-
-### 4. 🧪 Backtest (Optional Verification)
-**Verify performance before going live**
-
-```bash
-# Windows
-py src/backtester.py --symbol BTC/USDT --timeframe 1h
-
-# macOS / Linux
-python3 src/backtester.py --symbol BTC/USDT --timeframe 1h
-```
-
-**Output:** CSV report in `reports/` folder
-
-### 5. 🤖 Run Trading Bot
-
-#### Simulation Mode (Dry Run)
-You can test the bot without using real funds.
-
-**Windows:**
-```powershell
-# Command Line Argument
-py src/bot.py --dry-run
-
-# Environment Variable
-$env:DRY_RUN="True"; py src/bot.py
-```
-
-**macOS / Linux:**
-```bash
-# Command Line Argument
-python3 src/bot.py --dry-run
-
-# Environment Variable
-export DRY_RUN=True && python3 src/bot.py
-```
-
-#### Real Trading (Live Mode)
-Ensure your `.env` file contains valid Binance API keys.
-
-**Windows:**
-```powershell
-py launcher.py
-```
-
-**macOS / Linux:**
+### 3. Launch the Bot
 ```bash
 python3 launcher.py
 ```
+*Note: Launcher starts both the trading loop and the Telegram command bot.*
 
-> **Note:** launcher.py starts both bot.py and telegram_bot.py. By default, it runs in **Live Mode** (`DRY_RUN=False` in `src/config.py`).
-
----
-
-## 🔄 Daily Workflow
-
-```bash
-1. Download fresh data → python3 scripts/download_data.py  (or py ...)
-2. Optimize strategy   → python3 src/analyzer.py
-3. Run bot            → python3 src/bot.py
-```
-
----
+### 4. 🧠 Train the Neural Brain (Optional)
+The bot includes a Neural Network that learns from trade performance. To activate it:
+1. **Collect Data**: Run the bot in Dry Run or Live mode until you have at least 20-50 trades in `src/signal_performance.json`.
+2. **Train**: Run `python3 src/train_brain.py`.
+3. **Verify**: The bot will automatically start using the trained model for trade validation (Veto/Boost) on its next reload.
 
 ## 📂 Project Structure
 
-```
-tradingBot/
-├── src/
-│   ├── bot.py                    # Main trading loop
-│   ├── analyzer.py               # Strategy optimizer
-│   ├── backtester.py             # Historical validator
-│   ├── execution.py              # Order execution engine
-│   ├── strategy.py               # Signal generation
-│   ├── data_manager.py           # Data fetching & caching
-│   ├── base_exchange_client.py   # Unified exchange client
-│   ├── self_test.py              # System health checker
-│   ├── cli_tools.py              # CLI utilities
-│   ├── strategy_config.json      # Signal weights & settings
-│   └── positions.json            # Active positions
-├── data/                         # Cached market data
-├── reports/                      # Backtest results
-├── download_data.py              # Data downloader
-├── launcher.py                   # Bot + Telegram launcher
-└── README.md                     # This file
-```
+- `src/`: Core logic (Bot, Execution, Strategy, Adapters)
+- `scripts/`: Utilities for data management and diagnostics
+- `data/`: Local cache of OHLCV market data
+- `.brain/`: **Documentation & AI Context**
+    - This directory contains the "Project Brain" — a persistent store of knowledge, architecture decisions, and development history.
+    - It is designed to be read by both humans and AI coding assistants (like Antigravity) to maintain context over long development cycles.
+    - **Note**: This folder is purely for documentation and is NOT used by the bot during live trading.
+
+## 📚 Documentation & Technical Details
+
+For in-depth information on system architecture, strategy mechanics, and troubleshooting, please refer to the **Project Brain**:
+
+- [**System Architecture & Knowledge**](.brain/knowledge.md) - Deep dive into how it works and config settings.
+- [**Recent Updates & Walkthroughs**](.brain/walkthrough.md) - Log of major features and recent changes.
+- [**Development Roadmap**](.brain/task.md) - Active tasks and historical progress.
 
 ---
-
-## 🎯 How It Works
-
-### Smart Limit Order System
-**Robust & Persistent:**
-- **Entry Flow:**
-    1. **Signal Detection** → 40+ indicators analyze market
-    2. **Limit Order** → Placed at 1.5% better price (adjustable)
-    3. **Background Monitor** → Checks fill status continuously
-    4. **Persistence** → Pending orders saved to `positions.json`, survive restarts
-- **Safety First:**
-    - **Strict Notional Check**: Validates order size against exchange limits (e.g., $5 min)
-    - **Safe Execution**: Rejects invalid orders locally to prevent API bans
-    - **No timeouts**: Orders wait until filled or invalidated by strategy
-
-### Dynamic Leverage Tiers (Score-Based)
-
-| Signal Score | Leverage | Cost (USDT) | Notional |
-|--------------|----------|-------------|----------|
-| 2.0 - 3.9    | 8x       | $3          | $24      |
-| 4.0 - 5.4    | 10x      | $4          | $40      |
-| 5.5+         | 12x      | $5          | $60      |
-
-**Safe Reversal Entry Protection:**
-If a new signal flips the trend (Short -> Long or vice versa), the bot automatically reduces risk:
-- **Leverage**: 0.6x multiplier (e.g., 10x -> 6x)
-- **Position Size**: 0.5x multiplier (Half size)
-- **Initial Stop Loss**: 0.6x tighter (Protects against whipsaw)
-
-### Signal Confidence System
-
-**40+ Technical Indicators:**
-- Fibonacci levels & retracements
-- Support/Resistance zones
-- EMA (50, 100, 200)
-- MACD crossovers
-- RSI divergence
-- Ichimoku cloud
-- Volume confirmation
-- ADX trend strength
-
-**Score Calculation:**
-- Each indicator weighted 1.0-1.5x
-- High-quality signals (bounces, breakouts) weighted higher
-- Multi-timeframe validation
-- Minimum score threshold: 2.0
-
----
-
-## 🔧 Configuration
-
-### Environment Variables (`.env`)
-```bash
-# Exchange Keys (Required if using)
-BINANCE_API_KEY=your_binance_key
-BINANCE_API_SECRET=your_binance_secret
-
-BYBIT_API_KEY=your_bybit_key
-BYBIT_API_SECRET=your_bybit_secret
-
-# Notifications
-TELEGRAM_BOT_TOKEN=your_token
-TELEGRAM_CHAT_ID=your_chat_id
-```
-
-### Key Settings (`src/config.py`)
-```python
-# Trading Pairs
-TRADING_SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'LINK/USDT']
-TIMEFRAMES = ['15m', '30m', '1h', '2h', '4h']
-
-# Entry System
-USE_LIMIT_ORDERS = True
-PATIENCE_ENTRY_PCT = 0.015        # 1.5% better price
-REQUIRE_TECHNICAL_CONFIRMATION = False
-
-# Risk Management
-LEVERAGE = 10                     # Default (overridden by tiers)
-AUTO_CREATE_SL_TP = False         # Manual SL/TP management
-```
-
-### Strategy Config (`src/strategy_config.json`)
-Auto-generated by analyzer. Contains:
-- Signal weights for 40 indicators
-- Leverage tiers by score
-- Entry/exit thresholds
-- SL/TP percentages
-
----
-
-## 🛠️ Maintenance & Tools
-
-### System Health Check
-```bash
-# Windows
-py src/self_test.py
-
-# macOS / Linux
-python3 src/self_test.py
-```
-Tests: API keys, connectivity, time sync, modules, positions
-
-### CLI Tools
-```bash
-# Windows
-py -c "import asyncio; from src.cli_tools import rebuild_positions_from_open_orders; asyncio.run(rebuild_positions_from_open_orders())"
-
-# macOS / Linux
-python3 -c "import asyncio; from src.cli_tools import rebuild_positions_from_open_orders; asyncio.run(rebuild_positions_from_open_orders())"
-```
-
-### Data Cleanup
-```bash
-# Windows (PowerShell)
-Remove-Item -Recurse -Force data/
-
-# macOS / Linux
-rm -rf data/
-```
-
-### Position Files
-- `src/positions.json` - Active & pending positions
-- `src/trade_history.json` - Completed trades
-- `src/cooldowns.json` - SL cooldown tracking
-
----
-
-## 📊 Performance Optimizations
-
-### Analyzer Speed
-- **36x faster** (3 hours → 5 minutes)
-- Coarse-to-fine parameter search
-- Data/feature caching
-- Parallel processing
-
-### System Architecture
-- **BaseExchangeClient**: Unified time sync
-- **Singleton DataManager**: Prevents duplicate API calls
-- **Per-position locks**: Prevents race conditions
-- **TP safety checks**: Prevents -2021 errors
-
----
-
-## 🐛 Troubleshooting
-
-### Bot Not Creating Positions
-1. Check data exists: `ls data/`
-2. Verify `strategy_config.json` has `"enabled": true`
-3. Check entry threshold not too high (default: 2.0)
-
-### Positions Not Closing
-1. Check `positions.json` for SL/TP prices
-2. Review Telegram notifications
-3. Check `trade_history.json`
-
-### Self-Test Failures
-1. **API Keys**: Check `.env` file
-2. **Time Sync**: Network issue or API down
-3. **Module Imports**: Run `pip install -r requirements.txt`
-
-### Data Download Issues
-1. Check API keys in `.env`
-2. Verify internet connection
-3. Check Binance API status
-
-### Common Errors
-**TypeError: '<=' not supported between instances of 'NoneType' and 'NoneType'**
-- **Cause:** Corrupted or missing data for a specific symbol/timeframe.
-- **Fix:** Delete the `data/` folder and re-download fresh data.
-  ```bash
-  rm -rf data/
-  python3 scripts/download_data.py
-  ```
-
----
-
-## ⚠️ Important Notes
-
-### Binance Conditional Orders (SL/TP)
-- **Problem:** SL/TP orders (STOP_MARKET/TAKE_PROFIT_MARKET) often disappear from standard `fetch_orders`.
-- **Solution:** Bot now uses **Unified ID Matching** (checks `id`, `orderId`, `algoId`, `clientAlgoId`) and scans both Standard and Algo endpoints.
-- **Verification:** Run `py scripts/dump_all_orders.py` to see ALL orders (including hidden Algo ones).
-
-### Time Synchronization
-- **Problem:** Error -1021 (Timestamp for this request is outside of the recvWindow).
-- **Solution:** Bot uses a **Manual Time Offset** with a -5000ms safety buffer.
-- **Auto-Fix:** If time drift is detected, the bot auto-resyncs without crashing.
-
-### Bybit V5 Conditional Orders
-- **Market Types**: On Bybit, SL/TP orders are always placed as `market` types with `triggerDirection` (descending for Long, ascending for Short) as required by API V5.
-- **History Fallback**: Bybit's `fetchOrder` only accesses the last 500 orders. If an order isn't found, the bot falls back to `fetch_open_orders` and gracefully clears "ghost" orders that are no longer active.
-
----
-
-## 📚 Additional Resources
-
-For detailed architecture and development info, see:
-- `.brain/knowledge.md` - System architecture & components
-- `.brain/walkthrough.md` - Recent refactoring details
-- `.brain/task.md` - Development history
+⚠️ **Disclaimer**: This is a production-grade trading tool. Always test in **Dry Run mode** (`DRY_RUN=True` in `.env`) before deploying real capital.
