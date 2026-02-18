@@ -1,0 +1,26 @@
+# ANTIGRAVITY FORCED PROTOCOL: TRADING BOT PROJECT
+
+## 1. MANDATORY KNOWLEDGE LOADING (READ BEFORE ACT)
+- **Primary Directive:** Before modifying any code, the Agent **MUST** load context from the `.brain/` directory.
+- **Navigation:** Use `walkthrough.md` as the GPS to locate the correct module and its mindset map.
+- **Strategy:** Consult `knowledge.md` to ensure logic aligns with the core Trading Strategy and to avoid repeating mistakes documented in "Lessons Learned."
+- **Structure:** Follow the technical patterns (Adapters, Singletons, Syncing) defined in `architecture.md`.
+
+## 2. FILE HYGIENE (ZERO JUNK POLICY)
+- **Prohibition:** NO creation of temporary `.txt`, `.md`, or `.log` files outside of the `.brain/` folder for explanations or backups.
+- **Whitelist:** Modifications are strictly limited to source code and standard project files: `README.md`, `requirements.txt`, `.gitignore`, and `.env.example`.
+- **Documentation:** All technical deep-dives or usage examples must be updated directly in `architecture.md` or `knowledge.md`.
+
+## 3. DEFINITION OF DONE (D.O.D.)
+A task is considered complete ONLY when:
+1. **Functional Code:** The fix/feature is implemented and verified.
+2. **Mandatory Self-Test:** The Agent **MUST** perform a self-verification of the logic. If possible, run the specific function with test data or verify via unit tests. Provide a brief summary of the test result (e.g., "Verified: RSI calculation matches expected output for X candles").
+3. **Knowledge Sync:** Any new logic or "Lessons Learned" from bug fixes are documented in `knowledge.md`.
+4. **Architecture Update:** Technical changes are reflected in `architecture.md`.
+5. **State Tracking:** The relevant item in `task.md` is marked `[x]`.
+6. **Cleanup:** All temporary logs or scratchpad files generated during the session are deleted.
+
+## 4. TOKEN & CONTEXT OPTIMIZATION
+- **Targeted Reading:** Do not scan the entire workspace. Focus only on the specific `@file` requested and its corresponding `.brain` context.
+- **Minimalist Rewrites:** Only modify the necessary lines of code to resolve an issue. Avoid rewriting entire files unless structurally required.
+- **State Handoff:** If a session is nearing token limits, summarize the current status into `.brain/task.md` before starting a new thread.

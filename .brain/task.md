@@ -2,75 +2,44 @@
 
 - [x] **Setup Environment & API Connection** <!-- id: 0 -->
     - [x] Create virtual environment and install dependencies (`ccxt`, `python-dotenv`, `pandas`, `numpy`) <!-- id: 1 -->
-    - [x] Create `.env` file for API keys <!-- id: 2 -->
     - [x] Implement basic connection test script for Bybit/Binance <!-- id: 3 -->
 - [x] **Data Fetching Module (Layer 1)** <!-- id: 4 -->
-    - [x] Implement `DataFetcher` class using `ccxt` <!-- id: 5 -->
-    - [x] Add WebSocket stream support (mock) <!-- id: 6 -->
-    - [x] Add historical data download <!-- id: 7 -->
-- [x] **Decision Layer (Layer 2)** <!-- id: 8 -->
-    - [x] Create `src/feature_engineering.py` (decouple from strategy) <!-- id: 9 -->
-    - [x] Update `Strategy` to use Feature Engineer & return Confidence/Signal <!-- id: 10 -->
-    - [x] Incorporate external signals (placeholder) <!-- id: 11 -->
-- [x] **Risk Management (Layer 3)** <!-- id: 12 -->
-    - [x] Implement `calculate_position_size` <!-- id: 13 -->
-    - [x] Add Circuit Breaker (Max Drawdown / Daily Loss) <!-- id: 14 -->
-    - [x] Define SL/TP calculations <!-- id: 14 -->
-- [x] **Order Execution** <!-- id: 15 -->
-    - [x] specific `Trader` class for order placement (Market, Limit) <!-- id: 16 -->
-    - [x] Add support for Conditional Orders (SL/TP) <!-- id: 17 -->
-    - [x] Implement "Dry Run" mode <!-- id: 18 -->
-- [x] **Main Loop & Monitoring** <!-- id: 19 -->
-    - [x] Build main bot loop (Data -> Signal -> Risk -> Order) <!-- id: 20 -->
-    - [x] Add logging to file/CSV <!-- id: 21 -->
-    - [x] Implement Telegram notification system <!-- id: 22 -->
-- [x] **Backtesting** <!-- id: 23 -->
-    - [x] specific backtest engine or integrate `vectorbt`/`backtesting.py` <!-- id: 24 -->
-    - [x] Run initial backtests and analyze results <!-- id: 25 -->
-- [x] **Optimization & Documentation** <!-- id: 26 -->
-    - [x] Refine strategy parameters <!-- id: 27 -->
-    - [x] Maintain `knowledge.md` with findings and signal sources <!-- id: 28 -->
-    - [x] Support Multi-Pair & Multi-Timeframe (BTC, ETH, SOL, BNB, LINK) <!-- id: 29 -->
+    - [x] Implement `DataFetcher` class with namespacing <!-- id: 5 -->
     - [x] Implement `MarketDataManager` to fix "Too Many Requests" <!-- id: 30 -->
-    - [x] Fix Telegram Notifications (Async + PnL Reporting) <!-- id: 31 -->
-    - [x] Implement `WeightedScoringStrategy` (New Indicators + Logic) <!-- id: 32 -->
+    - [x] Implement Data Persistence (CSV) with exchange isolation <!-- id: 51 -->
+- [x] **Decision Layer (Layer 2)** <!-- id: 8 -->
+    - [x] Update `Strategy` to use Feature Engineer & return Confidence/Signal <!-- id: 10 -->
+    - [x] Implement `WeightedScoringStrategy` (40+ Indicators) <!-- id: 32 -->
     - [x] Build `Analyzer` for Asset-Specific Weight Optimization <!-- id: 33 -->
-    - [x] Create `strategy_config.json` for dynamic weights <!-- id: 34 -->
-    - [x] Implement `Fixed Margin` Sizing ($3/$8) <!-- id: 35 -->
-    - [x] Expand `FeatureEngineer` with Super-Features (RSI 7/14/21) <!-- id: 36 -->
-    - [x] Create `daily_optimizer.py` automation script <!-- id: 37 -->
-    - [x] Implement `get_open_position` check in `bot.py` <!-- id: 38 -->
+    - [x] Implement Cross-Timeframe Validation (2-TF confirmation) <!-- id: 70 -->
+    - [x] Integrate Neural Brain training into automated optimization flow <!-- id: 101 -->
+- [x] **Risk Management (Layer 3)** <!-- id: 12 -->
+    - [x] Implement `calculate_position_size` with Fixed Margin ($3/$8) <!-- id: 35 -->
+    - [x] Implement ROE-Scaled SL/TP (5% SL / 10-20% TP ROE Targets) <!-- id: 75 -->
+    - [x] Implement Profit Lock (SL to Profit at 80% TP) <!-- id: 75 -->
+    - [x] Implement TA-based TP Extension (ATR/SR) <!-- id: 76 -->
+- [x] **Order Execution & Adapters** <!-- id: 15 -->
+    - [x] Implement `BaseAdapter` Interface (Unified behavior) <!-- id: 78 -->
+    - [x] specific `BybitAdapter` (V5, Parent-Child Orders, Pagination) <!-- id: 79 -->
+    - [x] specific `BinanceAdapter` (Algo Order support, Symbol Normalization) <!-- id: 80 -->
+    - [x] Implement **Shared Trader Singleton** with Async Locking (Race Prevention) <!-- id: 54 -->
+    - [x] Implementation of `_get_pos_key` (`EXCHANGE_SYMBOL_TIMEFRAME`) for absolute state isolation <!-- id: 110 -->
+- [x] **Position Tracking & Synchronization** <!-- id: 19 -->
     - [x] Implement Persistent Position Storage (`positions.json`) <!-- id: 39 -->
-    - [x] Implement Trade History Logging (`trade_history.json`) <!-- id: 40 -->
-    - [x] Add "Exit Management" logic to auto-close/remove positions <!-- id: 41 -->
-- [x] **New: Auto-Optimizer & Bug Fixes**
-    - [x] Fix `current_price` UnboundLocalError in `bot.py`
-    - [x] Refactor `analyzer.py` for bot integration
-    - [x] Implement 12-hour Auto-Optimization loop in `bot.py`
-    - [x] Implement Dynamic Config Reload in `strategy.py`
-    - [x] Implement Data Persistence (CSV) in `MarketDataManager`
-    - [x] **Fix Redundant Logs**: Refactor `execution.py` & `bot.py` to use `symbol_timeframe` key for positions.
-    - [x] **Account-Level Guard**: Prevent entering the same coin multiple times across different timeframes (Global Guard).
-    - [x] **Fixed TF Sync Race**: Implemented shared Trader singleton and async locking to prevent `positions.json` overwrites.
-    - [x] **ROE-Scaled SL/TP**: Adjusted targets to 5% SL and 10-20% TP **ROE** by scaling price movement based on leverage.
-    - [x] **Improved Formatting**: Rounded all prices, quantities, and PnL values to 3 decimal places across logs, notifications, and storage.
-- [x] **Position Status Tracking** (Feb 10, 2026)
-    - [x] Added `status` field to positions: `pending` (limit order waiting) vs `filled` (active position)
-    - [x] Added `order_type` field: `market` vs `limit`
-    - [x] Added `leverage` field to track per-position leverage
-    - [x] Implemented `check_pending_limit_fills()` for dry-run limit order simulation
-    - [x] Fixed SL/TP recalculation bug for limit orders (was using current_price instead of limit_price)
+    - [x] Implement **Authoritative Exchange-First Reality** for `/status` <!-- id: 80 -->
+    - [x] Implement **Order Adoption Logic**: Sweep exchange for stray entries and adopt into local state <!-- id: 111 -->
+    - [x] Implement **Hybrid Reality**: Public Mode simulation with virtual P&L fallback <!-- id: 83 -->
+- [x] **Monitoring & Notifications** <!-- id: 22 -->
+    - [x] Implement Telegram notification system with Rate Limiting <!-- id: 22 -->
+    - [x] **Unified Exchange Logging**: Prepend `[EXCHANGE]` to all notifications <!-- id: 92 -->
+    - [x] **Per-Exchange Optimization Reports**: Group symbols by exchange in `/optimize` <!-- id: 93 -->
+- [x] **Bug Fixes & Hardening**
+    - [x] Fix Bybit "Qty invalid" (Dynamic precision logic)
+    - [x] Fix Bybit "Order Not Found" (Conditional order retry)
+    - [x] Fix Binance SOL/ARB SL/TP cancellation (Algo order flag)
+    - [x] Fix Dry-Run heartbeat hang (Skip live fetch, use cache)
 
-- [x] **Strict Exchange Data Separation** (Feb 16, 2026)
-    - [x] Implement load-time data partitioning (Bybit vs Binance)
-    - [x] Add persistence safeguards for non-active exchange data
-    - [x] Implement `can_trade` permission guards to prevent error noise
-    - [x] Add explicit iteration guards across reconcile/repair loops
-- [x] **Bybit V5 Integration & Order Fixes** (Feb 16, 2026)
-    - [x] Fix "OrderType invalid" by forcing `market` for SL/TP
-    - [x] Implement `triggerDirection` for V5 conditional orders
-    - [x] Handled 500-order limit with `fetch_open_orders` fallback
-    - [x] Silenced API noise for Handled/Informational errors
-- [x] **Dynamic Risk Management v3.0** (Feb 16, 2026)
-    - [x] Implement Profit Lock (Move SL to 10% profit at 80% TP)
-    - [x] Implement TA-based TP Extension (Support/Resistance & ATR)
+- [ ] **Next Steps**
+    - [ ] Add `/optimize` manual trigger via Telegram command <!-- id: 97 -->
+    - [ ] Improve monthly/all-time summary reports <!-- id: 98 -->
+    - [ ] Implement Summary Backtest phase in `run_global_optimization` <!-- id: 96 -->
