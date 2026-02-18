@@ -156,5 +156,32 @@ async def check_missing_sl_tp_all():
     return results
 
 
+async def get_market_info(symbol: str):
+    """Fetch and print market limits and precision for a symbol."""
+    from exchange_factory import get_exchange_adapter
+    adapter = get_exchange_adapter()
+    try:
+        await adapter.exchange.load_markets()
+        market = adapter.exchange.market(symbol)
+        
+        info = {
+            "symbol": symbol,
+            "min_qty": market['limits']['amount']['min'],
+            "max_qty": market['limits']['amount']['max'],
+            "qty_step": market['precision']['amount'],
+            "min_notional": market['limits']['cost']['min'],
+            "raw_info": market.get('info')
+        }
+        
+        print(f"\n=== {symbol} Market Info ===")
+        print(f"Min Qty: {info['min_qty']}")
+        print(f"Max Qty: {info['max_qty']}")
+        print(f"Qty Step: {info['qty_step']}")
+        print(f"Min Notional: {info['min_notional']}")
+        return info
+    finally:
+        await adapter.close()
+
+
 if __name__ == '__main__':
     print('Utility module: import and call functions from an async runner.')

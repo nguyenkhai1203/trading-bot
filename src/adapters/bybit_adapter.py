@@ -103,8 +103,9 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         Normalizes Bybit response to standard CCXT structure.
         """
         try:
-            # CCXT fetch_positions usually returns list of dicts
-            positions = await self.exchange.fetch_positions()
+            # For Bybit V5, category is crucial. Linear = USDT Perp.
+            params = {'category': 'linear'}
+            positions = await self.exchange.fetch_positions(params=params)
             # CCXT usually normalizes this well, but we ensure 'contracts' > 0
             active_positions = [p for p in positions if float(p.get('contracts', 0) or p.get('info', {}).get('size', 0)) > 0]
             return active_positions

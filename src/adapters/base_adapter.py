@@ -9,14 +9,21 @@ class BaseAdapter(ABC):
 
     def __init__(self, exchange_client):
         self.exchange = exchange_client
-        self.name = exchange_client.id.upper() if exchange_client else "UNKNOWN"
+        # Standardize: binanceusdm -> BINANCE, bybit -> BYBIT
+        raw_id = exchange_client.id.upper() if exchange_client else "UNKNOWN"
+        if 'BINANCE' in raw_id:
+            self.name = 'BINANCE'
+        elif 'BYBIT' in raw_id:
+            self.name = 'BYBIT'
+        else:
+            self.name = raw_id
 
     @property
     def is_authenticated(self) -> bool:
         """Check if the exchange client has legitimate trading permissions."""
         # Priority: Check explicit capabilities if set (from BaseExchangeClient)
-        if hasattr(self, 'permissions'):
-            return self.permissions.get('can_trade', False)
+        if hasattr(self.exchange, 'permissions'):
+            return self.exchange.permissions['can_trade']
             
         # Fallback: Check CCXT credentials directly (Legacy)
         if not self.exchange:

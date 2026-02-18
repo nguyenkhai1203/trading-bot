@@ -36,8 +36,8 @@ This section documents critical lessons learned through debugging sessions to en
 - **Solution**: Use a manual offset with a -5000ms safety buffer. Always subtract a buffer before assigning a timestamp to a request.
 
 ### 5. "Invisible" Algo Orders (Binance SL/TP)
-- **Lesson**: Binance Futures treats SL/TP as `algoOrders`. Calling the standard `fetch_open_orders` will NOT return them, leading the bot to think they don't exist and creating redundant orders.
-- **Solution**: Use the specific `/fapi/v1/algoOrder` endpoint or fallback to Position data to determine SL/TP state.
+- **Lesson**: Binance Futures treats SL/TP as `algoOrders`. Calling the standard `fetch_open_orders` will NOT return them, and standard `cancel_order` will fail if targeted at an Algo ID.
+- **Solution**: Implemented **Automatic Reconciliation Failover** in `BinanceAdapter.cancel_order`. The adapter now automatically tries both Standard and Algo endpoints if a "Not Found" (-2011) error occurs. This standardizes behavior across Bybit and Binance without requiring the caller to know the order type.
 
 ### 6. "Qty Invalid" (Bybit Precision)
 - **Lesson**: Every exchange and pair has a different `qtyStep`. Incorrect decimal rounding causes immediate order rejection.

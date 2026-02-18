@@ -7,6 +7,9 @@ import time
 from typing import Any, Callable
 
 
+import logging
+
+
 class BaseExchangeClient:
     """
     Base class providing unified exchange interaction patterns.
@@ -15,6 +18,7 @@ class BaseExchangeClient:
     
     def __init__(self, exchange):
         self.exchange = exchange
+        self.logger = logging.getLogger(self.__class__.__name__)
         self._time_synced = False
         self._server_offset_ms = 0 # Manual offset: serverTime - localTime
         

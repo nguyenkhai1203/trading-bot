@@ -135,34 +135,65 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         )
 
     async def cancel_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
-        """Cancel an order (handles both Standard and Algo orders)."""
+        """Cancel an order (handles both Standard and Algo orders with automatic fallback)."""
         is_algo = params.pop('is_algo', False) or params.get('algoType') is not None
         
         # Normalize symbol for Binance API (e.g. BTC/USDT:USDT -> BTCUSDT)
-        api_symbol = symbol.replace('/', '').split(':')[0]
+        # Use split(':') and then replace '/' to be safest
+        api_symbol = symbol.split(':')[0].replace('/', '')
         
-        # CCXT symbol for standard orders should be unified format
-        unified_symbol = self._get_unified_symbol(symbol)
+        is_algo = params.get('is_algo', False) or 'stopLoss' in params or 'takeProfit' in params or 'stopPrice' in params
         
+        # Check if it looks like an SL/TP (usually passed as ALGO)
         try:
             if is_algo:
-                 # Algo orders use a different endpoint on Binance Futures
-                 self.logger.info(f"[Binance] Cancelling ALGO order {order_id} on {api_symbol}")
-                 return await self._execute_with_timestamp_retry(
-                     self.exchange.fapiPrivateDeleteAlgoOrder,
-                     {'symbol': api_symbol, 'algoId': order_id}
-                 )
-            else:
-                # Standard limit orders
-                self.logger.info(f"[Binance] Cancelling Standard order {order_id} on {symbol}")
+                self.logger.info(f"[Binance] Cancelling ALGO order {order_id} for {api_symbol}")
+                # For Algo orders, we might need specific params
+                algo_params = params.copy()
+                algo_params.update({'symbol': api_symbol})
+                # CCXT usually handles the routing, but we want to be sure
                 return await self._execute_with_timestamp_retry(
                     self.exchange.cancel_order,
                     order_id,
-                    symbol, 
-                    params
+                    symbol, # CCXT wants the unified symbol usually
+                    params=params
                 )
+            else:
+                self.logger.info(f"[Binance] Cancelling Standard order {order_id} for {api_symbol}")
+                return await self._execute_with_timestamp_retry(
+                    self.exchange.cancel_order,
+                    order_id,
+                    symbol,
+                    params=params
+                )
+                
         except Exception as e:
-            self.logger.error(f"[Binance] Cancel failed for {order_id} on {api_symbol}: {e}")
+            err_str = str(e).lower()
+            # FALLBACK: If standard cancel fails, try as algo (and vice versa)
+            if "not found" in err_str or "2011" in err_str or "orderid" in err_str:
+                new_type = "Standard" if is_algo else "ALGO"
+                self.logger.info(f"[Binance] Order {order_id} search failed as {'ALGO' if is_algo else 'Standard'}. Retrying as {new_type}...")
+                
+                # Flip the logic
+                retry_params = params.copy()
+                if not is_algo:
+                    # Try as algo
+                    return await self._execute_with_timestamp_retry(
+                        self.exchange.cancel_order,
+                        order_id,
+                        symbol,
+                        params=retry_params # CCXT might handle this if we just retry without specific flags
+                    )
+                else:
+                    # Try as standard
+                    return await self._execute_with_timestamp_retry(
+                        self.exchange.cancel_order,
+                        order_id,
+                        symbol,
+                        params=retry_params
+                    )
+            
+            self.logger.error(f"[Binance] Cancel order failed for {api_symbol}: {e}")
             raise e
 
     async def cancel_all_orders(self, symbol: str):

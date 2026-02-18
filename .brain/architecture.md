@@ -40,6 +40,7 @@ Transitioned to Bybit's **Parent-Child mechanism**:
 ### Binance Futures Implementation
 Handles the complexity of "Algo Orders":
 - **Algo Cancellation**: Uses specialized `fapiPrivateDeleteAlgoOrder` for TP/SL.
+- **Failover Logic**: Implements automatic fallback in `cancel_order`. If a standard cancellation fails with "Order not found," it automatically attempts the Algo endpoint (and vice versa). This ensures robust cleanup during position closing or signal reversals.
 - **Symbol Normalization**: Maps unified symbols to Binance internal formats (e.g., `BTC/USDT:USDT` -> `BTCUSDT`).
 
 ### 4. Dynamic Order Updates & Market Adaptation
