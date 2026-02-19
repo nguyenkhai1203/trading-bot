@@ -1,44 +1,59 @@
 # Project Walkthrough & GPS
 
-This document provides a high-level map of the project's evolution and current mindset.
+Bản đồ nhanh để navigate và debug dự án.
 
-## 🧭 Project Mindset Map (Diagnostic & Debugging Guide)
+## 🧭 Diagnostic Map
 
-If you encounter an error or need to modify a feature, refer to this table to know which document to read and which code module to fix.
-
-| Functional Area | Documentation (.brain/) | Source Module | Core Logic & Functions | Purpose / What to check? |
-| :--- | :--- | :--- | :--- | :--- |
-| **Data & Candles** | `architecture.md` | `data_manager.py` | `update_data`, `Namespacing` | Data fetching issues, Rate limits, CSV storage. |
-| **Signals & Entry** | `knowledge.md` | `bot.py`, `strategy.py` | `process_signal`, `check_confirm` | Indicator logic, weights, threshold levels. |
-| **Order Execution** | `architecture.md` | `execution.py` (Trader) | `place_order`, `cancel_order` | Limit/Market orders, Exchange API errors, Retries. |
-| **Position Management** | `architecture.md` | `execution.py` | `active_positions`, `_save_positions` | State in `positions.json`, data persistence. |
-| **Exit (SL/TP)** | `knowledge.md` | `risk_manager.py` | `calculate_sl_tp`, `monitor_pos` | SL/TP calculation based on ROE targets. |
-| **Exchange Sync** | `architecture.md` | `execution.py` | `reconcile_positions`, `ADOPT` | Cleaning "ghost" orders, adopting external trades. |
-| **Exchange Connectivity**| `architecture.md` | `adapters/*.py` | `BybitAdapter`, `BinanceAdapter` | Symbol mapping, Exchange-specific API quirks. |
-| **Weight Optimization** | `knowledge.md` | `analyzer.py` | `run_global_optimization` | Auto-updating `strategy_config.json`, Multi-TF sync. |
-| **Neural Brain** | `architecture.md` | `neural_brain.py` | `predict_win_rate`, `MLP` | Veto/Boost logic based on Machine Learning. |
-| **Notifications** | `architecture.md` | `notification.py` | `send_telegram`, `formatters` | Telegram alerts, Spam prevention (Rate limiting). |
+| Functional Area | Source Module | Core Functions | Khi nào xem? |
+| :--- | :--- | :--- | :--- |
+| **Data & Candles** | `data_manager.py` | `update_data`, `fetch_ohlcv_with_retry` | Data stale, rate limit, CSV issues |
+| **Signals & Entry** | `bot.py`, `strategy.py` | `run_step`, `get_signal` | Indicator/weight/threshold issues |
+| **Order Execution** | `execution.py` | `place_order`, `cancel_order` | API errors, order not placed |
+| **Position State** | `execution.py` | `active_positions`, `_save_positions` | `positions.json` corruption |
+| **SL/TP** | `execution.py`, `risk_manager.py` | `tighten_sl`, `recreate_missing_sl_tp` | SL not updating, wrong prices |
+| **Exchange Sync** | `execution.py` | `reconcile_positions`, adopt logic | Ghost orders, missing positions |
+| **Exchange APIs** | `adapters/*.py` | `BybitAdapter`, `BinanceAdapter` | Bybit/Binance API quirks |
+| **Notifications** | `telegram_bot.py`, `notification.py` | `get_status_message`, formatters | Telegram crash, wrong display |
+| **Brain Training** | `signal_tracker.py`, `neural_brain.py` | `record_trade`, `predict_win_rate` | Missing training data, MLP logic |
+| **Data Store** | `signal_performance.json` | — | PnL history, brain snapshot data |
 
 ---
 
-## 🚀 Recent Major Updates
+## 🚀 Major Updates
 
-### 1. Multi-Exchange & Symbol Isolation (Feb 18, 2026)
-- **Unified Key**: Transitioned to the `EXCHANGE_SYMBOL_TIMEFRAME` format for absolute state isolation between exchanges.
-- **Order Adoption**: "Garbage collection" and "Adoption" mechanism allows the bot to recover from external orders or disconnection.
+### Đợt 2 — Bug Fixes & Unified Data Store (Feb 19, 2026)
 
-### 2. Neural Brain & RL Scoring
-- **Numpy-based MLP**: Lightweight ML model for final trade validation.
-- **Veto/Boost**: Reduces low-quality trades and boosts high-probability signals.
+**11 fixes hoàn chỉnh:**
+- **Execution fixes**: `tighten_sl` timeframe, actual fees, duplicate adoption, Bybit `category:linear`
+- **Unified Store**: `signal_performance.json` là Single Source of Truth thay cho `trade_history.json`
+- **Telegram fixes**: `/status` crash, dead code, field name `pnl_usdt`
+- **Brain enrichment**: `record_trade()` giờ lưu đầy đủ PnL + trade metadata
 
-### 3. Execution Engine Hardening
-- **Authoritative Sync**: Self-healing via continuous reconciliation with exchange data.
-- **Algo Order Visibility**: Fixed major issues with "hidden" SL/TP orders on Binance Futures.
+**Kết quả test**: 17/19 pass (89.5%) — 2 fail là issues cũ không liên quan.
 
-## 🛠️ Key Architectural Components
-- **Data Layer**: Name-spaced by exchange and timeframe.
-- **Execution Engine**: Async locks and Authoritative Sync.
-- **Strategy Engine**: 40+ Technical indicators + Dynamic re-weighting.
+### Đợt 1 — Multi-Exchange & Isolation (Feb 18, 2026)
+- Unified Key `EXCHANGE_SYMBOL_TIMEFRAME` cho absolute state isolation
+- Order Adoption: recovery từ external orders hoặc reconnect
+- Bybit V5 symbol normalization + `:USDT` suffix handling
+
+### Trước đó
+- Neural Brain (MLP lightweight) với Veto/Boost logic
+- Authoritative Exchange-First Reality cho `/status`
+- Algo Order visibility fix (Binance SL/TP hidden orders)
 
 ---
-*For daily progress, see [task.md](task.md).*
+
+## 🏗️ Kiến trúc Data Flow
+
+```
+Exchange (CCXT) 
+    → Adapter (BinanceAdapter / BybitAdapter)  ← inject params, retry logic
+        → Trader (execution.py)                 ← business logic, position state
+            → TradingBot (bot.py)               ← signal → order lifecycle
+                → SignalTracker                  ← record trade + brain training
+                    → signal_performance.json    ← Single Source of Truth
+```
+
+---
+
+*Chi tiết issues: [issues.md](issues.md) | Progress: [task.md](task.md)*

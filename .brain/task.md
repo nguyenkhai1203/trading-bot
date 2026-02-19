@@ -1,45 +1,51 @@
-# Trading Bot Development Task List
+# Trading Bot — Task List
 
-- [x] **Setup Environment & API Connection** <!-- id: 0 -->
-    - [x] Create virtual environment and install dependencies (`ccxt`, `python-dotenv`, `pandas`, `numpy`) <!-- id: 1 -->
-    - [x] Implement basic connection test script for Bybit/Binance <!-- id: 3 -->
-- [x] **Data Fetching Module (Layer 1)** <!-- id: 4 -->
-    - [x] Implement `DataFetcher` class with namespacing <!-- id: 5 -->
-    - [x] Implement `MarketDataManager` to fix "Too Many Requests" <!-- id: 30 -->
-    - [x] Implement Data Persistence (CSV) with exchange isolation <!-- id: 51 -->
-- [x] **Decision Layer (Layer 2)** <!-- id: 8 -->
-    - [x] Update `Strategy` to use Feature Engineer & return Confidence/Signal <!-- id: 10 -->
-    - [x] Implement `WeightedScoringStrategy` (40+ Indicators) <!-- id: 32 -->
-    - [x] Build `Analyzer` for Asset-Specific Weight Optimization <!-- id: 33 -->
-    - [x] Implement Cross-Timeframe Validation (2-TF confirmation) <!-- id: 70 -->
-    - [x] Integrate Neural Brain training into automated optimization flow <!-- id: 101 -->
-- [x] **Risk Management (Layer 3)** <!-- id: 12 -->
-    - [x] Implement `calculate_position_size` with Fixed Margin ($3/$8) <!-- id: 35 -->
-    - [x] Implement ROE-Scaled SL/TP (5% SL / 10-20% TP ROE Targets) <!-- id: 75 -->
-    - [x] Implement Profit Lock (SL to Profit at 80% TP) <!-- id: 75 -->
-    - [x] Implement TA-based TP Extension (ATR/SR) <!-- id: 76 -->
-- [x] **Order Execution & Adapters** <!-- id: 15 -->
-    - [x] Implement `BaseAdapter` Interface (Unified behavior) <!-- id: 78 -->
-    - [x] specific `BybitAdapter` (V5, Parent-Child Orders, Pagination) <!-- id: 79 -->
-    - [x] specific `BinanceAdapter` (Algo Order support, Symbol Normalization) <!-- id: 80 -->
-    - [x] Implement **Shared Trader Singleton** with Async Locking (Race Prevention) <!-- id: 54 -->
-    - [x] Implementation of `_get_pos_key` (`EXCHANGE_SYMBOL_TIMEFRAME`) for absolute state isolation <!-- id: 110 -->
-- [x] **Position Tracking & Synchronization** <!-- id: 19 -->
-    - [x] Implement Persistent Position Storage (`positions.json`) <!-- id: 39 -->
-    - [x] Implement **Authoritative Exchange-First Reality** for `/status` <!-- id: 80 -->
-    - [x] Implement **Order Adoption Logic**: Sweep exchange for stray entries and adopt into local state <!-- id: 111 -->
-    - [x] Implement **Hybrid Reality**: Public Mode simulation with virtual P&L fallback <!-- id: 83 -->
-- [x] **Monitoring & Notifications** <!-- id: 22 -->
-    - [x] Implement Telegram notification system with Rate Limiting <!-- id: 22 -->
-    - [x] **Unified Exchange Logging**: Prepend `[EXCHANGE]` to all notifications <!-- id: 92 -->
-    - [x] **Per-Exchange Optimization Reports**: Group symbols by exchange in `/optimize` <!-- id: 93 -->
-- [x] **Bug Fixes & Hardening**
-    - [x] Fix Bybit "Qty invalid" (Dynamic precision logic)
-    - [x] Fix Bybit "Order Not Found" (Conditional order retry)
-    - [x] Fix Binance SOL/ARB SL/TP cancellation (Algo order flag)
-    - [x] Fix Dry-Run heartbeat hang (Skip live fetch, use cache)
+## ✅ Completed
 
-- [ ] **Next Steps**
-    - [ ] Add `/optimize` manual trigger via Telegram command <!-- id: 97 -->
-    - [ ] Improve monthly/all-time summary reports <!-- id: 98 -->
-    - [ ] Implement Summary Backtest phase in `run_global_optimization` <!-- id: 96 -->
+### Infrastructure
+- [x] Setup Environment & API Connection (ccxt, dotenv, pandas, numpy)
+- [x] Basic connection test for Bybit/Binance
+- [x] `MarketDataManager` with rate limit protection
+- [x] Data Persistence (CSV) with exchange isolation
+- [x] `WeightedScoringStrategy` (40+ indicators)
+- [x] `Analyzer` for asset-specific weight optimization
+- [x] Cross-Timeframe Validation (2-TF confirmation)
+- [x] Neural Brain (RL MLP) integration
+- [x] ROE-Scaled SL/TP (5% SL / 12%+ TP ROE targets)
+- [x] Profit Lock (SL → Profit at 80% TP)
+- [x] TA-based TP Extension (ATR/SR)
+- [x] `BaseAdapter` interface (Unified API behavior)
+- [x] `BybitAdapter` (Bybit V5, category:linear, conditional orders)
+- [x] `BinanceAdapter` (Algo Orders, Symbol normalization)
+- [x] Shared Trader Singleton + Async Locking
+- [x] `_get_pos_key` (`EXCHANGE_SYMBOL_TIMEFRAME`) namespacing
+- [x] Position Adoption Logic (stray order recovery)
+- [x] Telegram notifications + rate limiting
+- [x] Per-exchange optimization reports
+
+### Bug Fixes (Đợt 1 - Feb 2026)
+- [x] Fix 1: `tighten_sl` missing `timeframe` param
+- [x] Fix 2: `log_trade` prioritize actual fees from `_exit_fees`
+- [x] Fix 3: `reconcile_positions` extract actual fees to `_exit_fees`
+- [x] Fix 4: Remove duplicate adoption block in `reconcile_positions`
+- [x] Fix 5: `force_close_position` add `category: linear` for Bybit
+- [x] Fix 6: `/status` crash `NameError: force_live`
+- [x] Fix 7: Dead code removal in `telegram_bot.py`
+- [x] Fix 8: Enrich `record_trade()` with PnL fields
+- [x] Fix 9: Unify data store — `log_trade` → `signal_performance.json`
+- [x] Fix 10: `get_current_balance()` read from unified store
+- [x] Fix 11: `pnl_usd` → `pnl_usdt` in summary message
+
+---
+
+## 🔴 In Progress / Next
+
+### Runtime Fixes (Đợt 2 - Feb 19, 2026)
+- [ ] **Fix 12**: `reconcile_positions` — bỏ `params={'type': 'future'}` khi gọi `fetch_positions` để Adapter tự delegate params đúng cho từng sàn
+- [ ] **Fix 13**: `data_manager.py` — xóa duplicate `close()` (L320-321) đang đè lên logic chuẩn (L113)
+- [ ] **Fix 14**: Kiểm tra lại các nơi gọi raw `self.exchange.fetch_xxx` trong `execution.py` nên gọi qua Adapter thay vì CCXT object trực tiếp
+
+### Future Improvements
+- [ ] Add `/optimize` manual trigger via Telegram command
+- [ ] Improve monthly/all-time summary reports
+- [ ] Implement Summary Backtest phase in `run_global_optimization`

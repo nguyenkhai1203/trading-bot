@@ -1,0 +1,311 @@
+{
+    "active_positions": {
+        "UNI/USDT:USDT_adopted": {
+            "order_id": "62324075-461c-43db-9abc-c3dc7d181f97",
+            "symbol": "UNI/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 2.6,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771489876212,
+            "adopted": true
+        },
+        "XLM/USDT:USDT_adopted": {
+            "order_id": "b826252f-ee3a-4781-b2ba-bb34d7441a0d",
+            "symbol": "XLM/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 54.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493553277,
+            "adopted": true
+        },
+        "ARB/USDT:USDT_adopted": {
+            "order_id": "f3b9279c-70df-4281-9bcd-0f3d50aaede1",
+            "symbol": "ARB/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 81.2,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493553276,
+            "adopted": true
+        },
+        "AVAX/USDT:USDT_adopted": {
+            "order_id": "28ded86b-dc82-4cfe-b69e-41d30e044ec4",
+            "symbol": "AVAX/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 0.9,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493553281,
+            "adopted": true
+        },
+        "SOL/USDT:USDT_adopted": {
+            "order_id": "03c9e3ed-a770-4347-9b0b-58af6c135bef",
+            "symbol": "SOL/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 0.1,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493553282,
+            "adopted": true
+        },
+        "ADA/USDT:USDT_adopted": {
+            "order_id": "63bd79f6-9692-4fe5-9c3d-552f71ab9073",
+            "symbol": "ADA/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 31.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771489701948,
+            "adopted": true
+        },
+        "TAO/USDT:USDT_adopted": {
+            "order_id": "9582172939",
+            "symbol": "TAO/USDT:USDT",
+            "side": "SELL",
+            "price": 194.16,
+            "qty": 0.047,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771420442657
+        },
+        "XRP/USDT:USDT_adopted": {
+            "order_id": "142083149986",
+            "symbol": "XRP/USDT:USDT",
+            "side": "SELL",
+            "price": 1.4424,
+            "qty": 3.6,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771459374501
+        },
+        "AVAX/USDT_adopted": {
+            "order_id": "None",
+            "symbol": "AVAX/USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 0.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771489472408,
+            "adopted": true
+        },
+        "BINANCE_TAO_USDT:USDT_adopted": {
+            "order_id": "9582172939",
+            "symbol": "TAO/USDT:USDT",
+            "side": "SELL",
+            "price": 194.16,
+            "qty": 0.047,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771420442657
+        },
+        "BINANCE_XRP_USDT:USDT_adopted": {
+            "order_id": "142083149986",
+            "symbol": "XRP/USDT:USDT",
+            "side": "SELL",
+            "price": 1.4424,
+            "qty": 3.6,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771459374501
+        },
+        "BINANCE_AVAX_USDT_adopted": {
+            "order_id": "None",
+            "symbol": "AVAX/USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 0.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771489472408,
+            "adopted": true
+        },
+        "BYBIT_UNI_USDT:USDT_adopted": {
+            "order_id": "62324075-461c-43db-9abc-c3dc7d181f97",
+            "symbol": "UNI/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 2.6,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771489876212,
+            "adopted": true
+        },
+        "BYBIT_XLM_USDT:USDT_adopted": {
+            "order_id": "b826252f-ee3a-4781-b2ba-bb34d7441a0d",
+            "symbol": "XLM/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 54.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493553277,
+            "adopted": true
+        },
+        "BYBIT_ARB_USDT:USDT_adopted": {
+            "order_id": "f3b9279c-70df-4281-9bcd-0f3d50aaede1",
+            "symbol": "ARB/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 81.2,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493553276,
+            "adopted": true
+        },
+        "BYBIT_AVAX_USDT:USDT_adopted": {
+            "order_id": "28ded86b-dc82-4cfe-b69e-41d30e044ec4",
+            "symbol": "AVAX/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 0.9,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493553281,
+            "adopted": true
+        },
+        "BYBIT_SOL_USDT:USDT_adopted": {
+            "order_id": "03c9e3ed-a770-4347-9b0b-58af6c135bef",
+            "symbol": "SOL/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 0.1,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493553282,
+            "adopted": true
+        },
+        "BYBIT_ADA_USDT:USDT_adopted": {
+            "order_id": "63bd79f6-9692-4fe5-9c3d-552f71ab9073",
+            "symbol": "ADA/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 31.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771489701948,
+            "adopted": true
+        },
+        "BYBIT_AVAX/USDT:USDT_adopted": {
+            "order_id": "9d6a0623-f8a0-4f2c-ad47-25ccc6868806",
+            "symbol": "AVAX/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 0.9,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771494678630,
+            "adopted": true
+        },
+        "BYBIT_ARB/USDT:USDT_adopted": {
+            "order_id": "b5151db4-a508-4efe-bf4c-1daec6d5a8ec",
+            "symbol": "ARB/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 81.2,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771494678631,
+            "adopted": true
+        },
+        "BYBIT_XLM/USDT:USDT_adopted": {
+            "order_id": "df70e77c-99e1-4044-ad50-70dad636edb3",
+            "symbol": "XLM/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 54.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771494678632,
+            "adopted": true
+        },
+        "BYBIT_UNI/USDT:USDT_adopted": {
+            "order_id": "6bb9c1bd-e8bc-43df-a833-251888c755be",
+            "symbol": "UNI/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 2.6,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493981093,
+            "adopted": true
+        },
+        "BYBIT_SOL/USDT:USDT_adopted": {
+            "order_id": "a36761c9-5761-4628-a6e8-0dcb792a0ae0",
+            "symbol": "SOL/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 0.1,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771494678633,
+            "adopted": true
+        }
+    },
+    "pending_orders": {
+        "BYBIT_AVAX/USDT:USDT_adopted": {
+            "order_id": "9d6a0623-f8a0-4f2c-ad47-25ccc6868806",
+            "symbol": "AVAX/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 0.9,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771494678630,
+            "adopted": true
+        },
+        "BYBIT_ARB/USDT:USDT_adopted": {
+            "order_id": "b5151db4-a508-4efe-bf4c-1daec6d5a8ec",
+            "symbol": "ARB/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 81.2,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771494678631,
+            "adopted": true
+        },
+        "BYBIT_XLM/USDT:USDT_adopted": {
+            "order_id": "df70e77c-99e1-4044-ad50-70dad636edb3",
+            "symbol": "XLM/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 54.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771494678632,
+            "adopted": true
+        },
+        "BYBIT_UNI/USDT:USDT_adopted": {
+            "order_id": "6bb9c1bd-e8bc-43df-a833-251888c755be",
+            "symbol": "UNI/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 2.6,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771493981093,
+            "adopted": true
+        },
+        "BYBIT_SOL/USDT:USDT_adopted": {
+            "order_id": "a36761c9-5761-4628-a6e8-0dcb792a0ae0",
+            "symbol": "SOL/USDT:USDT",
+            "side": "SELL",
+            "price": 0.0,
+            "qty": 0.1,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771494678633,
+            "adopted": true
+        }
+    },
+    "last_sync": 1771494678.634088
+}

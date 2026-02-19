@@ -31,19 +31,19 @@ DRY_RUN = False  # Set to True for paper trading (simulation mode)
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 # Binance supports broad list
 BINANCE_SYMBOLS = [
-    'ETH/USDT', 'BTC/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 
-    'BCH/USDT', 'ADA/USDT', 'SUI/USDT', 'LINK/USDT', 'AVAX/USDT', 
-    'LTC/USDT', 'NEAR/USDT', 'FET/USDT', 'DOT/USDT', 'STX/USDT', 
-    'TAO/USDT', 'FTM/USDT', 'OP/USDT', 'ARB/USDT', 'INJ/USDT', 
-    'TIA/USDT', 'JUP/USDT', 'SEI/USDT', 'FIL/USDT'
+    'ETH/USDT:USDT', 'BTC/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT', 
+    'BCH/USDT:USDT', 'ADA/USDT:USDT', 'SUI/USDT:USDT', 'LINK/USDT:USDT', 'AVAX/USDT:USDT', 
+    'LTC/USDT:USDT', 'NEAR/USDT:USDT', 'FET/USDT:USDT', 'DOT/USDT:USDT', 'STX/USDT:USDT', 
+    'TAO/USDT:USDT', 'FTM/USDT:USDT', 'OP/USDT:USDT', 'ARB/USDT:USDT', 'INJ/USDT:USDT', 
+    'TIA/USDT:USDT', 'JUP/USDT:USDT', 'SEI/USDT:USDT', 'FIL/USDT:USDT'
 ]
 
 # Bybit supports unique gems like HYPE (Updated User Request: Top 20 Stable High-Vol)
 BYBIT_SYMBOLS = [
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT',
-    'DOGE/USDT', 'ADA/USDT', 'TRX/USDT', 'AVAX/USDT', 'LINK/USDT',
-    'DOT/USDT', 'POL/USDT', 'LTC/USDT', 'BCH/USDT', 'UNI/USDT',
-    'XLM/USDT', 'NEAR/USDT', 'ATOM/USDT', 'APT/USDT', 'ARB/USDT'
+    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT',
+    'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'TRX/USDT:USDT', 'AVAX/USDT:USDT', 'LINK/USDT:USDT',
+    'DOT/USDT:USDT', 'POL/USDT:USDT', 'LTC/USDT:USDT', 'BCH/USDT:USDT', 'UNI/USDT:USDT',
+    'XLM/USDT:USDT', 'NEAR/USDT:USDT', 'ATOM/USDT:USDT', 'APT/USDT:USDT', 'ARB/USDT:USDT'
 ]
 
 # Unified list for general manager usage (union of both)
@@ -106,7 +106,14 @@ CONFIDENCE_TIERS = {
 }
 MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade
 
-# Trailing / Profit Lock-in Settings (v3.0)
+# Trailing / Profit Lock-in Settings (v4.0)
+ENABLE_DYNAMIC_SLTP = True
+ATR_TRAIL_MULTIPLIER = 1.5      # 1.5 * ATR for trailing
+ATR_TRAIL_MIN_MOVE_PCT = 0.001  # 0.1% min move to update exchange
+RSI_OVERBOUGHT_EXIT = 75        # Guard: Pull TP closer
+EMA_BREAK_CLOSE_THRESHOLD = 0.998 # Guard: Emergency exit (0.2% below EMA21)
+
+# Deprecated v3.0 settings (fallback)
 ENABLE_PROFIT_LOCK = True
 PROFIT_LOCK_THRESHOLD = 0.8     # 80% of the way to TP
 PROFIT_LOCK_LEVEL = 0.1         # Lock in 10% of the target profit

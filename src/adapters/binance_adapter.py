@@ -6,6 +6,7 @@ import hashlib
 import requests
 from urllib.parse import urlencode
 from typing import Dict, List, Optional, Any
+import logging
 
 from base_exchange_client import BaseExchangeClient
 from .base_adapter import BaseAdapter
@@ -59,13 +60,36 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             limit=limit
         )
 
+
+    def _get_api_symbol(self, symbol: str) -> str:
+        """Standard help to normalize CCXT symbol to Binance native symbol (e.g. BTC/USDT:USDT -> BTCUSDT)."""
+        if not symbol: return ""
+        return symbol.split(':')[0].replace('/', '').upper()
+
     async def fetch_ticker(self, symbol: str) -> Dict:
         """Fetch ticker with retry logic."""
         return await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol)
 
     async def fetch_tickers(self, symbols: List[str]) -> Dict:
-        """Fetch multiple tickers at once."""
-        return await self._execute_with_timestamp_retry(self.exchange.fetch_tickers, symbols)
+        """Fetch multiple tickers using concurrent individual requests for better stability on Futures."""
+        tasks = [self.fetch_ticker(s) for s in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        tickers = {}
+        for i, s in enumerate(symbols):
+            if isinstance(results[i], dict):
+                tickers[s] = results[i]
+        return tickers
+
+    async def fetch_algo_orders(self, symbol: Optional[str] = None) -> List[Dict]:
+        """Fetch algo orders (Stop Loss, Take Profit, Trailing Stop) via REST."""
+        try:
+            api_symbol = self._get_api_symbol(symbol)
+            algo_params = {'symbol': api_symbol} if api_symbol else {}
+            return await self._execute_with_timestamp_retry(self.exchange.fapiPrivateGetOpenAlgoOrders, algo_params)
+        except Exception as e:
+            self.logger.warning(f"[BinanceAdapter] Failed to fetch algo orders for {symbol}: {e}")
+            return []
 
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
         """
@@ -83,7 +107,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
 
             # 2. Algo Orders (Binance Futures Specific)
             # fapiPrivateGetOpenAlgoOrders works globally or per symbol
-            algo_params = {'symbol': symbol.replace('/', '')} if symbol else {}
+            algo_params = {'symbol': self._get_api_symbol(symbol)} if symbol else {}
             tasks.append(self._execute_with_timestamp_retry(self.exchange.fapiPrivateGetOpenAlgoOrders, algo_params))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -118,9 +142,9 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             print(f"❌ [BinanceAdapter] Critical error fetching open orders: {e}")
             return []
 
-    async def fetch_positions(self) -> List[Dict]:
+    async def fetch_positions(self, params: Dict = {}) -> List[Dict]:
         """Fetch active positions."""
-        return await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
+        return await self._execute_with_timestamp_retry(self.exchange.fetch_positions, params=params)
 
     async def create_order(self, symbol: str, type: str, side: str, amount: float, price: Optional[float] = None, params: Dict = {}) -> Dict:
         """Create a new order."""
@@ -140,7 +164,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         
         # Normalize symbol for Binance API (e.g. BTC/USDT:USDT -> BTCUSDT)
         # Use split(':') and then replace '/' to be safest
-        api_symbol = symbol.split(':')[0].replace('/', '')
+        api_symbol = self._get_api_symbol(symbol)
         
         is_algo = params.get('is_algo', False) or 'stopLoss' in params or 'takeProfit' in params or 'stopPrice' in params
         
@@ -198,7 +222,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
 
     async def cancel_all_orders(self, symbol: str):
         """Cancel ALL orders for a symbol, including standard and algo orders."""
-        api_symbol = symbol.replace('/', '').split(':')[0]
+        api_symbol = self._get_api_symbol(symbol)
         self.logger.info(f"[Binance] Purging all orders for {symbol} ({api_symbol})...")
         
         # 1. Cancel standard orders
@@ -239,7 +263,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         base = 'https://fapi.binance.com'
         # Merge with passed params if any
         payload = {
-            'symbol': symbol.replace('/', ''),
+            'symbol': self._get_api_symbol(symbol),
             'leverage': int(leverage),
             'recvWindow': 60000,
             'timestamp': self.get_synced_timestamp()
@@ -252,7 +276,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         path = '/fapi/v1/marginType'
         base = 'https://fapi.binance.com'
         payload = {
-            'symbol': symbol.replace('/', ''),
+            'symbol': self._get_api_symbol(symbol),
             'marginType': mode.upper(), # ISOLATED or CROSSED
             'recvWindow': 60000,
             'timestamp': self.get_synced_timestamp()
@@ -326,3 +350,117 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             symbol,
             params
         )
+
+    async def place_stop_orders(
+        self, symbol: str, side: str, qty: float,
+        sl: Optional[float] = None, tp: Optional[float] = None
+    ) -> Dict:
+        """
+        Place SL and/or TP orders for Binance Futures.
+        Uses STOP_MARKET for SL and TAKE_PROFIT_MARKET for TP.
+        Returns {'sl_id': str|None, 'tp_id': str|None}.
+        """
+        close_side = 'sell' if side.upper() == 'BUY' else 'buy'
+        ids = {'sl_id': None, 'tp_id': None}
+
+        if sl is not None:
+            try:
+                o = await self._execute_with_timestamp_retry(
+                    self.exchange.create_order, symbol,
+                    'STOP_MARKET', close_side, qty,
+                    params={'stopPrice': sl, 'reduceOnly': True}
+                )
+                ids['sl_id'] = str(o.get('id')) if o.get('id') else None
+                self.logger.info(f"[Binance] SL placed for {symbol} @ {sl} → id={ids['sl_id']}")
+            except Exception as e:
+                self.logger.error(f"[Binance] Failed to place SL for {symbol}: {e}")
+
+        if tp is not None:
+            try:
+                o = await self._execute_with_timestamp_retry(
+                    self.exchange.create_order, symbol,
+                    'TAKE_PROFIT_MARKET', close_side, qty,
+                    params={'stopPrice': tp, 'reduceOnly': True}
+                )
+                ids['tp_id'] = str(o.get('id')) if o.get('id') else None
+                self.logger.info(f"[Binance] TP placed for {symbol} @ {tp} → id={ids['tp_id']}")
+            except Exception as e:
+                self.logger.error(f"[Binance] Failed to place TP for {symbol}: {e}")
+
+        return ids
+
+    async def cancel_stop_orders(
+        self, symbol: str,
+        sl_id: Optional[str] = None,
+        tp_id: Optional[str] = None
+    ):
+        """
+        Cancel existing SL and/or TP orders on Binance Futures.
+        Tries standard cancel first, then falls back to algo-order cancel.
+        """
+        api_symbol = self._get_api_symbol(symbol)
+
+        for oid in filter(None, [sl_id, tp_id]):
+            cancelled = False
+            # Try standard cancel first
+            try:
+                await self._execute_with_timestamp_retry(
+                    self.exchange.cancel_order, oid, symbol
+                )
+                self.logger.info(f"[Binance] Cancelled stop order {oid} for {symbol}")
+                cancelled = True
+            except Exception as e:
+                err = str(e).lower()
+                if 'not found' in err or '2011' in err or 'orderid' in err:
+                    # Fallback: try as algo order
+                    try:
+                        await self._execute_with_timestamp_retry(
+                            self.exchange.fapiPrivateDeleteAlgoOrder,
+                            {'symbol': api_symbol, 'algoId': oid}
+                        )
+                        self.logger.info(f"[Binance] Cancelled algo order {oid} (fallback)")
+                        cancelled = True
+                    except Exception as algo_e:
+                        self.logger.warning(f"[Binance] Could not cancel stop order {oid}: std={e} algo={algo_e}")
+                else:
+                    self.logger.warning(f"[Binance] Cancel stop order {oid} failed: {e}")
+
+    async def close_position(self, symbol: str, side: str, qty: float) -> Dict:
+        """
+        Market-close an open position on Binance Futures.
+        Cancels all standard and algo orders first to prevent reduceOnly conflicts.
+        """
+        # 1. Cancel all orders (handles std + algo internally)
+        await self.cancel_all_orders(symbol)
+
+        # 2. Market close with reduceOnly
+        close_side = 'sell' if side.upper() == 'BUY' else 'buy'
+        try:
+            result = await self._execute_with_timestamp_retry(
+                self.exchange.create_order, symbol,
+                'MARKET', close_side, qty,
+                params={'reduceOnly': True}
+            )
+            self.logger.info(f"[Binance] Closed position {symbol} {side} qty={qty} → {result.get('id')}")
+            return result
+        except Exception as e:
+            self.logger.error(f"[Binance] Close position failed for {symbol}: {e}")
+            raise e
+    def round_qty(self, symbol: str, qty: float) -> float:
+        """
+        Binance-specific quantity rounding.
+        Uses standard CCXT precision rules.
+        """
+        try:
+            qty_str = self.exchange.amount_to_precision(symbol, qty)
+            return float(qty_str)
+        except Exception:
+            return round(qty, 3)
+
+    def is_spot(self, symbol: str) -> bool:
+        """Binance Spot detection."""
+        # Binance Futures symbols in CCXT typically have :USDT suffix
+        if ":USDT" in symbol: return False
+        market = self.exchange.markets.get(symbol)
+        if market and market.get('spot'): return True
+        return False

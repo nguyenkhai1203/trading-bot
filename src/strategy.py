@@ -21,13 +21,15 @@ class WeightedScoringStrategy(Strategy):
         self.symbol = symbol
         self.timeframe = timeframe
         self.exchange = exchange
+        import logging
+        self.logger = logging.getLogger(__name__)
         self.config_mtime = 0  # Track config file modification time
         self.config_version = 0  # Version number for positions to reference
         self.weights = self.load_weights(symbol, timeframe, exchange)
         
-        # RL BRAIN (Input Size = 12 Normalized Features)
+        # RL BRAIN (Input Size = 17 Normalized Features v4.0)
         try:
-            self.brain = NeuralBrain(input_size=12)
+            self.brain = NeuralBrain(input_size=17)
             self.use_brain = True
         except Exception as e:
             print(f"⚠️ Failed to init NeuralBrain: {e}")
@@ -49,12 +51,15 @@ class WeightedScoringStrategy(Strategy):
             self.config_version += 1
             self.config_mtime = mtime
             
-        # Try specific exchange_symbol_timeframe, then symbol_timeframe, then symbol, then default
-        key_ex = f"{exchange}_{symbol}_{timeframe}" if exchange else None
-        key_tf = f"{symbol}_{timeframe}"
+        # Try specific exchange_symbol_timeframe, then fallback to symbol if not found
+        # Issue 9: Standardized key is EXCHANGE_BASE_QUOTE_TF
+        clean_symbol = symbol.split(':')[0].replace('/', '_').upper()
+        key_ex = f"{exchange}_{clean_symbol}_{timeframe}" if (exchange and timeframe) else None
+        key_tf = f"{clean_symbol}_{timeframe}"
         
         if key_ex and key_ex in data:
             self.config_data = data[key_ex]
+            self.logger.debug(f"Loaded exchange-specific config for {key_ex}")
         elif key_tf in data:
             self.config_data = data[key_tf]
         elif symbol in data:
@@ -253,11 +258,20 @@ class WeightedScoringStrategy(Strategy):
         # Convert to list for brain
         feature_vector = list(snapshot.values())
         
+        # Add 5 dynamic context placeholders for v4.0 (Defaults for NEW trades)
+        import numpy as np
+        # Case: New trade - SL original = current target SL, moves = 0, pnl = 0
+        sl_orig = row.get('sl', row.get('close', 0))
+        entry = row.get('close', 1)
+        side_mult = 1 # We don't know side yet in this logic block, but we can assume BUY for scaling
+        # Actually, it's better to just use neutral 0.5 for placeholders at entry
+        feature_vector.extend([0.5, 0.5, 0.0, 0.0, 0.0]) # [dist_orig, dist_final, moves, tightened, max_pnl]
+        
         neural_score = 0.5
         if self.use_brain:
             try:
                 # Replace NaNs with defaults just in case
-                clean_vector = [0.5 if pd.isna(x) else x for x in feature_vector]
+                clean_vector = [0.5 if (pd.isna(x) if hasattr(pd, 'isna') else x is None) else x for x in feature_vector]
                 neural_score = self.brain.predict(clean_vector)
             except Exception as e:
                 print(f"⚠️ Brain error: {e}")

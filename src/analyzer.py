@@ -345,8 +345,9 @@ class StrategyAnalyzer:
         else:
             data = {"default": {}}
 
-        # Use exchange-prefixed key for specific weights
-        key = f"{exchange}_{symbol}_{timeframe}"
+        # Use exchange-prefixed key for specific weights (Issue 9)
+        clean_symbol = symbol.split(':')[0].replace('/', '_').upper()
+        key = f"{exchange}_{clean_symbol}_{timeframe}"
         if key not in data:
             data[key] = {
                 "enabled": True,

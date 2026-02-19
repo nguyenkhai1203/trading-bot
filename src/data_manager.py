@@ -133,6 +133,12 @@ class MarketDataManager:
 
     async def update_tickers(self, symbols):
         """Fetch latest prices for all symbols across all exchanges."""
+        curr_time = time.time()
+        if not hasattr(self, '_last_ticker_update'): self._last_ticker_update = 0
+        if curr_time - self._last_ticker_update < 1.0:
+            return 0
+        self._last_ticker_update = curr_time
+        
         from config import BINANCE_SYMBOLS, BYBIT_SYMBOLS
         exchange_symbol_map = {
             'BINANCE': BINANCE_SYMBOLS,
@@ -308,7 +314,7 @@ class MarketDataManager:
 
     async def _execute_with_timestamp_retry(self, api_call, *args, **kwargs):
         """Delegate retry logic to adapter (exposed for Trader)."""
-        return await self.adapter._execute_with_timestamp_retry(api_call, *args, **kwargs)
-
-    async def close(self):
-        await self.exchange.close()
+        from base_exchange_client import BaseExchangeClient
+        return await BaseExchangeClient._execute_with_timestamp_retry(self.adapter, api_call, *args, **kwargs)
+    # Fix 13: Removed duplicate close() that was overriding the correct close() at line 113.
+    # The correct close() properly iterates all adapters and resets self.initialized = False.

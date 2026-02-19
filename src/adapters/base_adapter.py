@@ -57,7 +57,7 @@ class BaseAdapter(ABC):
         pass
 
     @abstractmethod
-    async def fetch_positions(self) -> List[Dict]:
+    async def fetch_positions(self, params: Dict = {}) -> List[Dict]:
         """Fetch active positions."""
         pass
 
@@ -84,6 +84,68 @@ class BaseAdapter(ABC):
     @abstractmethod
     async def fetch_balance(self) -> Dict:
         """Fetch account balance."""
+        pass
+
+    @abstractmethod
+    async def cancel_all_orders(self, symbol: str):
+        """Cancel ALL orders for a symbol (standard + algo/conditional)."""
+        pass
+
+    @abstractmethod
+    async def fetch_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
+        """Fetch a single order, with fallback to conditional queue if needed."""
+        pass
+
+    @abstractmethod
+    async def place_stop_orders(
+        self, symbol: str, side: str, qty: float,
+        sl: Optional[float] = None, tp: Optional[float] = None
+    ) -> Dict:
+        """
+        Place SL and/or TP orders for an open position.
+        Returns dict with keys: sl_id, tp_id (None if not placed).
+
+        Encapsulates all exchange-specific differences:
+          - Binance: STOP_MARKET / TAKE_PROFIT_MARKET order types
+          - Bybit:   market + triggerDirection + category: linear
+        """
+        pass
+
+    @abstractmethod
+    async def cancel_stop_orders(
+        self, symbol: str,
+        sl_id: Optional[str] = None,
+        tp_id: Optional[str] = None
+    ):
+        """
+        Cancel existing SL and/or TP orders by order ID.
+
+        Encapsulates all exchange-specific differences:
+          - Binance: algo order cancel (fapiPrivateDeleteAlgoOrder or is_algo=True flag)
+          - Bybit:   conditional order cancel with category:linear + trigger fallback
+        """
+        pass
+
+    @abstractmethod
+    async def close_position(self, symbol: str, side: str, qty: float) -> Dict:
+        """
+        Market-close an open position.
+        Cancels all existing stop orders first, then sends market reduceOnly order.
+
+        Encapsulates all exchange-specific differences:
+          - Binance: cancel_all + cancel algo orders + MARKET reduceOnly
+          - Bybit:   cancel_all (category:linear) + market reduceOnly + category:linear
+        """
+        pass
+
+    @abstractmethod
+    def round_qty(self, symbol: str, qty: float) -> float:
+        """Round quantity to exchange-specific precision."""
+        pass
+
+    @abstractmethod
+    def is_spot(self, symbol: str) -> bool:
+        """Check if a symbol is a spot symbol."""
         pass
 
     async def close(self):

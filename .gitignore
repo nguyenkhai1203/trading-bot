@@ -18,10 +18,6 @@ data/
 
 # Trading State
 src/__pycache__/
-src/positions.json
-src/trade_history.json
-positions.json
-trade_history.json
 
 # Reports
 reports/

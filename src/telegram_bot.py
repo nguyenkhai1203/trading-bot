@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -55,7 +56,7 @@ async def close():
         pass
 
 # ============== STATUS MESSAGE ==============
-async def get_status_message() -> str:
+async def get_status_message(force_live: bool = False) -> str:
     """Generate authoritative status message by fetching live data from exchanges."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     positions_file = os.path.join(script_dir, 'positions.json')
@@ -71,9 +72,15 @@ async def get_status_message() -> str:
 
     local_active = local_data.get('active_positions', {})
     local_pending = local_data.get('pending_orders', {})
+    
+    # Issue 7: Cache logic
+    last_sync = local_data.get('last_sync', 0)
+    # If synced in last 60 seconds, reuse local data as authoritative list (FAST)
+    use_cache = not force_live and (time.time() - last_sync < 60)
 
     now = datetime.now().strftime('%d/%m %H:%M')
-    lines = [f"📊 *AUTHORITATIVE STATUS* - {now}", ""]
+    cache_tag = " (CACHED)" if use_cache else ""
+    lines = [f"📊 *AUTHORITATIVE STATUS*{cache_tag} - {now}", ""]
     
     # 2. Fetch LIVE data from all adapters
     is_virtual_any = False
@@ -97,8 +104,8 @@ async def get_status_message() -> str:
             live_positions = {}
             pending_entries = []
             
-            if is_public:
-                # --- PUBLIC MODE: Use Local Data as Source of Truth ---
+            if is_public or use_cache:
+                # --- PUBLIC/CACHED MODE: Use Local Data as Source of Truth ---
                 # Filter local_active for this exchange
                 for l_key, l_pos in local_active.items():
                     if l_key.startswith(f"{ex_name}_"):
@@ -166,7 +173,10 @@ async def get_status_message() -> str:
                     side_emoji = "📈" if side == 'BUY' else "📉"
                     pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
                     
-                    lines.append(f"{side_emoji} *{symbol}* [{timeframe}] ({lev}x) | {pnl_emoji}*{pnl_pct:+.2f}%*")
+                    # Issue 5: Manual label
+                    manual_label = " (MANUAL)" if ex_p.get('adopted') or timeframe == 'sync' else ""
+                    
+                    lines.append(f"{side_emoji} *{symbol}* [{timeframe}]{manual_label} ({lev}x) | {pnl_emoji}*{pnl_pct:+.2f}%*")
                     lines.append(f"   `{entry:.6f}` → `{current:.6f}`")
                     if sl > 0 or tp > 0:
                         lines.append(f"   🎯 TP: {tp:.6f} | 🛡 SL: {sl:.6f}")
@@ -203,13 +213,6 @@ async def get_status_message() -> str:
         lines.append("📡 *Exchange-First Reality Active*")
     
     return "\n".join(lines)
-    
-    return "\n".join(lines)
-
-    lines.append("─" * 20)
-    lines.append("📡 *Signal Channel Mode Active*")
-    
-    return "\n".join(lines)
 
 async def get_summary_message(period: str) -> str:
     """Generate summary message"""
@@ -237,7 +240,7 @@ async def get_summary_message(period: str) -> str:
     wins = sum(1 for t in filtered if t.get('result') == 'WIN')
     win_rate = (wins / total * 100) if total > 0 else 0
     total_pnl = sum(float(t.get('pnl_pct', 0)) for t in filtered)
-    total_usd = sum(float(t.get('pnl_usd', 0)) for t in filtered)
+    total_usd = sum(float(t.get('pnl_usdt', 0) or 0) for t in filtered)
     
     lines = [
         title, "─" * 20,

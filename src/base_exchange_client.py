@@ -109,7 +109,11 @@ class BaseExchangeClient:
         """
         for attempt in range(max_retries):
             try:
-                return await api_call(*args, **kwargs)
+                res = await api_call(*args, **kwargs)
+                # Double safety: if we somehow got a coroutine back (due to nested calls), await it.
+                if asyncio.iscoroutine(res):
+                    return await res
+                return res
             except Exception as e:
                 error_msg = str(e).lower()
                 # Check for timestamp-related errors (-1021 is Binance timestamp error code)

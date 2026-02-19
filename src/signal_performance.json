@@ -439,6 +439,42 @@
       ],
       "result": "WIN",
       "pnl_pct": 38.41095890410961
+    },
+    {
+      "timestamp": "2026-02-19T14:25:55.249892",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "side": "BUY",
+      "signals": [
+        "manual_sync"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -100.06,
+      "pnl_usdt": -10.006,
+      "entry_price": 100.0,
+      "exit_price": 0,
+      "qty": 0.1,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": null,
+      "exit_time": 1771485955249
+    },
+    {
+      "timestamp": "2026-02-19T15:24:32.403391",
+      "symbol": "AVAX/USDT:USDT",
+      "timeframe": "sync",
+      "side": "SELL",
+      "signals": [
+        "manual_sync"
+      ],
+      "result": "WIN",
+      "pnl_pct": 2.9452,
+      "pnl_usdt": 0.269,
+      "entry_price": 9.119,
+      "exit_price": 8.846,
+      "qty": 1.0,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": 1771459200608,
+      "exit_time": 1771489472403
     }
   ],
   "signal_stats": {
@@ -597,6 +633,15 @@
       "wins": 1,
       "losses": 0,
       "recent_results": [
+        1
+      ]
+    },
+    "manual_sync": {
+      "total": 2,
+      "wins": 1,
+      "losses": 1,
+      "recent_results": [
+        0,
         1
       ]
     }

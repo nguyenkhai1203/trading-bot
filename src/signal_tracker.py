@@ -65,10 +65,15 @@ class SignalTracker:
         except Exception as e:
             print(f"Error saving signal tracker: {e}")
     
-    def record_trade(self, symbol, timeframe, side, signals_used, result, pnl_pct, btc_change=None, snapshot=None):
+    def record_trade(self, symbol, timeframe, side, signals_used, result, pnl_pct,
+                 btc_change=None, snapshot=None,
+                 pnl_usdt=None, entry_price=None, exit_price=None,
+                 qty=None, exit_reason=None, entry_time=None, exit_time=None,
+                 sl_original=None, sl_final=None, sl_move_count=0,
+                 sl_tightened=False, max_pnl_pct=0):
         """
         Record a completed trade for learning.
-        
+
         Args:
             symbol: Trading pair (e.g., 'NEAR/USDT')
             timeframe: Timeframe (e.g., '1h')
@@ -78,6 +83,13 @@ class SignalTracker:
             pnl_pct: PnL percentage
             btc_change: BTC 1h price change (optional, for market condition check)
             snapshot: Dictionary of normalized features at entry (for Neural Net training)
+            pnl_usdt: Realised PnL in USDT (accounting, replaces trade_history.json)
+            entry_price: Entry fill price
+            exit_price: Exit fill price
+            qty: Position size (base asset)
+            exit_reason: Why the trade closed (TP, SL, Signal Flip, etc.)
+            entry_time: Entry timestamp (epoch ms)
+            exit_time: Exit timestamp (epoch ms)
         """
         trade = {
             'timestamp': datetime.now().isoformat(),
@@ -86,9 +98,23 @@ class SignalTracker:
             'side': side,
             'signals': signals_used,
             'result': result,
-            'pnl_pct': pnl_pct
+            'pnl_pct': pnl_pct,
+            # Accounting fields (unified store – replaces trade_history.json)
+            'pnl_usdt': pnl_usdt,
+            'entry_price': entry_price,
+            'exit_price': exit_price,
+            'qty': qty,
+            'exit_reason': exit_reason,
+            'entry_time': entry_time,
+            'exit_time': exit_time,
+            # Dynamic Context (v4.0)
+            'sl_original': sl_original,
+            'sl_final': sl_final,
+            'sl_move_count': sl_move_count,
+            'sl_tightened': sl_tightened,
+            'max_pnl_pct': max_pnl_pct,
         }
-        
+
         # RL UPGRADE: Save feature snapshot for training
         if snapshot:
             trade['snapshot'] = snapshot

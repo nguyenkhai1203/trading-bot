@@ -7,6 +7,8 @@ import asyncio
 
 from config import (
     LEVERAGE, GLOBAL_MAX_LEVERAGE, BINANCE_API_KEY, BINANCE_API_SECRET, AUTO_CREATE_SL_TP,
+    ENABLE_DYNAMIC_SLTP, ATR_TRAIL_MULTIPLIER, ATR_TRAIL_MIN_MOVE_PCT,
+    RSI_OVERBOUGHT_EXIT, EMA_BREAK_CLOSE_THRESHOLD,
     ENABLE_PROFIT_LOCK, PROFIT_LOCK_THRESHOLD, PROFIT_LOCK_LEVEL,
     MAX_TP_EXTENSIONS, ATR_EXT_MULTIPLIER
 )
@@ -88,21 +90,34 @@ class Trader:
         current_exchange = self.exchange_name if self.exchange_name else 'BINANCE'
         
         for k in keys_to_migrate:
-            # Check if likely legacy (no prefix like BINANCE_ or BYBIT_)
-            if not k.startswith(('BINANCE_', 'BYBIT_')):
-                val = self.active_positions.pop(k)
-                # Use current exchange for migration
-                new_key = f"{current_exchange}_{k}"
-                # Also ensure val has 'symbol'
-                if 'symbol' not in val:
-                   # Try to recover symbol from key (e.g. ETH/USDT_1h)
-                   parts = k.split('_')
-                   if len(parts) >= 1:
-                       val['symbol'] = parts[0]
+            val = self.active_positions.pop(k)
+            
+            # 1. Ensure exchange prefix exists
+            prefix = ""
+            rest_of_key = k
+            if k.startswith(('BINANCE_', 'BYBIT_')):
+                prefix = k.split('_')[0]
+                rest_of_key = "_".join(k.split('_')[1:])
+            else:
+                prefix = current_exchange
                 
-                self.active_positions[new_key] = val
+            # 2. Re-standardize rest_of_key to BASE_QUOTE_TF format
+            # If it contains slashes, replace them with underscores
+            new_suffix = rest_of_key.replace('/', '_')
+            
+            # 3. Reconstruct new_key
+            new_key = f"{prefix}_{new_suffix}"
+            
+            # 4. Ensure val has 'symbol'
+            if 'symbol' not in val:
+                # Try to recover symbol from original key (e.g. BTC/USDT_1h)
+                symbol_part = rest_of_key.split('_')[0]
+                val['symbol'] = symbol_part
+                
+            self.active_positions[new_key] = val
+            if new_key != k:
                 migrated = True
-                self.logger.info(f"[MIGRATION] Key {k} -> {new_key} (Assumed {current_exchange})")
+                self.logger.info(f"[MIGRATION] Position Key: {k} -> {new_key}")
         if migrated:
             self._save_positions()
 
@@ -138,8 +153,13 @@ class Trader:
 
     async def _execute_with_timestamp_retry(self, api_call, *args, **kwargs):
         """Execute exchange API call with timestamp error retry using this specific exchange's adapter."""
-        # Directly use the adapter's implementation instead of delegating to DataManager's default adapter
-        return await self.exchange._execute_with_timestamp_retry(api_call, *args, **kwargs)
+        # Use BaseExchangeClient's method directly to avoid __getattr__ proxy to raw CCXT
+        from base_exchange_client import BaseExchangeClient
+        res = await BaseExchangeClient._execute_with_timestamp_retry(self.exchange, api_call, *args, **kwargs)
+        # Double safety check: if we somehow got a coroutine back (due to nested calls), await it.
+        if asyncio.iscoroutine(res):
+            return await res
+        return res
 
     def _load_positions(self):
         """Loads positions and pending orders from the JSON file, filtering for current exchange."""
@@ -239,7 +259,8 @@ class Trader:
         # Prepare data structure
         data = {
             'active_positions': merged_active,
-            'pending_orders': merged_pending
+            'pending_orders': merged_pending,
+            'last_sync': time.time()
         }
         
         max_retries = 3
@@ -397,11 +418,36 @@ class Trader:
             return symbol
 
     def _get_pos_key(self, symbol, timeframe=None):
-        """Standardized position key: exchange_symbol_timeframe"""
+        """Standardized position key: EXCHANGE_SYMBOL_QUOTE_TIMEFRAME"""
         exchange_name = self.exchange_name
+        # Extract base/quote and replace slashes with underscores (e.g., BTC/USDT -> BTC_USDT)
+        # Handle settlement info if present (e.g. BTC/USDT:USDT)
+        clean_symbol = symbol.split(':')[0].replace('/', '_').upper()
         if timeframe:
-            return f"{exchange_name}_{symbol}_{timeframe}"
-        return f"{exchange_name}_{symbol}"
+            return f"{exchange_name}_{clean_symbol}_{timeframe}"
+        return f"{exchange_name}_{clean_symbol}"
+
+    def _parse_pos_key(self, pos_key):
+        """
+        Parses the pos_key back into its components: exchange, symbol (unified), and timeframe.
+        Returns: (exchange, symbol, timeframe)
+        """
+        if not pos_key:
+            return None, None, None
+            
+        parts = pos_key.split('_')
+        # Format: EXCHANGE_BASE_QUOTE_TIMEFRAME
+        if len(parts) >= 3:
+            exchange = parts[0]
+            base = parts[1]
+            quote = parts[2]
+            # Reconstitute symbol (unified format BASE/QUOTE)
+            symbol = f"{base}/{quote}"
+            timeframe = parts[3] if len(parts) > 3 else None
+            return exchange, symbol, timeframe
+        
+        # Fallback for simpler or legacy keys
+        return None, None, None
 
     def _clamp_leverage(self, lev):
         """Clamp leverage to allowed range (default 5-20)."""
@@ -671,30 +717,20 @@ class Trader:
         
         # Dynamic decimal places based on exchange metadata
         try:
-            # Use CCXT's built-in precision handling
-            # CRITICAL FIX FOR BYBIT: 
-            # CCXT keys 'ADA/USDT' as Spot (prec 0.01) and 'ADA/USDT:USDT' as Swap (prec 1.0).
-            # We must use the SWAP key for precision if we are trading perps.
-            precision_symbol = symbol
-            if self.exchange_name == 'BYBIT':
-                swap_key = f"{symbol}:USDT"
-                if swap_key in self.exchange.markets:
-                    precision_symbol = swap_key
-            
-            # amount_to_precision returns a string
-            qty_str = self.exchange.amount_to_precision(precision_symbol, qty)
-            # CCXT expects float for amount, but creating it from the precision string is safest
-            qty_rounded = float(qty_str)
+            # Delegate to adapter's precision handling (handles Bybit Swap vs Spot key discrepancy)
+            qty_rounded = self.exchange.round_qty(symbol, qty)
+            qty_str = str(qty_rounded)
             
             # [DEBUG] Check if rounding changed it significantly
             if abs(qty - qty_rounded) > (qty * 0.001):
-                self.logger.info(f"Qty rounded: {qty} -> {qty_rounded} (str: {qty_str}) using {precision_symbol} rules")
+                self.logger.info(f"Qty rounded: {qty} -> {qty_rounded} via adapter.round_qty")
                 
         except Exception as e:
-            self.logger.warning(f"amount_to_precision failed for {symbol}: {e}. Fallback to naive rounding.")
+            self.logger.warning(f"round_qty failed for {symbol}: {e}. Fallback to naive rounding.")
             # Fallback
             qty_decimals = 6 if price and price > 1000 else 3
             qty_rounded = round(qty, qty_decimals)
+            qty_str = str(qty_rounded)
             
         # Validate minimum qty after rounding
         if qty_rounded <= 0:
@@ -764,28 +800,16 @@ class Trader:
 
         # LIVE LOGIC
         params = {}
-        tpsl_attached = False
-        if sl: params['stopLoss'] = str(sl)
-        if tp: params['takeProfit'] = str(tp)
-
-        # BYBIT: Force 'linear' category for USDT Perpetuals
-        if self.exchange_name == 'BYBIT':
-            params['category'] = 'linear'
-            # Bybit V5 requires tpslMode if SL/TP are provided
-            if sl or tp:
-                params['tpslMode'] = 'Full'
-                # Recommendation: Use MarkPrice for triggers to avoid wicks
-                params['tpTriggerBy'] = 'MarkPrice'
-                params['slTriggerBy'] = 'MarkPrice'
-                tpsl_attached = True
-
-            # Force One-Way Mode (positionIdx=0) by default for simplicity
-            # If user is in Hedge Mode, this might fail or require 1/2.
-            # Assuming One-Way for this bot architecture.
-            params['positionIdx'] = 0
+        if sl: params['stopLoss'] = sl
+        if tp: params['takeProfit'] = tp
 
         # Determine and clamp leverage to allowed range
         use_leverage = self._clamp_leverage(leverage)
+        
+        # Issue 10: Strict Spot Filtering Safeguard
+        if self.exchange.is_spot(symbol):
+            self.logger.error(f"❌ [ABORT] Detected Spot symbol {symbol} during Futures trade attempt on {self.exchange_name}! Aborting.")
+            return None
 
         try:
             # Ensure margin mode & leverage set on exchange for LIVE orders
@@ -838,7 +862,8 @@ class Trader:
             if order_type == 'market':
                 # Generate Client Order ID for recovery
                 import time
-                client_id = f"bot_{symbol.replace('/', '')}_{side}_{int(time.time()*1000)}"
+                api_symbol = self._normalize_symbol(symbol)
+                client_id = f"bot_{api_symbol}_{side}_{int(time.time()*1000)}"
                 params['newClientOrderId'] = client_id
                 
                 # Debug log: attempting market order
@@ -974,7 +999,8 @@ class Trader:
                 
                 # Generate Client Order ID for recovery
                 import time
-                client_id = f"bot_{symbol.replace('/', '')}_{side}_{int(time.time()*1000)}"
+                api_symbol = self._normalize_symbol(symbol)
+                client_id = f"bot_{api_symbol}_{side}_{int(time.time()*1000)}"
                 params['newClientOrderId'] = client_id
                 
                 try:
@@ -1207,9 +1233,8 @@ class Trader:
         if pos_key not in self.pending_orders and pos_key not in self.active_positions:
             # FALLBACK: If we have a symbol but order not in memory, try to purge by symbol
             try:
-                parts = pos_key.split('_')
-                if len(parts) >= 2:
-                    symbol = parts[1]
+                _, symbol, _ = self._parse_pos_key(pos_key)
+                if symbol:
                     self.logger.warning(f"Order {pos_key} not in memory for cancellation. Purging all orders for {symbol} as safety fallback.")
                     await self.cancel_all_orders(symbol)
                     return True
@@ -1235,21 +1260,31 @@ class Trader:
             tp_order_id = active_pos.get('tp_order_id')
         
         try:
-            if not self.dry_run and pending:
+            if not self.dry_run and (pending or pos_key == 'FORCE'):
                 # 1. Cancel limit order (Standard)
-                try:
-                    await self._execute_with_timestamp_retry(
-                        self.cancel_order, order_id, symbol
-                    )
-                except Exception as e:
-                    # Handle Bybit "Order not found" by retrying as conditional/trigger order
-                    if "Order not found" in str(e) and self.exchange_name == 'bybit':
-                        self.logger.info(f"Retrying Bybit cancel for {order_id} as conditional order...")
+                if order_id:
+                    try:
                         await self._execute_with_timestamp_retry(
-                            self.cancel_order, order_id, symbol, params={'trigger': True}
+                            self.cancel_order, order_id, symbol
                         )
-                    else:
-                        raise e
+                    except Exception as e:
+                        err_str = str(e).lower()
+                        # Handle Bybit "Order not found" by retrying as conditional/trigger order
+                        if "order not found" in err_str and self.exchange_name.upper() == 'BYBIT':
+                            try:
+                                self.logger.info(f"Retrying Bybit cancel for {order_id} as conditional order...")
+                                await self._execute_with_timestamp_retry(
+                                    self.cancel_order, order_id, symbol, params={'trigger': True}
+                                )
+                            except Exception as trigger_e:
+                                if "order not found" in str(trigger_e).lower() or "already" in str(trigger_e).lower():
+                                    self.logger.info(f"Bybit order {order_id} already gone (trigger attempt).")
+                                else:
+                                    self.logger.warning(f"Bybit trigger cancel failed: {trigger_e}")
+                        elif "order not found" in err_str or "already" in err_str or "not exist" in err_str:
+                            self.logger.info(f"Order {order_id} already gone from exchange.")
+                        else:
+                            self.logger.warning(f"Non-fatal order cancel error for {order_id}: {e}")
                 
                 # 2. Cancel SL order if exists (Algo/Conditional)
                 if sl_order_id:
@@ -1258,9 +1293,9 @@ class Trader:
                         await self._execute_with_timestamp_retry(
                             self.cancel_order, sl_order_id, symbol, params={'is_algo': True, 'trigger': True}
                         )
-                        print(f"  ✓ Cancelled SL order {sl_order_id}")
                     except Exception as e:
-                        self.logger.warning(f"Failed to cancel SL {sl_order_id}: {e}")
+                        if "order not found" not in str(e).lower() and "already" not in str(e).lower():
+                            self.logger.warning(f"Failed to cancel SL {sl_order_id}: {e}")
                 
                 # 3. Cancel TP order if exists (Algo/Conditional)
                 if tp_order_id:
@@ -1268,9 +1303,9 @@ class Trader:
                         await self._execute_with_timestamp_retry(
                             self.cancel_order, tp_order_id, symbol, params={'is_algo': True, 'trigger': True}
                         )
-                        print(f"  ✓ Cancelled TP order {tp_order_id}")
                     except Exception as e:
-                        self.logger.warning(f"Failed to cancel TP {tp_order_id}: {e}")
+                        if "order not found" not in str(e).lower() and "already" not in str(e).lower():
+                            self.logger.warning(f"Failed to cancel TP {tp_order_id}: {e}")
             
             # Clean up from both sources to prevent loops
             if pos_key in self.pending_orders:
@@ -1314,62 +1349,71 @@ class Trader:
         if not pos:
             return
 
-        symbol = pos.get('symbol', pos_key.split('_')[0])
+        _, symbol, _ = self._parse_pos_key(pos_key)
+        if not symbol:
+            symbol = pos.get('symbol', 'UNKNOWN')
         entry_price = pos.get('entry_price')
         side = pos.get('side')
         qty = pos.get('qty')
         
-        # Calculate PnL (Simplified)
+        # Fix 2: Use actual exchange fees when available, fallback to 0.06% estimate
+        actual_fees = pos.get('_exit_fees')
+        if actual_fees is not None and actual_fees > 0:
+            fee_est = actual_fees
+        else:
+            fee_est = (entry_price + exit_price) * qty * 0.0006  # 0.06% taker fee fallback
         pnl = 0
-        if isinstance(entry_price, (int, float)):
+        pnl_pct = 0
+        if isinstance(entry_price, (int, float)) and entry_price > 0:
             if side == 'BUY':
-                pnl = (exit_price - entry_price) * qty
+                pnl = (exit_price - entry_price) * qty - fee_est
             else:
-                pnl = (entry_price - exit_price) * qty
+                pnl = (entry_price - exit_price) * qty - fee_est
+            pnl_pct = (pnl / (entry_price * qty)) * 100
 
         trade_record = {
             "symbol": symbol,
             "side": side,
-            "entry_price": round(entry_price, 3) if isinstance(entry_price, (int, float)) else entry_price,
-            "exit_price": round(exit_price, 3),
-            "qty": round(qty, 3),
+            "entry_price": round(entry_price, 5) if isinstance(entry_price, (int, float)) else entry_price,
+            "exit_price": round(exit_price, 5),
+            "qty": round(qty, 5),
             "pnl_usdt": round(pnl, 3),
+            "pnl_pct": round(pnl_pct, 2),
             "exit_reason": exit_reason,
             "entry_time": pos.get('timestamp'),
             "exit_time": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
         }
 
-        # Load existing history (tolerate corrupted or legacy formats)
-        history = []
-        if os.path.exists(self.history_file):
-            try:
-                with open(self.history_file, 'r') as f:
-                    loaded = json.load(f)
-                if isinstance(loaded, list):
-                    history = loaded
-                elif isinstance(loaded, dict):
-                    for k in ('history', 'trades', 'trade_history', 'records', 'data'):
-                        if k in loaded and isinstance(loaded[k], list):
-                            history = loaded[k]
-                            break
-                    else:
-                        history = []
-                else:
-                    history = []
-            except Exception:
-                history = []
-
-        history.append(trade_record)
-        
-        # Keep last 100 trades to avoid file bloat
-        if len(history) > 100:
-            history = history[-100:]
-
+        # Fix 9 (Unified Store): Write all data to signal_performance.json via tracker.
+        # trade_history.json is now deprecated — signal_performance.json is single source of truth.
         try:
-            with open(self.history_file, 'w') as f:
-                json.dump(history, f, indent=4)
+            from signal_tracker import tracker
+            result = "WIN" if pnl > 0 else "LOSS"
+            exit_ts = self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
+            tracker.record_trade(
+                symbol=symbol,
+                timeframe=pos.get('timeframe', '1h'),
+                side=side,
+                signals_used=pos.get('signals_used', ['manual_sync']),
+                result=result,
+                pnl_pct=round(pnl_pct, 4),
+                snapshot=pos.get('snapshot'),
+                pnl_usdt=round(pnl, 3),
+                entry_price=round(entry_price, 5) if isinstance(entry_price, (int, float)) else entry_price,
+                exit_price=round(exit_price, 5),
+                qty=round(qty, 5),
+                exit_reason=exit_reason,
+                entry_time=pos.get('timestamp'),
+                exit_time=exit_ts,
+                # Dynamic Context (v4.0)
+                sl_original=pos.get('sl_original'),
+                sl_final=pos.get('sl'),
+                sl_move_count=pos.get('sl_move_count', 0),
+                sl_tightened=pos.get('sl_tightened', False),
+                max_pnl_pct=pos.get('max_pnl_pct', 0),
+            )
         except Exception as e:
-            self.logger.error(f"Error saving history file: {e}")
+            self.logger.warning(f"Failed to record trade in signal_tracker: {e}")
 
     async def remove_position(self, symbol, timeframe=None, exit_price=None, exit_reason=None):
         """Removes a position and optionally logs it to history."""
@@ -1392,7 +1436,7 @@ class Trader:
 
     # ========== ADAPTIVE POSITION ADJUSTMENT (v2.0) ==========
     
-    def tighten_sl(self, pos_key, factor=0.5):
+    async def tighten_sl(self, pos_key, factor=0.5):
         """
         Tighten stop loss by moving it closer to entry price.
         
@@ -1410,8 +1454,9 @@ class Trader:
         entry = pos.get('entry_price')
         old_sl = pos.get('sl')
         side = pos.get('side')
+        symbol = pos.get('symbol')
         
-        if not all([entry, old_sl, side]):
+        if not all([entry, old_sl, side, symbol]):
             return None
         
         # Calculate new SL
@@ -1423,15 +1468,150 @@ class Trader:
         else:
             new_sl = entry + new_distance  # For short, SL above entry
         
-        # Update position
-        pos['sl'] = round(new_sl, 4)
-        pos['sl_tightened'] = True
-        self._save_positions()
+        # Clamp to avoid moving SL past entry or in the wrong direction
+        if side == 'BUY':
+            new_sl = max(old_sl, min(new_sl, entry))
+        else:
+            new_sl = min(old_sl, max(new_sl, entry))
+
+        if new_sl == old_sl:
+            return None
+
+        self.logger.info(f"🔄 [ADAPTIVE] Tightening SL for {pos_key}: {old_sl} -> {new_sl}")
         
-        print(f"⚠️ [TIGHTEN SL] {pos_key}: {old_sl:.4f} → {new_sl:.4f} ({factor*100:.0f}% closer)")
-        self.logger.info(f"[TIGHTEN SL] {pos_key}: {old_sl} → {new_sl}")
+        # Fix 1: Parse timeframe from pos_key so modify_sl_tp can look up the right position
+        _, _, timeframe = self._parse_pos_key(pos_key)
+        success = await self.modify_sl_tp(symbol, timeframe=timeframe, new_sl=new_sl)
+
+        if success:
+            # modify_sl_tp already persists sl; just mark flag and save
+            pos['sl_tightened'] = True
+            self._save_positions()
+            return round(new_sl, 4)
+        return None
+
+    async def update_dynamic_sltp(self, pos_key, df_trail=None, df_guard=None):
+        """
+        Multi-Timeframe Dynamic SL/TP (v4.0)
         
-        return new_sl
+        Logic:
+        - Layer 2: 4H (or higher) ATR Trailing Stop
+        - Layer 3: Entry Timeframe RSI/EMA Guard (Early Exit)
+        """
+        if self.dry_run or self.exchange.is_public_only:
+            return False
+            
+        if not ENABLE_DYNAMIC_SLTP:
+            # Fallback to legacy profit lock if enabled
+            return await self.adjust_sl_tp_for_profit_lock(pos_key, df_guard.iloc[-1]['close'] if df_guard is not None else None)
+
+        if pos_key not in self.active_positions:
+            return False
+            
+        pos = self.active_positions[pos_key]
+        if pos.get('status') != 'filled':
+            return False
+            
+        symbol = pos.get('symbol')
+        side = pos.get('side')
+        entry_price = pos.get('entry_price')
+        current_sl = pos.get('sl')
+        current_tp = pos.get('tp')
+        
+        if not all([symbol, side, entry_price, current_sl, current_tp]):
+            return False
+
+        last_row_guard = df_guard.iloc[-1] if df_guard is not None and not df_guard.empty else None
+        last_row_trail = df_trail.iloc[-1] if df_trail is not None and not df_trail.empty else None
+        
+        if last_row_guard is None or last_row_trail is None:
+            return False
+            
+        current_price = last_row_guard['close']
+        changes = False
+        
+        # --- PHASE 6: Track Max PnL ---
+        pnl_pct = ((current_price - entry_price) / entry_price * 100) if side == 'BUY' else ((entry_price - current_price) / entry_price * 100)
+        pos['max_pnl_pct'] = max(pos.get('max_pnl_pct', 0), pnl_pct)
+
+        # 1. LAYER 2: ATR Trailing Stop (Higher TF)
+        # We look back at last 10 candles on the trail timeframe to find recent extreme
+        trail_lookback = 10
+        atr_trail = last_row_trail.get('ATR_14')
+        
+        if atr_trail:
+            # For Long: SL = max(high) - 1.5 * ATR
+            # For Short: SL = min(low) + 1.5 * ATR
+            if side == 'BUY':
+                recent_extreme = df_trail['high'].iloc[-trail_lookback:].max()
+                # Apply x2 multiplier for 1d timeframe trailing as per conversation
+                multiplier = ATR_TRAIL_MULTIPLIER * 2 if pos.get('timeframe') == '1d' else ATR_TRAIL_MULTIPLIER
+                new_sl = recent_extreme - (multiplier * atr_trail)
+                
+                # Only move SL UP
+                if new_sl > current_sl:
+                    # Min move threshold to avoid API spam
+                    if (new_sl - current_sl) / current_sl >= ATR_TRAIL_MIN_MOVE_PCT:
+                        pos['sl'] = round(new_sl, 5)
+                        pos['sl_move_count'] = pos.get('sl_move_count', 0) + 1
+                        pos['sl_original'] = pos.get('sl_original') or current_sl
+                        changes = True
+            else:
+                recent_extreme = df_trail['low'].iloc[-trail_lookback:].min()
+                multiplier = ATR_TRAIL_MULTIPLIER * 2 if pos.get('timeframe') == '1d' else ATR_TRAIL_MULTIPLIER
+                new_sl = recent_extreme + (multiplier * atr_trail)
+                
+                # Only move SL DOWN
+                if new_sl < current_sl:
+                    if (current_sl - new_sl) / current_sl >= ATR_TRAIL_MIN_MOVE_PCT:
+                        pos['sl'] = round(new_sl, 5)
+                        pos['sl_move_count'] = pos.get('sl_move_count', 0) + 1
+                        pos['sl_original'] = pos.get('sl_original') or current_sl
+                        changes = True
+
+        # 2. LAYER 3: Guard (Entry TF - RSI/EMA)
+        rsi_guard = last_row_guard.get('RSI_14', 50)
+        ema21_guard = last_row_guard.get('EMA_21')
+        
+        # Guard A: RSI Overbought/Oversold (Profit Protection)
+        # Pull TP closer to current price to lock in 50% of remaining potential
+        if side == 'BUY':
+            if rsi_guard > RSI_OVERBOUGHT_EXIT and pnl_pct > 0.5:
+                if current_tp > current_price:
+                    new_tp = current_price + (current_tp - current_price) * 0.5
+                    pos['tp'] = round(new_tp, 5)
+                    pos['tp_tightened'] = True
+                    changes = True
+        else:
+            if rsi_guard < (100 - RSI_OVERBOUGHT_EXIT) and pnl_pct > 0.5:
+                if current_tp < current_price:
+                    new_tp = current_price - (current_price - current_tp) * 0.5
+                    pos['tp'] = round(new_tp, 5)
+                    pos['tp_tightened'] = True
+                    changes = True
+
+        # Guard B: EMA21 Violation (Emergency Exit)
+        if ema21_guard and pnl_pct > 0.3: # Only exit if slightly in profit
+            if side == 'BUY' and current_price < ema21_guard * EMA_BREAK_CLOSE_THRESHOLD:
+                self.logger.info(f"🚨 [GUARD] {symbol} broke EMA21. Emergency exit.")
+                await self.force_close_position(pos_key, reason="EMA21 breakage guard")
+                return True
+            elif side == 'SELL' and current_price > ema21_guard * (2 - EMA_BREAK_CLOSE_THRESHOLD):
+                self.logger.info(f"🚨 [GUARD] {symbol} broke EMA21. Emergency exit.")
+                await self.force_close_position(pos_key, reason="EMA21 breakage guard")
+                return True
+
+        if changes:
+            pos['sl_tightened'] = True
+            pos['last_dynamic_update'] = self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
+            self._save_positions()
+            self.logger.info(f"🔄 [DYNAMIC SL/TP] {symbol}: SL={pos['sl']} TP={pos['tp']}")
+            
+            # Recreate orders on exchange
+            await self.recreate_missing_sl_tp(pos_key, recreate_sl_force=True, recreate_tp_force=True)
+            return True
+            
+        return False
     
     async def adjust_sl_tp_for_profit_lock(self, pos_key, current_price, resistance=None, support=None, atr=None):
         """
@@ -1466,9 +1646,10 @@ class Trader:
         if not all([entry, tp, sl, side]):
             return False
             
-        # 1. Avoid continuous price shifting if already locked
-        if pos.get('profit_locked'):
-            return False
+        # 1. Avoid continuous price shifting unless significant improvement
+        # (We allow re-locking if we can move SL significantly better)
+        # However, for now, let's just make it easier to reach by removing the hard 'return False'
+        # if we have a better SL later in the code.
 
         # 2. Calculate Progress
         total_dist = abs(tp - entry)
@@ -1571,26 +1752,19 @@ class Trader:
             self.logger.info(f"[DRY RUN] Force closed {pos_key}: {reason}")
             return True
         
-        # Live: Close at market
+        # Live: Close at market — delegate to adapter (handles category:linear, etc.)
         try:
-            close_side = 'sell' if side == 'BUY' else 'buy'
-            order = await self._execute_with_timestamp_retry(
-                self.exchange.create_order, symbol, 'market', close_side, qty,
-                params={'reduceOnly': True}
-            )
+            order = await self.exchange.close_position(symbol, side, qty)
             
             del self.active_positions[pos_key]
             if pos_key in self.pending_orders:
                 del self.pending_orders[pos_key]
             self._save_positions()
-            
-            # Exchange-side cleanup: Cancel all pending orders for this symbol
-            self.logger.info(f"[CLEANUP] Force close for {pos_key}. Purging all exchange orders for {symbol}...")
-            await self.cancel_all_orders(symbol)
-            
-            self.logger.info(f"Force closed {pos_key}: {reason}, order={order['id']}")
+
+            self.logger.info(f"[FORCE CLOSE] Closed {pos_key}: {reason}")
             return True
-            
+
+
         except Exception as e:
             self.logger.error(f"Failed to force close {pos_key}: {e}")
             return False
@@ -1683,90 +1857,52 @@ class Trader:
             existing_sl_id = pending.get('sl_order_id') or self.active_positions.get(pos_key, {}).get('sl_order_id')
             existing_tp_id = pending.get('tp_order_id') or self.active_positions.get(pos_key, {}).get('tp_order_id')
             
-            if sl and not existing_sl_id:
-                # Ensure we never place SL for a quantity larger than the stored position
-                try:
-                    stored_qty = float(self.active_positions.get(pos_key, {}).get('qty') or qty)
-                except Exception:
-                    stored_qty = qty
-                qty_to_use = min(float(qty), stored_qty)
-                # Use 'market' for Bybit SL/TP conditional orders (STOP_MARKET is invalid)
-                order_type = 'market' if self.exchange_name == 'BYBIT' else 'STOP_MARKET'
-                sl_params = {'stopPrice': sl, 'reduceOnly': True}
-                if self.exchange_name == 'BYBIT' and not self._is_spot(symbol):
-                    sl_params['triggerDirection'] = 'descending' if side == 'BUY' else 'ascending'
-                
-                sl_order = await self._execute_with_timestamp_retry(
-                    self.exchange.create_order, symbol, order_type, close_side, qty_to_use,
-                    params=sl_params
+            # Determine how much qty to protect (cap at stored position size)
+            try:
+                stored_qty = float(self.active_positions.get(pos_key, {}).get('qty') or qty)
+            except Exception:
+                stored_qty = qty
+            qty_to_use = min(float(qty), stored_qty)
+
+            # Place SL / TP through adapter (handles all exchange-specific params internally)
+            sl_to_place = sl if sl and not existing_sl_id else None
+            tp_to_place = tp if tp and not existing_tp_id else None
+
+            if existing_sl_id:
+                print(f"[SKIP] SL already exists for {pos_key} (id={existing_sl_id})")
+            if existing_tp_id:
+                print(f"[SKIP] TP already exists for {pos_key} (id={existing_tp_id})")
+
+            if sl_to_place or tp_to_place:
+                ids = await self.exchange.place_stop_orders(
+                    symbol, side, qty_to_use, sl=sl_to_place, tp=tp_to_place
                 )
-                
-                # VERIFY RESPONSE: Only save ID if exchange confirms success
-                sl_order_id = sl_order.get('id')
-                sl_status = sl_order.get('status', '').upper()
-                
-                if not sl_order_id:
-                    self.logger.error(f"[SL FAILED] No order ID in response for {symbol}")
-                    print(f"❌ [SL FAILED] Exchange did not return order ID")
-                elif sl_status in ('REJECTED', 'CANCELED', 'EXPIRED'):
-                    self.logger.error(f"[SL FAILED] Order rejected by exchange: {sl_status} | Response: {sl_order}")
-                    print(f"❌ [SL FAILED] Exchange rejected: {sl_status}")
-                else:
-                    # SUCCESS: Save ID
-                    results['sl_order'] = sl_order
+                sl_order_id = ids.get('sl_id')
+                tp_order_id = ids.get('tp_id')
+
+                if sl_order_id:
                     pending['sl_order_id'] = sl_order_id
-                    # CRITICAL: Also save to self.pending_orders (in-memory) for cancel_pending_order()
                     if pos_key in self.pending_orders:
                         self.pending_orders[pos_key]['sl_order_id'] = sl_order_id
                     if pos_key in self.active_positions:
                         self.active_positions[pos_key]['sl_order_id'] = sl_order_id
                         self._save_positions()
-                    print(f"[SETUP] SL order placed for {symbol} at {sl} (id={sl_order_id}, status={sl_status})")
-                    self.logger.info(f"[SL SUCCESS] {symbol} SL order confirmed by exchange: {sl_order_id}")
-            elif sl and existing_sl_id:
-                print(f"[SKIP] SL already exists for {pos_key} (id={existing_sl_id})")
-                
-            if tp and not existing_tp_id:
-                try:
-                    stored_qty = float(self.active_positions.get(pos_key, {}).get('qty') or qty)
-                except Exception:
-                    stored_qty = qty
-                qty_to_use = min(float(qty), stored_qty)
-                # Use 'market' for Bybit SL/TP conditional orders (TAKE_PROFIT_MARKET is invalid)
-                order_type = 'market' if self.exchange_name == 'BYBIT' else 'TAKE_PROFIT_MARKET'
-                tp_params = {'stopPrice': tp, 'reduceOnly': True}
-                if self.exchange_name == 'BYBIT' and not self._is_spot(symbol):
-                    tp_params['triggerDirection'] = 'ascending' if side == 'BUY' else 'descending'
-                
-                tp_order = await self._execute_with_timestamp_retry(
-                    self.exchange.create_order, symbol, order_type, close_side, qty_to_use,
-                    params=tp_params
-                )
-                
-                # VERIFY RESPONSE: Only save ID if exchange confirms success
-                tp_order_id = tp_order.get('id')
-                tp_status = tp_order.get('status', '').upper()
-                
-                if not tp_order_id:
-                    self.logger.error(f"[TP FAILED] No order ID in response for {symbol}")
-                    print(f"❌ [TP FAILED] Exchange did not return order ID")
-                elif tp_status in ('REJECTED', 'CANCELED', 'EXPIRED'):
-                    self.logger.error(f"[TP FAILED] Order rejected by exchange: {tp_status} | Response: {tp_order}")
-                    print(f"❌ [TP FAILED] Exchange rejected: {tp_status}")
-                else:
-                    # SUCCESS: Save ID
-                    results['tp_order'] = tp_order
+                    print(f"[SETUP] SL placed for {symbol} @ {sl_to_place} (id={sl_order_id})")
+                elif sl_to_place:
+                    self.logger.error(f"[SL FAILED] No order ID returned for {symbol}")
+                    print(f"❌ [SL FAILED] Exchange did not return order ID")
+
+                if tp_order_id:
                     pending['tp_order_id'] = tp_order_id
-                    # CRITICAL: Also save to self.pending_orders (in-memory) for cancel_pending_order()
                     if pos_key in self.pending_orders:
                         self.pending_orders[pos_key]['tp_order_id'] = tp_order_id
                     if pos_key in self.active_positions:
                         self.active_positions[pos_key]['tp_order_id'] = tp_order_id
                         self._save_positions()
-                    print(f"[SETUP] TP order placed for {symbol} at {tp} (id={tp_order_id}, status={tp_status})")
-                    self.logger.info(f"[TP SUCCESS] {symbol} TP order confirmed by exchange: {tp_order_id}")
-            elif tp and existing_tp_id:
-                print(f"[SKIP] TP already exists for {pos_key} (id={existing_tp_id})")
+                    print(f"[SETUP] TP placed for {symbol} @ {tp_to_place} (id={tp_order_id})")
+                elif tp_to_place:
+                    self.logger.error(f"[TP FAILED] No order ID returned for {symbol}")
+                    print(f"❌ [TP FAILED] Exchange did not return order ID")
                 
             return results
         except Exception as e:
@@ -1842,8 +1978,10 @@ class Trader:
 
         path = '/fapi/v1/marginType'
         base = 'https://fapi.binance.com'
+        # Strip CCXT futures suffix and remove slashes
+        api_symbol = symbol.split(':')[0].replace('/', '')
         params = {
-            'symbol': symbol.replace('/', ''),
+            'symbol': api_symbol,
             'marginType': margin_type,
             'recvWindow': 60000,
             'timestamp': self.data_manager.get_synced_timestamp()
@@ -1857,8 +1995,10 @@ class Trader:
 
         path = '/fapi/v1/leverage'
         base = 'https://fapi.binance.com'
+        # Strip CCXT futures suffix and remove slashes
+        api_symbol = symbol.split(':')[0].replace('/', '')
         params = {
-            'symbol': symbol.replace('/', ''),
+            'symbol': api_symbol,
             'leverage': self._safe_int(leverage, default=10),
             'recvWindow': 60000,
             'timestamp': self.data_manager.get_synced_timestamp()
@@ -1943,63 +2083,27 @@ class Trader:
         close_side = 'sell' if side == 'BUY' else 'buy'
         results = {}
         try:
-            # Create SL then TP separately (no batch) as requested
-            if sl:
-                try:
-                    try:
-                        stored_qty = float(position.get('qty') or qty)
-                    except Exception:
-                        stored_qty = qty
-                    qty_to_use = min(float(qty), stored_qty)
-                    
-                    # Bybit V5 requires triggerDirection for conditional orders on futures only
-                    sl_params = {'stopPrice': sl, 'reduceOnly': True}
-                    if self.exchange_name == 'BYBIT':
-                        if not self._is_spot(symbol):
-                            sl_params['triggerDirection'] = 'descending' if side == 'BUY' else 'ascending'
-                            sl_params['category'] = 'linear'
-                        else:
-                            sl_params['category'] = 'spot'
+            try:
+                stored_qty = float(position.get('qty') or qty)
+            except Exception:
+                stored_qty = qty
+            qty_to_use = min(float(qty), stored_qty)
 
-                    order_type = 'market' if self.exchange_name == 'BYBIT' else 'STOP_MARKET'
-                    sl_order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, order_type, close_side, qty_to_use,
-                        params=sl_params
-                    )
-                    results['sl_order'] = sl_order
-                    position['sl_order_id'] = str(sl_order.get('id'))
-                    print(f"[AUTO-SL] Placed SL for {pos_key} id={position['sl_order_id']} @ {sl}")
-                except Exception as e:
-                    self.logger.error(f"Failed to place SL for {pos_key}: {e}")
+            # Place SL and/or TP via adapter (all exchange-specific logic encapsulated there)
+            ids = await self.exchange.place_stop_orders(
+                symbol, side, qty_to_use,
+                sl=sl if sl else None,
+                tp=tp if tp else None
+            )
 
-            if tp:
-                try:
-                    try:
-                        stored_qty = float(position.get('qty') or qty)
-                    except Exception:
-                        stored_qty = qty
-                    qty_to_use = min(float(qty), stored_qty)
-                    
-                    # Bybit V5 requires triggerDirection for conditional orders on futures only
-                    tp_params = {'stopPrice': tp, 'reduceOnly': True}
-                    if self.exchange_name == 'BYBIT':
-                        if not self._is_spot(symbol):
-                            tp_params['triggerDirection'] = 'ascending' if side == 'BUY' else 'descending'
-                            tp_params['category'] = 'linear'
-                        else:
-                            tp_params['category'] = 'spot'
-
-                    # FIX: Use market for Bybit TP
-                    tp_order_type = 'market' if self.exchange_name == 'BYBIT' else 'TAKE_PROFIT_MARKET'
-                    tp_order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, tp_order_type, close_side, qty_to_use,
-                        params=tp_params
-                    )
-                    results['tp_order'] = tp_order
-                    position['tp_order_id'] = str(tp_order.get('id'))
-                    print(f"[AUTO-TP] Placed TP for {pos_key} id={position['tp_order_id']} @ {tp}")
-                except Exception as e:
-                    self.logger.error(f"Failed to place TP for {pos_key}: {e}")
+            if ids.get('sl_id'):
+                position['sl_order_id'] = ids['sl_id']
+                results['sl_order'] = {'id': ids['sl_id']}
+                print(f"[AUTO-SL] Placed SL for {pos_key} id={ids['sl_id']} @ {sl}")
+            if ids.get('tp_id'):
+                position['tp_order_id'] = ids['tp_id']
+                results['tp_order'] = {'id': ids['tp_id']}
+                print(f"[AUTO-TP] Placed TP for {pos_key} id={ids['tp_id']} @ {tp}")
 
             # Persist order ids to positions
             self.active_positions[pos_key] = position
@@ -2057,7 +2161,14 @@ class Trader:
         - AUTO-ADOPT: If position exists on exchange but not locally, add it.
         - AUTO-FIX: If SL/TP missing on exchange, recreate them.
         """
-        summary = {'recovered_order_ids': 0, 'created_tp_sl': 0, 'errors': []}
+        summary = {
+            'recovered_order_ids': 0, 
+            'created_tp_sl': 0, 
+            'adopted_positions': 0, 
+            'adopted_orders': 0,
+            'orphans_cancelled': 0,
+            'errors': []
+        }
         
         # 1. FETCH GLOBAL EXCHANGE STATE (Atomic snapshot)
         fetch_success = False
@@ -2071,8 +2182,8 @@ class Trader:
             return summary
 
         try:
-            # Fetch ALL positions
-            ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
+            # Fix 12: Let each Adapter (Bybit/Binance) handle its own params.
+            # Do NOT pass exchange-specific params here (e.g. {'type': 'future'} is Binance-only and breaks Bybit).\n            ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
             # Normalize keys for reliable lookups
             active_ex_pos = {p['symbol']: p for p in ex_positions if self._safe_float(p.get('contracts'), 0) > 0}
             
@@ -2088,35 +2199,11 @@ class Trader:
                 all_exchange_orders = None
 
             fetch_success = True
-            
-            # [POSITION ADOPTION PHASE]
-            for ex_symbol, ex_p in active_ex_pos.items():
-                ex_symbol_norm = self._normalize_symbol(ex_symbol)
-                matched = False
-                for pk, p in self.active_positions.items():
-                    if self._normalize_symbol(p.get('symbol')) == ex_symbol_norm and pk.startswith(self.exchange_name):
-                        matched = True
-                        break
-                
-                if not matched:
-                    # Special Case: Adopt unknown position
-                    unified_symbol = self._get_unified_symbol(ex_symbol)
-                    new_pk = f"{self.exchange_name}_{unified_symbol}_adopted"
-                    self.logger.info(f"[SYNC] Adopting ghost position on exchange: {ex_symbol} -> {new_pk}")
-                    self.active_positions[new_pk] = {
-                        'symbol': unified_symbol,
-                        'side': ex_p['side'].upper(),
-                        'qty': self._safe_float(ex_p.get('contracts')),
-                        'entry_price': self._safe_float(ex_p.get('entryPrice')),
-                        'status': 'filled',
-                        'timeframe': 'sync',
-                        'leverage': self._safe_int(ex_p.get('leverage'), default=10),
-                        'timestamp': self.exchange.milliseconds(),
-                        'adopted': True
-                    }
-                    summary['adopted_positions'] = summary.get('adopted_positions', 0) + 1
-                    self._save_positions()
+            # Fix 4: Removed duplicate adoption block here.
+            # The comprehensive adoption logic below (section 2) handles this correctly
+            # with leverage fetching, SL/TP discovery, and side normalisation.
         except Exception as e:
+
             self.logger.error(f"[SYNC] Critical fetch failed: {e}")
             summary['errors'].append(f"Sync failed (fetch error): {e}")
 
@@ -2184,7 +2271,7 @@ class Trader:
                             o_price = float(o.get('stopPrice') or o.get('price') or 0)
                             o_id = str(o.get('id'))
                             
-                            expected_close_side = 'SELL' if side == 'LONG' else 'BUY'
+                            expected_close_side = 'SELL' if side == 'BUY' else 'BUY'
                             
                             if o_side == expected_close_side:
                                 # Logic from Gemini: STOP_MARKET or TAKE_PROFIT_MARKET
@@ -2201,15 +2288,15 @@ class Trader:
 
                     # Auto-calculate SL/TP only if NOT found
                     if not auto_sl:
-                        if side == 'LONG':
+                        if side == 'BUY':
                             auto_sl = round(entry_price * 0.97, 5)
-                        elif side == 'SHORT':
+                        elif side == 'SELL':
                             auto_sl = round(entry_price * 1.03, 5)
                     
                     if not auto_tp:
-                        if side == 'LONG':
+                        if side == 'BUY':
                             auto_tp = round(entry_price * 1.03, 5)
-                        elif side == 'SHORT':
+                        elif side == 'SELL':
                             auto_tp = round(entry_price * 0.97, 5)
                     
                     self.active_positions[pos_key] = {
@@ -2325,14 +2412,43 @@ class Trader:
                     if fetch_success:
                         self.logger.info(f"[SYNC] Position {pos_key} no longer on exchange. Logging and removing.")
                         
-                        # Determine exit price from last known data if possible
+                        # Determine exit price: prioritize actual fill from exchange (Issue 3)
                         exit_price = 0
+                        side = pos.get('side')
                         try:
-                            # Use shared MarketDataManager to get last close price
-                            df = self.data_manager.get_data(symbol, pos.get('timeframe', '1h'), exchange=self.exchange_name)
-                            if df is not None and not df.empty:
-                                exit_price = df.iloc[-1]['close']
-                        except: pass
+                            # 1. Try to fetch recent trades for this symbol
+                            # Only look for trades since the position's entry timestamp (reduced window)
+                            since = pos.get('timestamp')
+                            recent_trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
+                            
+                            if recent_trades:
+                                target_side = 'sell' if side == 'BUY' else 'buy'
+                                close_trades = [t for t in recent_trades if t.get('side', '').lower() == target_side]
+                                
+                                if close_trades:
+                                    total_qty = sum(self._safe_float(t.get('amount')) for t in close_trades)
+                                    if total_qty > 0:
+                                        weighted_sum = sum(self._safe_float(t.get('price')) * self._safe_float(t.get('amount')) for t in close_trades)
+                                        exit_price = weighted_sum / total_qty
+                                        # Fix 3: Extract actual exchange fees for accurate P&L
+                                        actual_fees = sum(
+                                            self._safe_float((t.get('fee') or {}).get('cost', 0))
+                                            for t in close_trades
+                                        )
+                                        if actual_fees > 0:
+                                            pos['_exit_fees'] = actual_fees
+                                        self.logger.info(f"[SYNC] Actual fill {symbol}: {exit_price} (fees: ${actual_fees:.4f})")
+
+                            # 2. Fallback to last close if no trades found or confirmed
+                            if exit_price == 0:
+                                df = self.data_manager.get_data(symbol, pos.get('timeframe', '1h'), exchange=self.exchange_name)
+                                if df is not None and not df.empty:
+                                    exit_price = df.iloc[-1]['close']
+                                    self.logger.info(f"[SYNC] No recent trades found for {symbol}. Using fallback close price: {exit_price}")
+                        except Exception as e:
+                            self.logger.warning(f"[SYNC] Failed to fetch actual fill for {symbol}: {e}")
+                            # Final fallback
+                            exit_price = pos.get('entry_price', 0)
                         
                         await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Closed outside bot)")
                         del self.active_positions[pos_key]
@@ -2542,6 +2658,11 @@ class Trader:
                             break
                             
                 if not known:
+                    # Issue 10: Strict Spot Filtering
+                    if self._is_spot(o_symbol):
+                        # self.logger.debug(f"[SYNC] Ignoring spot order: {o_symbol}")
+                        continue
+
                     unified_symbol = self._get_unified_symbol(o_symbol)
                     new_pk = f"{self.exchange_name}_{unified_symbol}_adopted"
                     self.logger.info(f"[SYNC] Adopting ghost order on exchange: {o_id} for {o_symbol}")
@@ -2602,6 +2723,11 @@ class Trader:
                     o_id = str(o.get('id') or o.get('orderId'))
                     o_type = str(o.get('type') or o.get('info', {}).get('type', '')).upper()
                     o_symbol = o.get('symbol')
+                    
+                    # Issue 10: Strict Spot Filtering (Reaper)
+                    if self._is_spot(o_symbol):
+                        continue
+
                     norm_symbol = self._normalize_symbol(o_symbol)
                     
                     # Check if this symbol belongs to our TRADING_SYMBOLS (normalized)
@@ -2710,15 +2836,10 @@ class Trader:
                     old_sl = pos.get('sl_order_id')
                     if old_sl:
                         try:
-                            cancel_params = {}
-                            if self.exchange_name == 'BYBIT':
-                                cancel_params['category'] = 'linear'
-                            elif self.exchange_name == 'BINANCE':
-                                cancel_params['is_algo'] = True
-                            
-                            await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_sl, symbol, params=cancel_params)
+                            await self.exchange.cancel_stop_orders(symbol, sl_id=old_sl)
                             self.logger.info(f"[RECREATE] Cancelled old SL {old_sl} before creating new one")
-                        except Exception: pass # Ignore if already gone
+                        except Exception:
+                            pass  # Ignore if already gone
 
                     # SL Validation
                     current_price = (await self.exchange.fetch_ticker(symbol))['last']
@@ -2730,29 +2851,25 @@ class Trader:
                     
                     if not is_valid_sl:
                         self.logger.warning(f"[SL SAFETY] Skipping SL for {pos_key}: SL {sl} vs Current {current_price} (Immediate Trigger Risk)")
-                        # Do not return, just skip SL creation to verify TP
                     else:
                         qty_to_use = min(float(qty), float(pos.get('qty') or qty))
-                        
-                        # Bybit V5 requires triggerDirection for conditional orders on futures only
-                        sl_params = {'stopPrice': sl, 'reduceOnly': True}
-                        if self.exchange_name == 'BYBIT':
-                            if not self._is_spot(symbol):
-                                sl_params['triggerDirection'] = 'descending' if side == 'BUY' else 'ascending'
-                                sl_params['category'] = 'linear'
-                            else:
-                                sl_params['category'] = 'spot'
 
-                        order_type = 'market' if self.exchange_name == 'BYBIT' else 'STOP_MARKET'
-                        sl_order = await self._execute_with_timestamp_retry(
-                            self.exchange.create_order, symbol, order_type, close_side, qty_to_use,
-                            params=sl_params
+                        # Cancel old first (via adapter), then place new
+                        if old_sl:
+                            try:
+                                await self.exchange.cancel_stop_orders(symbol, sl_id=old_sl)
+                            except Exception:
+                                pass
+
+                        ids = await self.exchange.place_stop_orders(
+                            symbol, side, qty_to_use, sl=sl
                         )
-                        pos['sl_order_id'] = str(sl_order.get('id'))
-                        self.active_positions[pos_key] = pos
-                        self._save_positions()
-                        result['sl_recreated'] = True
-                        self._debug_log('recreated_sl', pos_key, pos['sl_order_id'])
+                        if ids.get('sl_id'):
+                            pos['sl_order_id'] = ids['sl_id']
+                            self.active_positions[pos_key] = pos
+                            self._save_positions()
+                            result['sl_recreated'] = True
+                            self._debug_log('recreated_sl', pos_key, pos['sl_order_id'])
 
             except Exception as e:
                 result['errors'].append(f'sl_recreate:{e}')
@@ -2764,15 +2881,10 @@ class Trader:
                     old_tp = pos.get('tp_order_id')
                     if old_tp:
                         try:
-                            cancel_params = {}
-                            if self.exchange_name == 'BYBIT':
-                                cancel_params['category'] = 'linear'
-                            elif self.exchange_name == 'BINANCE':
-                                cancel_params['is_algo'] = True
-                            
-                            await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_tp, symbol, params=cancel_params)
+                            await self.exchange.cancel_stop_orders(symbol, tp_id=old_tp)
                             self.logger.info(f"[RECREATE] Cancelled old TP {old_tp} before creating new one")
-                        except Exception: pass # Ignore core errors if already gone
+                        except Exception:
+                            pass  # Ignore if already gone
 
                     # Safety check: Verify TP price won't trigger immediately
                     try:
@@ -2803,30 +2915,29 @@ class Trader:
                         # If ticker fetch fails, log but continue with TP creation
                         print(f"[TP SAFETY] Could not verify TP safety for {pos_key}: {safety_error}")
                     
-                    # Proceed with TP creation
+                    # Proceed with TP creation via adapter
                     try:
                         stored_qty = float(pos.get('qty') or qty)
                     except Exception:
                         stored_qty = qty
                     qty_to_use = min(float(qty), stored_qty)
-                    
-                    # Bybit V5 requires triggerDirection for conditional orders on futures only
-                    tp_params = {'stopPrice': tp, 'reduceOnly': True}
-                    if self.exchange_name == 'BYBIT':
-                        if not self._is_spot(symbol):
-                            tp_params['triggerDirection'] = 'ascending' if side == 'BUY' else 'descending'
-                        tp_params['category'] = 'linear' if not self._is_spot(symbol) else 'spot'
 
-                    tp_order_type = 'market' if self.exchange_name == 'BYBIT' else 'TAKE_PROFIT_MARKET'
-                    tp_order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, tp_order_type, close_side, qty_to_use,
-                        params=tp_params
+                    # Cancel old first (via adapter), then place new
+                    if old_tp:
+                        try:
+                            await self.exchange.cancel_stop_orders(symbol, tp_id=old_tp)
+                        except Exception:
+                            pass
+
+                    ids = await self.exchange.place_stop_orders(
+                        symbol, side, qty_to_use, tp=tp
                     )
-                    pos['tp_order_id'] = str(tp_order.get('id'))
-                    self.active_positions[pos_key] = pos
-                    self._save_positions()
-                    result['tp_recreated'] = True
-                    self._debug_log('recreated_tp', pos_key, pos['tp_order_id'])
+                    if ids.get('tp_id'):
+                        pos['tp_order_id'] = ids['tp_id']
+                        self.active_positions[pos_key] = pos
+                        self._save_positions()
+                        result['tp_recreated'] = True
+                        self._debug_log('recreated_tp', pos_key, pos['tp_order_id'])
             except Exception as e:
                 if "TP_SAFETY_ABORT" not in str(e):
                     result['errors'].append(f'tp_recreate:{e}')
@@ -2873,25 +2984,16 @@ class Trader:
             old_sl_id = position.get('sl_order_id')
             old_tp_id = position.get('tp_order_id')
             
-            if old_sl_id:
+            # Encode cancel into adapter (handles BYBIT category, BINANCE algo, etc.)
+            old_sl_id = position.get('sl_order_id')
+            old_tp_id = position.get('tp_order_id')
+
+            if old_sl_id or old_tp_id:
                 try:
-                    c_params = {}
-                    if self.exchange_name == 'BYBIT': c_params['category'] = 'linear'
-                    elif self.exchange_name == 'BINANCE': c_params['is_algo'] = True
-                    
-                    await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_sl_id, symbol, params=c_params)
-                    print(f"[MODIFY] Canceled old SL {old_sl_id} for {pos_key}")
-                except Exception: pass
-            
-            if old_tp_id:
-                try:
-                    c_params = {}
-                    if self.exchange_name == 'BYBIT': c_params['category'] = 'linear'
-                    elif self.exchange_name == 'BINANCE': c_params['is_algo'] = True
-                    
-                    await self._execute_with_timestamp_retry(self.exchange.cancel_order, old_tp_id, symbol, params=c_params)
-                    print(f"[MODIFY] Canceled old TP {old_tp_id} for {pos_key}")
-                except Exception: pass
+                    await self.exchange.cancel_stop_orders(symbol, sl_id=old_sl_id, tp_id=old_tp_id)
+                    print(f"[MODIFY] Cancelled old SL/TP for {pos_key}")
+                except Exception:
+                    pass  # Already gone — safe to ignore
             
             # Ensure price precision matching exchange (round to 4 or 5 decimals)
             if new_sl: new_sl = round(float(new_sl), 5)
@@ -2902,43 +3004,18 @@ class Trader:
             side = position['side']
             close_side = 'sell' if side == 'BUY' else 'buy'
 
-            # Place new SL order if provided
-            if new_sl:
-                sl_order_params = {
-                    'stopPrice': new_sl,
-                    'reduceOnly': True
-                }
-                if self.exchange_name == 'BYBIT':
-                    if not self._is_spot(symbol):
-                        sl_order_params['category'] = 'linear'
-                        sl_order_params['triggerDirection'] = 'descending' if side == 'BUY' else 'ascending'
-                    else:
-                        sl_order_params['category'] = 'spot'
-
-                order_type = 'market' if self.exchange_name == 'BYBIT' else 'STOP_MARKET'
-                sl_order = await self._execute_with_timestamp_retry(
-                    self.exchange.create_order, symbol, order_type, close_side, qty,
-                    params=sl_order_params
-                )
-                print(f"[MODIFY] New SL order placed for {symbol} at {new_sl}")
-                position['sl_order_id'] = sl_order.get('id')
-
-            if new_tp:
-                tp_params = {'stopPrice': new_tp, 'reduceOnly': True}
-                if self.exchange_name == 'BYBIT':
-                    if not self._is_spot(symbol):
-                        tp_params['category'] = 'linear'
-                        tp_params['triggerDirection'] = 'ascending' if side == 'BUY' else 'descending'
-                    else:
-                        tp_params['category'] = 'spot'
-                
-                tp_order_type = 'market' if self.exchange_name == 'BYBIT' else 'TAKE_PROFIT_MARKET'
-                tp_order = await self._execute_with_timestamp_retry(
-                    self.exchange.create_order, symbol, tp_order_type, close_side, qty,
-                    params=tp_params
-                )
-                print(f"[MODIFY] New TP order placed for {symbol} at {new_tp}")
-                position['tp_order_id'] = tp_order.get('id')
+            # Place new orders via adapter (handles all exchange-specific params)
+            ids = await self.exchange.place_stop_orders(
+                symbol, side, float(qty),
+                sl=new_sl if new_sl else None,
+                tp=new_tp if new_tp else None
+            )
+            if ids.get('sl_id'):
+                position['sl_order_id'] = ids['sl_id']
+                print(f"[MODIFY] New SL placed for {symbol} @ {new_sl}")
+            if ids.get('tp_id'):
+                position['tp_order_id'] = ids['tp_id']
+                print(f"[MODIFY] New TP placed for {symbol} @ {new_tp}")
 
             # Update position data
             if new_sl:

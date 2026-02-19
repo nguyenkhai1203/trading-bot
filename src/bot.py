@@ -282,8 +282,12 @@ class TradingBot:
                             tp_pct=self.strategy.tp_pct
                         )
                         # Round for comparison to avoid float drift (0.0001% tolerance)
-                        e_sl, e_tp = round(e_sl, 5), round(e_tp, 5)
-                        curr_sl, curr_tp = round(float(sl or 0), 5), round(float(tp or 0), 5)
+                        if e_sl is not None and e_tp is not None:
+                            e_sl, e_tp = round(e_sl, 5), round(e_tp, 5)
+                            curr_sl, curr_tp = round(float(sl or 0), 5), round(float(tp or 0), 5)
+                        else:
+                            # Skip this sync cycle if we can't calculate SL/TP
+                            return
                         
                         if abs(curr_sl - e_sl) > 1e-6 or abs(curr_tp - e_tp) > 1e-6:
                             print(f"🛠️ [{self.symbol} {self.timeframe}] Updating SL/TP: {curr_sl}/{curr_tp} → {e_sl}/{e_tp}")
@@ -938,57 +942,42 @@ async def main():
                         bot.running = False
 
     async def on_adjust_positions():
-        print("🎯 [ADAPTIVE] Checking if any open positions need risk adjustment...")
+        print("🎯 [ADAPTIVE] Checking if any open positions need risk adjustment (Multi-TF v4.0)...")
+        
+        # TF Mapping for Trailing SL (Layer 2)
+        # Entry TF -> Trail TF
+        TRAIL_TF_MAP = {
+            '15m': '1h',
+            '30m': '2h',
+            '1h':  '4h',
+            '2h':  '8h',
+            '4h':  '1d',
+            '8h':  '1d',
+            '1d':  '1d'
+        }
+
         for ex_name, trader in traders.items():
             for pos_key, pos in trader.active_positions.items():
                 if pos.get('status') != 'filled': continue
                 
                 symbol = pos.get('symbol')
-                side = pos.get('side')
-                entry_conf = pos.get('entry_confidence', 0.5)
+                entry_tf = pos.get('timeframe', '1h')
+                trail_tf = TRAIL_TF_MAP.get(entry_tf, '4h')
                 
-                df = manager.get_data(symbol, '1h', exchange=ex_name)
-                if df is None or df.empty: continue
+                # Fetch Data for Guard (Entry TF) and Trail (Higher TF)
+                df_guard = manager.get_data_with_features(symbol, entry_tf, exchange=ex_name)
+                df_trail = manager.get_data_with_features(symbol, trail_tf, exchange=ex_name)
                 
-                last_row = df.iloc[-1]
-                
-                # --- NEW: Dynamic Risk Management v3.0 (Positive SL & Dynamic TP) ---
-                current_price = last_row.get('close')
-                resistance = last_row.get('resistance_level')
-                support = last_row.get('support_level')
-                atr = last_row.get('ATR_14')
-                
-                if current_price:
-                    await trader.adjust_sl_tp_for_profit_lock(
-                        pos_key, 
-                        current_price, 
-                        resistance=resistance, 
-                        support=support, 
-                        atr=atr
-                    )
-                
-                # --- Adaptive Logic from v2.0 ---
-                # We need to find the matching bot to use its strategy (or just use a generic one)
-                # For now, we'll look for any bot that matches symbol/timeframe
-                matching_bot = next((b for b in bots if b.symbol == symbol and b.trader == trader), None)
-                if not matching_bot: continue
-                
-                current_signal = matching_bot.strategy.get_signal(last_row)
-                current_side = current_signal.get('side')
-                current_conf = current_signal.get('confidence', 0)
-                
-                # Check for None values before comparison
-                if not side or not current_side:
+                if df_guard is None or df_guard.empty or df_trail is None or df_trail.empty:
                     continue
                 
-                if (side == 'BUY' and current_side == 'SELL') or (side == 'SELL' and current_side == 'BUY'):
-                    print(f"🔄 [{ex_name}] Signal reversed for {symbol}. Closing.")
-                    await trader.force_close_position(pos_key, reason=f"Signal reversed: {side} → {current_side}")
-                    continue
-                
-                if current_conf < entry_conf * 0.5:
-                    print(f"📉 [{ex_name}] Confidence drop for {symbol}. Tightening SL.")
-                    await trader.tighten_sl(pos_key, factor=0.5)
+                # Call new dynamic SL/TP (v4.0)
+                # This function handles both Trailing Stop (Trail TF) and Emergency Guards (Entry TF)
+                await trader.update_dynamic_sltp(
+                    pos_key, 
+                    df_trail=df_trail, 
+                    df_guard=df_guard
+                )
 
     def sync_adjust_positions():
         try:
@@ -1012,12 +1001,14 @@ async def main():
 
     def get_current_balance():
         current_bal = initial_balance
-        history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
-        if os.path.exists(history_file):
+        # Fix 10 (Unified Store): Read from signal_performance.json instead of deprecated trade_history.json
+        perf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_performance.json')
+        if os.path.exists(perf_file):
             try:
-                with open(history_file, 'r') as f:
-                    history = json.load(f)
-                current_bal += sum(t.get('pnl_usdt', 0) for t in history)
+                with open(perf_file, 'r') as f:
+                    data = json.load(f)
+                trades = data.get('trades', [])
+                current_bal += sum(float(t.get('pnl_usdt', 0) or 0) for t in trades)
             except: pass
             
         for ex_name, trader in traders.items():

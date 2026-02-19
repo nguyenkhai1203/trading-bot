@@ -93,14 +93,15 @@ class RiskManager:
         """
         Calculates Stop Loss and Take Profit levels.
         """
-        if signal_type == 'BUY':
+        side = signal_type.upper()
+        if side in ['BUY', 'LONG']:
             if atr:
                  sl = entry_price - (atr * 2)
                  tp = entry_price + (atr * 3)
             else:
                 sl = entry_price * (1 - sl_pct)
                 tp = entry_price * (1 + tp_pct)
-        elif signal_type == 'SELL':
+        elif side in ['SELL', 'SHORT']:
             if atr:
                 sl = entry_price + (atr * 2)
                 tp = entry_price - (atr * 3)

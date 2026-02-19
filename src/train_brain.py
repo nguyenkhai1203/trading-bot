@@ -63,6 +63,30 @@ def load_training_data():
                     snapshot.get('state_equity_ratio', 1.0)
                 ]
                 
+            # Add Dynamic Context Features (v4.0) - Always 17 features now
+            entry = t.get('entry_price', 1)
+            side_mult = 1 if t.get('side') == 'BUY' else -1
+            
+            # SL Distances (Normalized: 0 = -5%, 0.5 = 0%, 1 = +5%)
+            sl_orig = t.get('sl_original', t.get('entry_price'))
+            sl_final = t.get('sl_final', t.get('entry_price'))
+            
+            dist_orig = ((sl_orig - entry) / entry) * side_mult if entry else 0
+            dist_final = ((sl_final - entry) / entry) * side_mult if entry else 0
+            
+            norm_sl_orig = np.clip((dist_orig + 0.05) / 0.1, 0, 1)
+            norm_sl_final = np.clip((dist_final + 0.05) / 0.1, 0, 1)
+            
+            dynamic_features = [
+                norm_sl_orig,
+                norm_sl_final,
+                min(t.get('sl_move_count', 0) / 10.0, 1.0),
+                1.0 if t.get('sl_tightened') else 0.0,
+                min(t.get('max_pnl_pct', 0) / 10.0, 1.0)
+            ]
+            
+            feature_vector.extend(dynamic_features)
+                
             # Clean NaNs
             feature_vector = [0.5 if x is None else x for x in feature_vector]
             
@@ -135,7 +159,7 @@ def run_nn_training(min_samples=10, epochs=100):
     y_test = np.array(targets)[indices[split_idx:]]
     
     # 3. Training
-    brain = NeuralBrain(input_size=12)
+    brain = NeuralBrain(input_size=17)
     print("💪 [BRAIN] Training model...")
     final_loss = brain.train(X_train.tolist(), y_train.tolist(), epochs=epochs)
     
