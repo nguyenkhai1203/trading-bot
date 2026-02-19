@@ -202,7 +202,7 @@
             "qty": 0.9,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771494678630,
+            "timestamp": 1771494788126,
             "adopted": true
         },
         "BYBIT_ARB/USDT:USDT_adopted": {
@@ -213,7 +213,7 @@
             "qty": 81.2,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771494678631,
+            "timestamp": 1771494788127,
             "adopted": true
         },
         "BYBIT_XLM/USDT:USDT_adopted": {
@@ -224,7 +224,7 @@
             "qty": 54.0,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771494678632,
+            "timestamp": 1771494788128,
             "adopted": true
         },
         "BYBIT_UNI/USDT:USDT_adopted": {
@@ -246,7 +246,7 @@
             "qty": 0.1,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771494678633,
+            "timestamp": 1771494788129,
             "adopted": true
         }
     },
@@ -259,7 +259,7 @@
             "qty": 0.9,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771494678630,
+            "timestamp": 1771494788126,
             "adopted": true
         },
         "BYBIT_ARB/USDT:USDT_adopted": {
@@ -270,7 +270,7 @@
             "qty": 81.2,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771494678631,
+            "timestamp": 1771494788127,
             "adopted": true
         },
         "BYBIT_XLM/USDT:USDT_adopted": {
@@ -281,7 +281,7 @@
             "qty": 54.0,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771494678632,
+            "timestamp": 1771494788128,
             "adopted": true
         },
         "BYBIT_UNI/USDT:USDT_adopted": {
@@ -303,9 +303,9 @@
             "qty": 0.1,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771494678633,
+            "timestamp": 1771494788129,
             "adopted": true
         }
     },
-    "last_sync": 1771494678.634088
+    "last_sync": 1771494788.129162
 }
