@@ -153,26 +153,42 @@ class WeightedScoringStrategy(Strategy):
         return final_tier
 
     def get_default_weights(self):
+        # Keys MUST match FeatureEngineer signal column names (without 'signal_' prefix)
         return {
-            "EMA9_EMA21_cross_up": 1.5,
-            "EMA50_EMA200_golden_cross": 2.0,
-            "MACD_line_cross_signal_up": 1.5,
-            "MACD_histogram_positive": 1.0,
-            "RSI_oversold": 1.0,
-            "RSI_above_50": 0.8,
-            "Ichimoku_price_above_cloud": 1.2,
-            "Ichimoku_tenkan_kijun_cross_up": 1.3,
-            "Volume_spike_up": 1.0,
-            "Price_above_VWAP": 0.9,
-            
-            "EMA9_EMA21_cross_down": 1.5,
-            "EMA50_EMA200_death_cross": 2.0,
-            "MACD_line_cross_signal_down": 1.5,
-            "RSI_overbought": 1.0,
-            "Ichimoku_price_below_cloud": 1.2,
-            "Ichimoku_tenkan_kijun_cross_down": 1.3,
-            "Volume_spike_down": 1.0,
-            "Price_below_VWAP": 0.9
+            # --- LONG signals ---
+            "EMA_9_cross_21_up":     1.5,   # signal_EMA_9_cross_21_up
+            "EMA_50_gt_200":         2.0,   # signal_EMA_50_gt_200 (golden cross state)
+            "MACD_cross_up":         1.5,   # signal_MACD_cross_up
+            "MACD_gt_signal":        1.0,   # signal_MACD_gt_signal (histogram > 0)
+            "RSI_14_oversold":       1.0,   # signal_RSI_14_oversold
+            "RSI_14_gt_50":          0.8,   # signal_RSI_14_gt_50
+            "Ichimoku_TK_Cross_Up":  1.3,   # signal_Ichimoku_TK_Cross_Up
+            "Vol_Spike":             1.0,   # signal_Vol_Spike
+            "Price_Above_VWAP":      0.9,   # signal_Price_Above_VWAP
+            "bounce_from_support":   1.2,   # signal_bounce_from_support
+            "RSI_Bullish_Div":       0.8,   # signal_RSI_Bullish_Div
+            "MACD_Bullish_Div":      0.8,   # signal_MACD_Bullish_Div
+            "Stoch_Oversold":        0.7,   # signal_Stoch_Oversold
+            "Stoch_K_Cross_Up":      0.9,   # signal_Stoch_K_Cross_Up
+            "Price_lt_BB_Low":       0.8,   # signal_Price_lt_BB_Low (mean-reversion buy)
+            "breakout_above_resistance": 1.1, # signal_breakout_above_resistance
+
+            # --- SHORT signals ---
+            "EMA_9_cross_21_down":   1.5,   # signal_EMA_9_cross_21_down
+            "EMA_50_lt_200":         2.0,   # signal_EMA_50_lt_200 (death cross state)
+            "MACD_cross_down":       1.5,   # signal_MACD_cross_down
+            "MACD_lt_signal":        1.0,   # signal_MACD_lt_signal
+            "RSI_14_overbought":     1.0,   # signal_RSI_14_overbought
+            "RSI_14_lt_50":          0.8,   # signal_RSI_14_lt_50
+            "Ichimoku_TK_Cross_Down":1.3,   # signal_Ichimoku_TK_Cross_Down
+            "Price_Below_VWAP":      0.9,   # signal_Price_Below_VWAP
+            "bounce_from_resistance":1.2,   # signal_bounce_from_resistance
+            "RSI_Bearish_Div":       0.8,   # signal_RSI_Bearish_Div
+            "MACD_Bearish_Div":      0.8,   # signal_MACD_Bearish_Div
+            "Stoch_Overbought":      0.7,   # signal_Stoch_Overbought
+            "Stoch_K_Cross_Down":    0.9,   # signal_Stoch_K_Cross_Down
+            "Price_gt_BB_Up":        0.8,   # signal_Price_gt_BB_Up (mean-reversion sell)
+            "breakout_below_support":1.1,   # signal_breakout_below_support
         }
 
     def get_signal(self, row, use_adaptive=True):
@@ -208,20 +224,26 @@ class WeightedScoringStrategy(Strategy):
             if weight == 0: continue
             
             # Construct column name internally used in FeatureEngineer
-            # e.g., config 'RSI_14_oversold' matches 'signal_RSI_14_oversold' column
             col_name = f"signal_{signal_name}"
             
             # Check if this signal is active in the current row
             if col_name in row and row[col_name]:
-                # Determine polarity based on name
-                # (Simple heuristic: oversold/cross_up/gt/golden -> Long)
-                # Broadened polarity detection
-                is_long = any(x in signal_name for x in ['oversold', 'up', 'golden', 'gt_200', 'gt_signal', 'Price_lt_BB', 'gt_50', 'gt_'])
-                is_short = any(x in signal_name for x in ['overbought', 'down', 'death', 'lt_200', 'lt_signal', 'Price_gt_BB', 'lt_50', 'lt_'])
-                
-                # Special cases or manual mapping overrides
-                # For safety, let's explicitly separate LONG vs SHORT keys in config or use robust naming.
-                # Current config holds keys like "EMA9_EMA21_cross_up".
+                # Explicit LONG signal keywords (match FeatureEngineer naming)
+                is_long = any(x in signal_name for x in [
+                    '_cross_21_up', '_gt_200', 'MACD_cross_up', 'MACD_gt_signal',
+                    'MACD_Bullish', 'RSI_Bullish', 'Bullish', 'oversold',
+                    'TK_Cross_Up', 'Vol_Spike', 'Price_Above_VWAP', 'Price_lt_BB_Low',
+                    'bounce_from_support', 'breakout_above_resistance',
+                    'Stoch_Oversold', 'Stoch_K_Cross_Up', '_gt_50',
+                ])
+                # Explicit SHORT signal keywords (match FeatureEngineer naming)
+                is_short = any(x in signal_name for x in [
+                    '_cross_21_down', '_lt_200', 'MACD_cross_down', 'MACD_lt_signal',
+                    'MACD_Bearish', 'RSI_Bearish', 'Bearish', 'overbought',
+                    'TK_Cross_Down', 'Price_Below_VWAP', 'Price_gt_BB_Up',
+                    'bounce_from_resistance', 'breakout_below_support',
+                    'Stoch_Overbought', 'Stoch_K_Cross_Down', '_lt_50',
+                ])
                 
                 if is_long:
                     score_long += weight

@@ -33,19 +33,23 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN not found in .env")
 
-# Setup exchange & trader
-from exchange_factory import get_exchange_adapter
-exchange = get_exchange_adapter()
+# Setup exchanges & traders
+from exchange_factory import get_active_exchanges_map
+ex_adapters = get_active_exchanges_map()
+data_manager = MarketDataManager(adapters=ex_adapters)
+traders = {name: Trader(adapter, dry_run=True, data_manager=data_manager) for name, adapter in ex_adapters.items()}
 
-trader = Trader(exchange, dry_run=True)
-data_manager = MarketDataManager()
+# Backward compatibility (some functions might still use 'trader' global)
+trader = list(traders.values())[0] if traders else None
+exchange = list(ex_adapters.values())[0] if ex_adapters else None
 
 
 async def close():
     """Close module-level exchange and data manager connectors."""
     try:
-        if hasattr(exchange, 'close'):
-            await exchange.close()
+        for ad in ex_adapters.values():
+            if hasattr(ad, 'close'):
+                await ad.close()
     except Exception:
         pass
     try:
@@ -66,16 +70,19 @@ async def get_status_message(force_live: bool = False) -> str:
     try:
         if os.path.exists(positions_file) and os.path.getsize(positions_file) > 0:
             with open(positions_file, 'r', encoding='utf-8') as f:
-                local_data = json.load(f)
+                disk_data = json.load(f)
+                # Handle both formats (flat or nested)
+                if 'active_positions' in disk_data:
+                    local_data = disk_data
+                else:
+                    local_data = {'active_positions': disk_data}
     except Exception as e:
         logging.error(f"Failed to load positions.json: {e}")
 
     local_active = local_data.get('active_positions', {})
     local_pending = local_data.get('pending_orders', {})
     
-    # Issue 7: Cache logic
     last_sync = local_data.get('last_sync', 0)
-    # If synced in last 60 seconds, reuse local data as authoritative list (FAST)
     use_cache = not force_live and (time.time() - last_sync < 60)
 
     now = datetime.now().strftime('%d/%m %H:%M')
@@ -88,6 +95,8 @@ async def get_status_message(force_live: bool = False) -> str:
     
     for ex_name, adapter in data_manager.adapters.items():
         ex_name = ex_name.upper()
+        # Get corresponding trader for internal helper methods
+        current_trader = traders.get(ex_name, trader)
         
         # Detect Public Mode
         is_public = not adapter.exchange.apiKey or getattr(adapter, 'is_public_only', False)
@@ -106,34 +115,45 @@ async def get_status_message(force_live: bool = False) -> str:
             
             if is_public or use_cache:
                 # --- PUBLIC/CACHED MODE: Use Local Data as Source of Truth ---
-                # Filter local_active for this exchange
+                prefix = f"{ex_name}_"
                 for l_key, l_pos in local_active.items():
-                    if l_key.startswith(f"{ex_name}_"):
-                        norm_sym = trader._normalize_symbol(l_pos.get('symbol'))
+                    # Match by prefix OR by raw symbol if it's the current exchange's style
+                    is_match = l_key.startswith(prefix) or (not l_key.startswith(('BINANCE_', 'BYBIT_')) and ex_name == 'BINANCE')
+                    
+                    if is_match:
                         # Convert to same format as fetch_positions result for reuse
+                        norm_sym = current_trader._normalize_symbol(l_pos.get('symbol'))
                         live_positions[norm_sym] = {
                             'symbol': l_pos.get('symbol'),
                             'side': l_pos.get('side'),
-                            'entryPrice': float(l_pos.get('entry_price') or 0),
+                            'entryPrice': float(l_pos.get('entry_price') or l_pos.get('price') or 0),
                             'contracts': float(l_pos.get('qty') or 0),
                             'leverage': int(l_pos.get('leverage') or 1),
-                            'unrealizedPnl': 0, # Will calc below
+                            'unrealizedPnl': 0,
                             'timeframe': l_pos.get('timeframe', 'N/A'),
                             'stopLoss': float(l_pos.get('sl') or 0),
                             'takeProfit': float(l_pos.get('tp') or 0)
                         }
                 
-                # Filter local_pending for this exchange
                 for l_key, l_ord in local_pending.items():
-                    if l_key.startswith(f"{ex_name}_"):
+                    if l_key.startswith(prefix):
                         pending_entries.append(l_ord)
             else:
                 # --- LIVE MODE: Authoritative Exchange Fetch ---
-                live_positions_list = await adapter.fetch_positions()
-                live_positions = {trader._normalize_symbol(p['symbol']): p for p in live_positions_list if trader._safe_float(p.get('contracts'), 0) > 0}
+                # 1. Fetch Positions
+                try:
+                    raw_list = await adapter.fetch_positions()
+                    live_positions = {current_trader._normalize_symbol(p['symbol']): p for p in raw_list if float(p.get('contracts', 0)) > 0}
+                except Exception as e:
+                    logging.warning(f"Failed to fetch live positions for {ex_name}: {e}")
                 
-                live_orders = await adapter.fetch_open_orders()
-                pending_entries = [o for o in live_orders if str(o.get('type')).upper() in ['LIMIT'] and not o.get('reduceOnly')]
+                # 2. Fetch Pending ENTRY Orders (Hide SL/TP duplicates)
+                try:
+                    raw_orders = await adapter.fetch_open_orders()
+                    # Only show entry orders: reduceOnly=False and not a standard SL/TP type
+                    pending_entries = [o for o in raw_orders if not o.get('reduceOnly') and o.get('side') and o.get('amount', 0) > 0]
+                except Exception as e:
+                    logging.warning(f"Failed to fetch open orders for {ex_name}: {e}")
             
             # --- ACTIVE POSITIONS ---
             lines.append("🟢 *ACTIVE POSITIONS*")
@@ -147,55 +167,56 @@ async def get_status_message(force_live: bool = False) -> str:
                     contracts = float(ex_p.get('contracts') or 0)
                     lev = int(ex_p.get('leverage') or 1)
                     
-                    # Merge with local metadata if exists
                     timeframe = ex_p.get('timeframe', "N/A")
                     sl = float(ex_p.get('stopLoss') or 0)
                     tp = float(ex_p.get('takeProfit') or 0)
                     
-                    if not is_public:
-                        # Try to find matching metadata in local_active (for timeframe/SL/TP fallback)
-                        for l_key, l_pos in local_active.items():
-                            if trader._normalize_symbol(l_pos.get('symbol')) == norm_sym:
-                                timeframe = l_pos.get('timeframe', timeframe)
-                                if sl == 0: sl = float(l_pos.get('sl') or 0)
-                                if tp == 0: tp = float(l_pos.get('tp') or 0)
-                                break
+                    # Merge with local metadata if exists (for timeframe/manual SL/TP fallback)
+                    prefix = f"{ex_name}_"
+                    for l_key, l_pos in local_active.items():
+                        if (l_key.startswith(prefix) or not l_key.startswith(('BINANCE_', 'BYBIT_'))) and \
+                           current_trader._normalize_symbol(l_pos.get('symbol')) == norm_sym:
+                            timeframe = l_pos.get('timeframe', timeframe)
+                            if sl == 0: sl = float(l_pos.get('sl') or 0)
+                            if tp == 0: tp = float(l_pos.get('tp') or 0)
+                            break
                     
                     # Calculate P&L % using live ticker
                     ticker = await data_manager.fetch_ticker(symbol, exchange=ex_name)
                     current = float(ticker['last']) if ticker else entry
                     
                     if entry > 0:
-                        pnl_pct = ((current - entry) / entry) * 100 * lev * (1 if side == 'BUY' else -1)
+                        pnl_pct = ((current - entry) / entry) * 100 * (1 if side == 'BUY' else -1)
+                        roe = pnl_pct * lev
                     else:
-                        pnl_pct = 0
+                        roe = 0
                         
                     side_emoji = "📈" if side == 'BUY' else "📉"
-                    pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
+                    pnl_emoji = "🟢" if roe >= 0 else "🔴"
                     
-                    # Issue 5: Manual label
                     manual_label = " (MANUAL)" if ex_p.get('adopted') or timeframe == 'sync' else ""
                     
-                    lines.append(f"{side_emoji} *{symbol}* [{timeframe}]{manual_label} ({lev}x) | {pnl_emoji}*{pnl_pct:+.2f}%*")
+                    lines.append(f"{side_emoji} *{symbol}* [{timeframe}]{manual_label} ({lev}x) | {pnl_emoji}*{roe:+.2f}%*")
                     lines.append(f"   `{entry:.6f}` → `{current:.6f}`")
                     if sl > 0 or tp > 0:
-                        lines.append(f"   🎯 TP: {tp:.6f} | 🛡 SL: {sl:.6f}")
+                         lines.append(f"   🎯 TP: {tp:.6f} | 🛡 SL: {sl:.6f}")
             else:
-                lines.append("   _None_")
+                lines.append("   _None active_")
 
-            # --- PENDING ORDERS ---
+            # --- PENDING ENTRIES ---
             lines.append("")
-            lines.append("⏳ *PENDING ORDERS*")
+            lines.append("⏳ *PENDING ENTRIES*")
             lines.append("─" * 15)
             
             if pending_entries:
                 for o in pending_entries:
                     sym = o.get('symbol')
                     side = o.get('side', 'N/A').upper()
-                    price = float(o.get('price') or 0)
+                    o_type = o.get('type', 'LIMIT').upper()
+                    price = float(o.get('price') or o.get('stopPrice') or 0)
                     qty = float(o.get('amount') or 0)
                     
-                    lines.append(f"   {side} {sym} @ `{price:.6f}` (Qty: {qty})")
+                    lines.append(f"   {side} {sym} ({o_type}) @ `{price:.6f}` (Qty: {qty})")
             else:
                 lines.append("   _None_")
                 

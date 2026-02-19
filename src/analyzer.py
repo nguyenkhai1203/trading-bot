@@ -29,7 +29,10 @@ import subprocess
 from train_brain import run_nn_training
 
 class StrategyAnalyzer:
-    def __init__(self, data_dir='data'):
+    def __init__(self, data_dir=None):
+        # Default to src/data (absolute, regardless of CWD)
+        if data_dir is None:
+            data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
         self.data_dir = data_dir
         self.feature_engineer = FeatureEngineer()
         # OPTIMIZATION 1: Cache for loaded data and calculated features
@@ -44,12 +47,13 @@ class StrategyAnalyzer:
         if cache_key in self._data_cache:
             return self._data_cache[cache_key]
         
-        safe_symbol = symbol.replace('/', '').replace(':', '')
-        # Data files now follow {EXCHANGE}_{SYMBOL}_{TF}.csv pattern
+        # Strip :USDT suffix first, then remove /  -> BTC/USDT:USDT -> BTCUSDT
+        safe_symbol = symbol.split(':')[0].replace('/', '')
+        # Data files: {EXCHANGE}_{SYMBOL}_{TF}.csv  OR legacy  {SYMBOL}_{TF}.csv
         file_path = os.path.join(self.data_dir, f"{exchange}_{safe_symbol}_{timeframe}.csv")
         
         if not os.path.exists(file_path):
-            # Fallback for legacy files
+            # Fallback 1: legacy without exchange prefix
             legacy_path = os.path.join(self.data_dir, f"{safe_symbol}_{timeframe}.csv")
             if os.path.exists(legacy_path):
                 file_path = legacy_path
@@ -115,8 +119,20 @@ class StrategyAnalyzer:
             config_key = name.replace('signal_', '')
             cat = self.get_signal_category(config_key)
             
-            is_long = any(x in config_key for x in ['oversold', 'up', 'golden', 'gt_200', 'gt_signal', 'lt_BB', 'cross_up', 'gt_50', 'gt_', 'bullish', 'above', 'strong_uptrend'])
-            is_short = any(x in config_key for x in ['overbought', 'down', 'death', 'lt_200', 'lt_signal', 'gt_BB', 'cross_down', 'lt_50', 'lt_', 'bearish', 'below', 'strong_downtrend'])
+            is_long = any(x in config_key for x in [
+                '_cross_21_up', '_gt_200', 'MACD_cross_up', 'MACD_gt_signal',
+                'MACD_Bullish', 'RSI_Bullish', 'Bullish', 'oversold',
+                'TK_Cross_Up', 'Vol_Spike', 'Price_Above_VWAP', 'Price_lt_BB_Low',
+                'bounce_from_support', 'breakout_above_resistance',
+                'Stoch_Oversold', 'Stoch_K_Cross_Up', '_gt_50',
+            ])
+            is_short = any(x in config_key for x in [
+                '_cross_21_down', '_lt_200', 'MACD_cross_down', 'MACD_lt_signal',
+                'MACD_Bearish', 'RSI_Bearish', 'Bearish', 'overbought',
+                'TK_Cross_Down', 'Price_Below_VWAP', 'Price_gt_BB_Up',
+                'bounce_from_resistance', 'breakout_below_support',
+                'Stoch_Overbought', 'Stoch_K_Cross_Down', '_lt_50',
+            ])
             
             # LAYER 1: TREND FILTER
             if is_long:

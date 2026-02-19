@@ -339,6 +339,42 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
 
         return ids
 
+    async def set_position_sl_tp(
+        self, symbol: str, side: str,
+        sl: Optional[float] = None, tp: Optional[float] = None
+    ) -> Dict:
+        """
+        Set SL/TP on an existing Bybit position using set_trading_stop.
+        This attaches SL/TP at the position level (not separate orders),
+        consistent with how the initial order embeds SL/TP params.
+        Returns {'sl_set': bool, 'tp_set': bool}.
+        """
+        result = {'sl_set': False, 'tp_set': False}
+        try:
+            # Direct Bybit V5 private endpoint: /v5/position/trading-stop
+            normalized = self._normalize_symbol(symbol)
+            pos_side = 'None'  # one-way mode
+            body = {'category': 'linear', 'symbol': normalized, 'positionIdx': 0}
+            if sl is not None:
+                body['stopLoss'] = str(sl)
+                body['slTriggerBy'] = 'MarkPrice'
+            if tp is not None:
+                body['takeProfit'] = str(tp)
+                body['tpTriggerBy'] = 'MarkPrice'
+            
+            resp = await self.exchange.privatePostV5PositionTradingStop(body)
+            ret_code = resp.get('retCode', -1)
+            if ret_code == 0:
+                result['sl_set'] = sl is not None
+                result['tp_set'] = tp is not None
+                self.logger.info(f"[Bybit] set_position_sl_tp OK for {symbol}: SL={sl} TP={tp}")
+            else:
+                self.logger.error(f"[Bybit] set_position_sl_tp failed: {resp.get('retMsg')}")
+        except Exception as e:
+            self.logger.error(f"[Bybit] set_position_sl_tp exception for {symbol}: {e}")
+        
+        return result
+
     async def cancel_stop_orders(
         self, symbol: str,
         sl_id: Optional[str] = None,

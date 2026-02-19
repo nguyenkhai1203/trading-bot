@@ -23,13 +23,16 @@ class MarketDataManager:
              cls._instance.initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self, adapters=None):
         if hasattr(self, 'initialized') and self.initialized: return
         self.initialized = True
         
-        # Initialize multiple Exchange Adapters
-        from exchange_factory import get_active_exchanges_map
-        self.adapters = get_active_exchanges_map()
+        # Initialize or use provided multiple Exchange Adapters
+        if adapters:
+            self.adapters = adapters
+        else:
+            from exchange_factory import get_active_exchanges_map
+            self.adapters = get_active_exchanges_map()
         
         # Backward compatibility: set self.adapter/self.exchange to the first one
         if self.adapters:
@@ -39,9 +42,6 @@ class MarketDataManager:
         else:
             self.adapter = None
             self.exchange = None
-            
-        # self.exchange = self._initialize_exchange() # REMOVED
-        # super().__init__(exchange)  # REMOVED
         
         self.data_store = {} # { 'EXCHANGE_symbol_timeframe': df }
         self.features_cache = {}  # { 'EXCHANGE_symbol_timeframe': df_with_features }

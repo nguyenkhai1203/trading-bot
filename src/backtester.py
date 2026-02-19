@@ -14,24 +14,25 @@ import asyncio
 from risk_manager import RiskManager # Need this for sizing logic if not already used heavily
 
 class Backtester:
-    def __init__(self, symbol, timeframe, initial_balance=10000, commission=TRADING_COMMISSION, slippage=SLIPPAGE_PCT):
+    def __init__(self, symbol, timeframe, exchange='BINANCE', initial_balance=10000, commission=TRADING_COMMISSION, slippage=SLIPPAGE_PCT):
         self.symbol = symbol
         self.timeframe = timeframe
+        self.exchange = exchange.upper()
         self.initial_balance = initial_balance
         self.balance = initial_balance
-        self.commission = commission    # 0.06% per trade
-        self.slippage = slippage        # 0.05% price impact per trade
+        self.commission = commission
+        self.slippage = slippage
         self.trades = []
         self.position = None 
         self.equity_curve = []
         
         self.feature_engineer = FeatureEngineer()
-        self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe)
+        self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe, exchange=exchange)
         # Mock Risk Manager for backtest sizing logic
         self.risk_manager = RiskManager(risk_per_trade=RISK_PER_TRADE)
 
-        # Data Caching Config
-        self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+        # Data dir: absolute path to src/data where CSVs are stored
+        self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
         os.makedirs(self.data_dir, exist_ok=True)
 
     async def run(self):
@@ -40,13 +41,19 @@ class Backtester:
         status = "[ACTIVE]" if wa else "[INACTIVE]"
         print(f"[{self.symbol}] Strategy Status: {status} ({len(wa)} parameters)")
         
-        # Check cache first
-        file_path = os.path.join(self.data_dir, f"{self.symbol.replace('/', '').replace(':', '')}_{self.timeframe}.csv")
+        # Check cache first — strip :USDT suffix -> BTC/USDT:USDT -> BTCUSDT
+        safe_symbol = self.symbol.split(':')[0].replace('/', '')
+        exchange = self.exchange
+        
+        # Try exchange-prefixed first, then legacy
+        file_path_ex = os.path.join(self.data_dir, f"{exchange}_{safe_symbol}_{self.timeframe}.csv")
+        file_path_leg = os.path.join(self.data_dir, f"{safe_symbol}_{self.timeframe}.csv")
+        file_path = file_path_ex if os.path.exists(file_path_ex) else file_path_leg
 
         df = None
         # 1. Try Load from Disk
         if os.path.exists(file_path):
-            print(f"[{self.symbol}] Loading data from cache: {file_path}")
+            print(f"[{self.symbol}] Loading data from cache: {os.path.basename(file_path)}")
             df = pd.read_csv(file_path)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
         
@@ -59,7 +66,7 @@ class Backtester:
             
             if df is not None and not df.empty:
                 print(f"[{self.symbol}] Saving data to cache...")
-                df.to_csv(file_path, index=False)
+                df.to_csv(file_path_leg, index=False)
         
         if df is None or df.empty:
             print(f"[{self.symbol}] No data found.")
@@ -360,27 +367,41 @@ async def main():
     enabled_results = []
     watched_results = []
     
-    for s in TRADING_SYMBOLS:
-        for tf in TRADING_TIMEFRAMES:
-            key = f"{s}_{tf}"
-            config = strategy_config.get(key, {})
-            is_enabled = config.get('enabled', False)
-            status = config.get('status', 'UNKNOWN')
-            
-            # Skip if neither ENABLED nor WATCHED
-            if not is_enabled and 'WATCH' not in status:
-                continue
-            
-            bt = Backtester(s, tf)
-            res = await bt.run()
-            if res:
-                res['status'] = status.split('(')[0].strip() if '(' in status else 'N/A'  # Extract status
-                all_results.append(res)
+    # Import active exchanges from config
+    from config import ACTIVE_EXCHANGES, BINANCE_SYMBOLS, BYBIT_SYMBOLS
+    exchange_symbols = {
+        'BINANCE': BINANCE_SYMBOLS if BINANCE_SYMBOLS else TRADING_SYMBOLS,
+        'BYBIT': BYBIT_SYMBOLS if BYBIT_SYMBOLS else TRADING_SYMBOLS,
+    }
+    active_exchanges = [e for e in ['BINANCE', 'BYBIT'] if e in ACTIVE_EXCHANGES]
+    
+    for exchange in active_exchanges:
+        symbols = exchange_symbols.get(exchange, TRADING_SYMBOLS)
+        for s in symbols:
+            for tf in TRADING_TIMEFRAMES:
+                clean_sym = s.split(':')[0].replace('/', '_').upper()
+                # Try exchange-prefixed key first, then legacy key
+                key_ex = f"{exchange}_{clean_sym}_{tf}"
+                key_legacy = f"{s}_{tf}"
                 
-                if is_enabled:
-                    enabled_results.append(res)
-                else:
-                    watched_results.append(res)
+                config = strategy_config.get(key_ex) or strategy_config.get(key_legacy, {})
+                is_enabled = config.get('enabled', False)
+                status = config.get('status', 'UNKNOWN')
+                
+                # Skip if neither ENABLED nor WATCHED
+                if not is_enabled and 'WATCH' not in status:
+                    continue
+                
+                bt = Backtester(s, tf, exchange=exchange)
+                res = await bt.run()
+                if res:
+                    res['exchange'] = exchange
+                    res['status'] = status.split('(')[0].strip() if '(' in status else 'N/A'
+                    all_results.append(res)
+                    if is_enabled:
+                        enabled_results.append(res)
+                    else:
+                        watched_results.append(res)
     
     # Print ENABLED Results First
     if enabled_results:

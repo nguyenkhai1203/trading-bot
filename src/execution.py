@@ -10,7 +10,8 @@ from config import (
     ENABLE_DYNAMIC_SLTP, ATR_TRAIL_MULTIPLIER, ATR_TRAIL_MIN_MOVE_PCT,
     RSI_OVERBOUGHT_EXIT, EMA_BREAK_CLOSE_THRESHOLD,
     ENABLE_PROFIT_LOCK, PROFIT_LOCK_THRESHOLD, PROFIT_LOCK_LEVEL,
-    MAX_TP_EXTENSIONS, ATR_EXT_MULTIPLIER
+    MAX_TP_EXTENSIONS, ATR_EXT_MULTIPLIER,
+    STOP_LOSS_PCT, TAKE_PROFIT_PCT
 )
 import time
 import hmac
@@ -716,6 +717,7 @@ class Trader:
             return None
         
         # Dynamic decimal places based on exchange metadata
+        qty = float(qty)  # Ensure native float (not np.float64) for API compatibility
         try:
             # Delegate to adapter's precision handling (handles Bybit Swap vs Spot key discrepancy)
             qty_rounded = self.exchange.round_qty(symbol, qty)
@@ -734,8 +736,11 @@ class Trader:
             
         # Validate minimum qty after rounding
         if qty_rounded <= 0:
-            self.logger.warning(f"Rejected order: qty too small after rounding ({qty} -> {qty_rounded}) for {symbol}")
+            self.logger.warning(f"Rejected order: qty too small after rounding ({qty:.8f} -> {qty_rounded}) for {symbol}")
+            print(f"⏹️ [{self.exchange_name}] [{symbol}] Qty {qty:.8f} below min step after rounding. Skipping.")
             return None
+
+
             
         # UPDATE QTY TO ROUNDED VALUE FOR API CALLS
         qty = qty_rounded 
@@ -803,6 +808,13 @@ class Trader:
         if sl: params['stopLoss'] = sl
         if tp: params['takeProfit'] = tp
 
+        # tpsl_attached: True if exchange embeds SL/TP directly in the order (Bybit V5)
+        # so we skip creating separate reduce-only SL/TP orders afterward
+        tpsl_attached = (
+            self.exchange_name.upper() == 'BYBIT'
+            and bool(sl) and bool(tp)
+        )
+
         # Determine and clamp leverage to allowed range
         use_leverage = self._clamp_leverage(leverage)
         
@@ -811,52 +823,9 @@ class Trader:
             self.logger.error(f"❌ [ABORT] Detected Spot symbol {symbol} during Futures trade attempt on {self.exchange_name}! Aborting.")
             return None
 
-        try:
-            # Ensure margin mode & leverage set on exchange for LIVE orders
-            if not self.dry_run:
-                margin_params = {}
-                lev_params = {}
-                if self.exchange_name == 'BYBIT':
-                    margin_params = {'category': 'linear'}
-                    lev_params = {'category': 'linear'}
-
-                if not self.dry_run:
-                    # Double check if we can trade
-                    if self.exchange.can_trade:
-                        # Re-verify position on exchange before closing
-                        # BYBIT: Skip set_margin_mode, as set_leverage handles it or it's account-level
-                        if self.exchange_name != 'BYBIT':
-                            try:
-                                await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, symbol, 'isolated', margin_params)
-                            except Exception:
-                                pass # Often fails if already set, ignore
-
-                        # 2. Set Leverage (CRITICAL - Retry Loop for Bybit)
-                        lev_success = False
-                        if self.exchange_name == 'BYBIT':
-                            # Bybit sometimes needs a retry or specific category
-                            for i in range(3):
-                                try:
-                                    print(f"🔧 [BYBIT] Setting Leverage to x{use_leverage} for {symbol} (Attempt {i+1})...")
-                                    await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, use_leverage, lev_params)
-                                    lev_success = True
-                                    break
-                                except Exception as e:
-                                    if "not modified" in str(e).lower():
-                                        lev_success = True
-                                        break
-                                    print(f"⚠️ [BYBIT] Failed to set leverage: {e}")
-                                    import asyncio
-                                    await asyncio.sleep(0.5)
-                        else:
-                            # Standard for others
-                            lev_success = True
-                            await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, use_leverage, lev_params)
-
-        except Exception as e:
-            # reduce log spam if "not modified"
-            if "not modified" not in str(e).lower():
-                self.logger.warning(f"Failed to set leverage for {symbol}: {e}")
+        # Ensure margin mode & leverage set on exchange for LIVE orders
+        if not self.dry_run and self.exchange.can_trade:
+            await self._ensure_isolated_and_leverage(symbol, use_leverage)
 
         try:
             if order_type == 'market':
@@ -1281,8 +1250,17 @@ class Trader:
                                     self.logger.info(f"Bybit order {order_id} already gone (trigger attempt).")
                                 else:
                                     self.logger.warning(f"Bybit trigger cancel failed: {trigger_e}")
+                        
                         elif "order not found" in err_str or "already" in err_str or "not exist" in err_str:
-                            self.logger.info(f"Order {order_id} already gone from exchange.")
+                            # 🚨 SAFETY FALLBACK: ID might be wrong/stale, but order might still exist as "Ghost"
+                            # If we are effectively cancelling a PENDING entry, we should purge ALL orders for this symbol
+                            # to prevent unintended fills.
+                            self.logger.warning(f"⚠️ [SAFETY] Order {order_id} not found, but might be ghost. Triggering SAFETY PURGE for {symbol}.")
+                            print(f"🧹 [SAFETY] Order {order_id} not found. Purging ALL orders for {symbol} to be safe.")
+                            try:
+                                await self.cancel_all_orders(symbol)
+                            except Exception as purge_e:
+                                self.logger.error(f"[SAFETY] Purge failed: {purge_e}")
                         else:
                             self.logger.warning(f"Non-fatal order cancel error for {order_id}: {e}")
                 
@@ -1911,23 +1889,13 @@ class Trader:
 
     async def _ensure_isolated_and_leverage(self, symbol, leverage):
         """Ensure margin mode is isolated and leverage set for `symbol` on exchange (LIVE only)."""
-        if self.dry_run:
+        if self.dry_run or not self.exchange.can_trade:
             return
             
         try:
             # 1. MARGIN MODE SETUP
-            # Try REST calls to Binance Futures only if it's Binance and we have keys
-            is_real_binance = (self.exchange_name == 'BINANCE' and BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY)
-            
-            if is_real_binance:
-                try:
-                    await self._execute_with_timestamp_retry(self._set_margin_type_rest, symbol, 'ISOLATED')
-                except Exception as e:
-                    self.logger.debug(f"REST set_margin_type failed for {symbol}: {e}")
-            
-            # CCXT Adapter Call (for Bybit, or if Binance REST was skipped/failed)
             try:
-                # Adapter signature is set_margin_mode(symbol, mode)
+                # Adapter handles exchange-specific params (category, etc.)
                 await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, symbol, 'isolated')
             except Exception as e:
                 err = str(e).lower()
@@ -1936,129 +1904,26 @@ class Trader:
                 elif any(s in err for s in ["no change", "already", "-4046", "not need to change", "no need to change"]):
                     pass # Already set, ignore
                 else:
-                    print(f"⚠️  Could not set margin mode for {symbol}: {e}")
+                    self.logger.debug(f"Set margin mode failed for {symbol}: {e}")
 
             # 2. LEVERAGE SETUP
             safe_lev = self._safe_int(leverage, default=10)
-            
-            # Try REST calls to Binance first if appropriate
-            if is_real_binance:
-                try:
-                    await self._execute_with_timestamp_retry(self._set_leverage_rest, symbol, safe_lev)
-                except Exception as e:
-                    err_str = str(e).lower()
-                    if "-4161" in err_str or "leverage reduction is not supported" in err_str:
-                        # Fallback to fetch current leverage for logging
-                        cur_lev = "?"
-                        try:
-                            l_info = await self.exchange.fetch_leverage(symbol)
-                            cur_lev = str(l_info.get('leverage', '?'))
-                        except: pass
-                        print(f"⚠️  {symbol}: Leverage reduction blocked (Open Position). Kept at {cur_lev}x")
-                    else:
-                        self.logger.warning(f"REST set_leverage failed for {symbol}: {e}")
-            
-            # CCXT Adapter Call (for Bybit, or if Binance REST was skipped/failed)
-            # We skip this for Binance if we successfully did REST, but generally safe to try both or gate
-            if self.exchange_name == 'BYBIT':
-                try:
-                    # Correct Adapter Order: (symbol, leverage)
-                    await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, safe_lev)
-                except Exception as e:
-                    if "not modified" not in str(e).lower():
-                        self.logger.warning(f"[Bybit] Set leverage failed for {symbol}: {e}")
+            try:
+                # Adapter handles exchange-specific params and retry loops
+                await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, safe_lev)
+            except Exception as e:
+                err_str = str(e).lower()
+                if "-4161" in err_str or "leverage reduction is not supported" in err_str or "not modified" in err_str:
+                    pass # Harmless or expected
+                else:
+                    self.logger.warning(f"Set leverage failed for {symbol}: {e}")
 
         except Exception as e:
-            self.logger.error(f"Error ensuring isolated/leverage for {symbol}: {e}")
-
-    async def _set_margin_type_rest(self, symbol, margin_type='ISOLATED'):
-        """Call Binance Futures API to change margin type (signed request)."""
-        if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-            raise RuntimeError('Binance API credentials missing')
-
-        path = '/fapi/v1/marginType'
-        base = 'https://fapi.binance.com'
-        # Strip CCXT futures suffix and remove slashes
-        api_symbol = symbol.split(':')[0].replace('/', '')
-        params = {
-            'symbol': api_symbol,
-            'marginType': margin_type,
-            'recvWindow': 60000,
-            'timestamp': self.data_manager.get_synced_timestamp()
-        }
-        return await self._binance_signed_post(base + path, params)
-
-    async def _set_leverage_rest(self, symbol, leverage):
-        """Call Binance Futures API to change leverage (signed request)."""
-        if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-            raise RuntimeError('Binance API credentials missing')
-
-        path = '/fapi/v1/leverage'
-        base = 'https://fapi.binance.com'
-        # Strip CCXT futures suffix and remove slashes
-        api_symbol = symbol.split(':')[0].replace('/', '')
-        params = {
-            'symbol': api_symbol,
-            'leverage': self._safe_int(leverage, default=10),
-            'recvWindow': 60000,
-            'timestamp': self.data_manager.get_synced_timestamp()
-        }
-        return await self._binance_signed_post(base + path, params)
-
-    async def _binance_signed_post(self, url, params):
-        """Perform signed POST to Binance Futures API using requests in thread to avoid blocking."""
-        # Ensure timestamp is fresh if not provided
-        if 'timestamp' not in params:
-            params['timestamp'] = self.data_manager.get_synced_timestamp()
-            
-        def do_request(u, p):
-            query = urlencode(p)
-            signature = hmac.new(BINANCE_API_SECRET.encode('utf-8'), query.encode('utf-8'), hashlib.sha256).hexdigest()
-            headers = {'X-MBX-APIKEY': BINANCE_API_KEY}
-            full = f"{u}?{query}&signature={signature}"
-            r = requests.post(full, headers=headers, timeout=10)
-            if r.status_code >= 400:
-                # Silence "No need to change margin type"
-                if any(s in r.text.lower() for s in ["-4046", "no need to change", "not need to change", "already"]):
-                    return {"code": 200, "msg": "No change needed"}
-                raise Exception(f"Binance API Error {r.status_code}: {r.text}")
-            return r.json()
-
-        import asyncio
-        return await asyncio.to_thread(do_request, url, params)
+            self.logger.error(f"Error in _ensure_isolated_and_leverage for {symbol}: {e}")
 
     async def _binance_batch_create(self, symbol, orders):
-        """Create multiple orders atomically via Binance Futures `batchOrders` endpoint.
-
-        `orders` should be a list of dicts matching Binance order schema, e.g.
-        {"symbol":"BTCUSDT","side":"SELL","type":"TAKE_PROFIT_MARKET","stopPrice":"65000","closePosition":"true"}
-        Returns parsed JSON list on success.
-        """
-        if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-            raise RuntimeError('Binance API credentials missing')
-
-        path = '/fapi/v1/batchOrders'
-        base = 'https://fapi.binance.com'
-        url = base + path
-
-        body = {
-            'batchOrders': json.dumps(orders),
-            'recvWindow': 60000,
-            'timestamp': self.data_manager.get_synced_timestamp()
-        }
-
-        def do_post(u, data):
-            query = urlencode(data)
-            signature = hmac.new(BINANCE_API_SECRET.encode('utf-8'), query.encode('utf-8'), hashlib.sha256).hexdigest()
-            headers = {'X-MBX-APIKEY': BINANCE_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded'}
-            full = f"{u}?{query}&signature={signature}"
-            r = requests.post(full, headers=headers, timeout=15)
-            if r.status_code >= 400:
-                raise Exception(f"Binance Batch API Error {r.status_code}: {r.text}")
-            return r.json()
-
-        import asyncio
-        return await asyncio.to_thread(do_post, url, body)
+        """Redirected to adapter's batch_create_orders."""
+        return await self.exchange.batch_create_orders(orders)
 
     async def _create_sl_tp_orders_for_position(self, pos_key):
         """Create SL/TP reduce-only orders for a filled position and persist the order ids."""
@@ -2535,8 +2400,9 @@ class Trader:
                     
                         # 0. COOLDOWN CHECK: If we just recreated SL/TP for this position, SKIP verification
                         # This prevents "Verification Lag" where we create verify fail create again instantly
+                        # 300s (5 min) is needed because Binance algo orders can take time to appear in fetch_order
                         last_creation = self._pos_action_timestamps.get(f"{pos_key}_recreation", 0)
-                        if (self.exchange.milliseconds() - last_creation) < 20000: # 20 seconds trust period
+                        if (self.exchange.milliseconds() - last_creation) < 300000: # 5 minutes trust period
                             # self.logger.info(f"[SYNC] Skipping verification for {pos_key} (In Grace Period)")
                             continue
 
@@ -2787,6 +2653,48 @@ class Trader:
 
         return res
 
+    async def _calculate_dynamic_sl_tp(self, symbol, side, entry_price):
+        """
+        Calculate SL/TP using ATR (Volatility) instead of fixed %.
+        Uses 1h timeframe, ATR(14) with multiplier 2.0 for SL, and 1.5R for TP.
+        """
+        try:
+            # Fetch last 20 candles (1h)
+            ohlcv = await self._execute_with_timestamp_retry(self.exchange.fetch_ohlcv, symbol, '1h', limit=20)
+            if not ohlcv or len(ohlcv) < 15:
+                return None, None
+            
+            # Manual ATR Calculation (Lightweight, no pandas)
+            trs = []
+            for i in range(1, len(ohlcv)):
+                curr = ohlcv[i]
+                prev = ohlcv[i-1]
+                high, low, close = curr[2], curr[3], curr[4]
+                prev_close = prev[4]
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                trs.append(tr)
+            
+            if not trs: return None, None
+            
+            # Simple Smoothing for ATR
+            atr = sum(trs[-14:]) / 14 if len(trs) >= 14 else sum(trs) / len(trs)
+            
+            multiplier = 2.0  # Standard defensive SL (2x ATR)
+            sl_dist = atr * multiplier
+            tp_dist = atr * multiplier * 1.5  # 1.5R default reward
+            
+            if side == 'BUY':
+                sl = entry_price - sl_dist
+                tp = entry_price + tp_dist
+            else:
+                sl = entry_price + sl_dist
+                tp = entry_price - tp_dist
+                
+            return sl, tp
+        except Exception as e:
+            self.logger.warning(f"ATR Calc failed for {symbol}: {e}")
+            return None, None
+
     async def recreate_missing_sl_tp(self, pos_key, recreate_sl=True, recreate_tp=True, recreate_sl_force=False, recreate_tp_force=False):
         """Recreate missing SL/TP orders for a given position."""
         if self.dry_run or self.exchange.is_public_only:
@@ -2829,7 +2737,95 @@ class Trader:
             tp = pos.get('tp')
             close_side = 'sell' if side == 'BUY' else 'buy'
 
-            # SL Recreation
+            # ─── AUTO-CALCULATE MISSING SL/TP (TECHNICAL / ATR) ───
+            # If SL/TP are missing (e.g. manual open or state lost), calc from entry price
+            if (not sl or not tp) and pos.get('entry_price'):
+                try:
+                    entry_price = float(pos['entry_price'])
+                    params_updated = False
+                    
+                    # Try Technical Calculation first (ATR)
+                    tech_sl, tech_tp = await self._calculate_dynamic_sl_tp(symbol, side, entry_price)
+                    
+                    if not sl:
+                        if tech_sl:
+                            calc_sl = tech_sl
+                            method = "ATR"
+                        else:
+                            # Fallback to Fixed %
+                            if side == 'BUY':
+                                calc_sl = entry_price * (1 - STOP_LOSS_PCT)
+                            else:
+                                calc_sl = entry_price * (1 + STOP_LOSS_PCT)
+                            method = "PCT"
+                        
+                        try:
+                            # Use CCXT precision handling via adapter's exchange instance
+                            calc_sl = float(self.exchange.exchange.price_to_precision(symbol, calc_sl))
+                        except Exception:
+                            calc_sl = round(calc_sl, 4)
+                            
+                        pos['sl'] = calc_sl
+                        sl = calc_sl
+                        params_updated = True
+                        self.logger.info(f"[REPAIR] Auto-calculated missing SL for {pos_key} using {method}: {sl}")
+
+                    if not tp:
+                        if tech_tp:
+                            calc_tp = tech_tp
+                            method = "ATR"
+                        else:
+                            # Fallback to Fixed %
+                            if side == 'BUY':
+                                calc_tp = entry_price * (1 + TAKE_PROFIT_PCT)
+                            else:
+                                calc_tp = entry_price * (1 - TAKE_PROFIT_PCT)
+                            method = "PCT"
+                            
+                        try:
+                            calc_tp = float(self.exchange.exchange.price_to_precision(symbol, calc_tp))
+                        except Exception:
+                            calc_tp = round(calc_tp, 4)
+                            
+                        pos['tp'] = calc_tp
+                        tp = calc_tp
+                        params_updated = True
+                        self.logger.info(f"[REPAIR] Auto-calculated missing TP for {pos_key} using {method}: {tp}")
+                    
+                    if params_updated:
+                        self.active_positions[pos_key] = pos
+                        self._save_positions()
+
+                except Exception as e:
+                    self.logger.error(f"[REPAIR] Auto-calc SL/TP failed for {pos_key}: {e}")
+            # ─── END AUTO-CALC ──────────────────
+
+            # ─── BYBIT: Use position-level SL/TP (trading-stop) ───────────────────────
+            # On Bybit, SL/TP is attached to the position (not separate orders).
+            # Recreating as separate conditional orders would NOT be detected by the
+            # sync loop's `position['stopLoss']` check, causing an infinite loop.
+            if self.exchange_name.upper() == 'BYBIT' and hasattr(self.exchange, 'set_position_sl_tp'):
+                try:
+                    set_sl = sl if (recreate_sl and sl) else None
+                    set_tp = tp if (recreate_tp and tp) else None
+                    if set_sl or set_tp:
+                        r = await self.exchange.set_position_sl_tp(symbol, side, sl=set_sl, tp=set_tp)
+                        if r.get('sl_set'):
+                            pos['sl_order_id'] = 'attached'
+                            result['sl_recreated'] = True
+                            self._debug_log('recreated_sl', pos_key, 'attached')
+                        if r.get('tp_set'):
+                            pos['tp_order_id'] = 'attached'
+                            result['tp_recreated'] = True
+                            self._debug_log('recreated_tp', pos_key, 'attached')
+                        self.active_positions[pos_key] = pos
+                        self._save_positions()
+                except Exception as e:
+                    result['errors'].append(f'bybit_set_tpsl:{e}')
+                return result
+            # ─── END BYBIT ──────────────────────────────────────────────────────────────
+
+
             try:
                 if recreate_sl and sl and (not pos.get('sl_order_id') or recreate_sl_force):
                     # SAFETY: Try to cancel old SL order "blindly" if ID exists in local state

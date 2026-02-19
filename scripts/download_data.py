@@ -22,7 +22,8 @@ from config import (
 
 async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', limit=5000):
     """Download OHLCV data for a symbol/timeframe pair with 1h freshness check."""
-    safe_symbol = symbol.replace('/', '').upper()
+    # Strip :USDT suffix -> BTC/USDT:USDT -> BTCUSDT
+    safe_symbol = symbol.split(':')[0].replace('/', '').upper()
     filename = f"data/{exchange_name}_{safe_symbol}_{timeframe}.csv"
     
     # [v2.3] Freshness check: Skip if file < 1 hour old
@@ -31,7 +32,7 @@ async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', l
         age_seconds = time.time() - mtime
         if age_seconds < 3600:  # 1 hour
             print(f"  [SKIP] {exchange_name} {symbol} {timeframe} is fresh ({age_seconds/60:.1f}m old)")
-            return True
+            return 1  # Skipped (fresh)
 
     try:
         # Bybit-specific timeframe mapping
@@ -57,6 +58,13 @@ async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', l
                 config['secret'] = BYBIT_API_SECRET
             
         exchange = ex_class(config)
+        
+        # [v2.4] Robust Time Sync for Binance/Bybit
+        # Fetch server time and calculate offset to prevent -1021 error
+        if exchange_name.upper() in ['BINANCE', 'BYBIT']:
+            exchange.options['recvWindow'] = 60000 # Max safety window
+            await exchange.load_time_difference()
+            print(f"  [TIME] {exchange_name} offset: {exchange.options.get('timeDifference', 0)}ms")
         
         print(f"[*] Downloading {symbol} {timeframe} ({limit} candles)...")
         
@@ -96,12 +104,11 @@ async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', l
         df.to_csv(filename, index=False)
         
         print(f"[OK] {exchange_name} {symbol:12s} {timeframe:3s} -> {len(df):5d} candles saved to {filename}")
-        
-        return True
+        return 2  # Actually downloaded
         
     except Exception as e:
         print(f"[ERROR] {symbol} {timeframe}: {e}")
-        return False
+        return 0  # Failed
     finally:
         if 'exchange' in locals() and exchange:
             await exchange.close()
@@ -147,11 +154,12 @@ async def main():
             tasks.append(download_historical_data(symbol, timeframe, ex_name, limit))
             
         results = await asyncio.gather(*tasks)
-        success_count += sum(results)
+        # 2=downloaded, 1=skipped(fresh), 0=error
+        actual_downloads = sum(1 for r in results if r == 2)
+        success_count += sum(1 for r in results if r > 0)
         
-        # Smart pause between batches
-        if i + batch_size < total:
-            # Much longer pause for Bybit to respect rate limits (bucket refill)
+        # Only sleep if we made real API calls this batch
+        if i + batch_size < total and actual_downloads > 0:
             has_bybit = any(t[2] == 'BYBIT' for t in batch)
             wait_time = 5 if has_bybit else 2
             print(f"    Sleeping {wait_time}s to respect rate limits...")

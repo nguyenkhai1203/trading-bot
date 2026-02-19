@@ -641,19 +641,18 @@ class TradingBot:
                         risk_info = f"{use_risk*100}% Risk"
                     
                     # === MINIMUM NOTIONAL FLOOR ===
-                    # Exchanges have minimum notional (Qty * Price) requirements.
-                    # We already fetched exchange_min_notional earlier.
                     strict_min_notional = exchange_min_notional
-                    exchange_min_cost = exchange_min_notional # For logging compatibility
+                    exchange_min_cost = exchange_min_notional
 
                     actual_notional = qty * current_price
                     
-                     # Allow a tiny Floating Point tolerance (e.g. 9.99 vs 10.0)
+                    # Allow a tiny floating point tolerance (e.g. 9.99 vs 10.0)
                     if qty > 0 and actual_notional < (strict_min_notional * 0.99):
-                         msg = f"[{self.trader.exchange_name}] [{self.symbol}] Calculated Size ${actual_notional:.2f} < Strict Min ${strict_min_notional:.2f} (Exch: ${exchange_min_cost}). Skipping (Strict Rule)."
-                         self.logger.warning(msg)
-                         print(f"⏹️ {msg}")
-                         qty = 0 # STRICT SKIP
+                        msg = f"[{self.trader.exchange_name}] [{self.symbol}] Calculated Size ${actual_notional:.2f} < Strict Min ${strict_min_notional:.2f} (Exch: ${exchange_min_cost}). Skipping (Strict Rule)."
+                        self.logger.warning(msg)
+                        print(f"⏹️ {msg}")
+                        qty = 0  # STRICT SKIP
+
                     
                     if qty > 0:
                         # Calculate estimated margin cost for reservation
@@ -871,12 +870,12 @@ async def main():
     # Initialize Global Manager and Balance Tracker
 
     # Initialize Global Manager and Balance Tracker
-    manager = MarketDataManager()
+    from exchange_factory import get_active_exchanges_map
+    ex_adapters = get_active_exchanges_map()
+    manager = MarketDataManager(adapters=ex_adapters)
     balance_tracker = BalanceTracker()
     
     # Initialize Traders for each Active Exchange
-    from exchange_factory import get_active_exchanges_map
-    ex_adapters = get_active_exchanges_map()
     traders = {name: Trader(adapter, dry_run=config.DRY_RUN, data_manager=manager) for name, adapter in ex_adapters.items()}
     
     print(f"🚀 Initializing parallel bots for {len(traders)} exchanges: {list(traders.keys())}")

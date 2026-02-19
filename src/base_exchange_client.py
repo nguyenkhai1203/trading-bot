@@ -72,11 +72,13 @@ class BaseExchangeClient:
 
     def get_synced_timestamp(self) -> int:
         """Get current timestamp synchronized with exchange with safety padding."""
-        # Use manual offset for absolute control
+        # Use manual offset as primary for absolute control
         local_now = int(time.time() * 1000)
-        # We subtract 5000ms safety padding to ensure we are NEVER "ahead" of server
-        # (Binance is strict about future timestamps). recvWindow (60s) handles the lag.
-        return local_now + self._server_offset_ms - 5000
+        
+        # We subtract 1000ms safety padding (reduced from 5000ms) to ensure we are 
+        # NOT "ahead" of server even with micro-oscillations.
+        # Binance is strict about future timestamps. recvWindow (60s) handles the lag.
+        return local_now + self._server_offset_ms - 1000
     
     async def resync_time_if_needed(self, error_msg: str = "") -> bool:
         """Re-sync time if timestamp error detected."""
