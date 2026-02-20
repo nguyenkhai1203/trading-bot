@@ -18,6 +18,10 @@ data/
 
 # Trading State
 src/__pycache__/
+src/positions.json
+src/signal_performance.json
+./src/positions.json
+./src/signal_performance.json 
 
 # Reports
 reports/
@@ -34,3 +38,5 @@ reports/
 Thumbs.db
 
 /tests
+src/positions.json
+src/signal_performance.json

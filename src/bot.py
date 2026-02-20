@@ -804,51 +804,77 @@ from analyzer import run_global_optimization
 from notification import send_telegram_message, send_telegram_chunked
 
 async def send_periodic_status_report(trader, data_manager):
-    """Aggregates all active positions and sends a summary to Telegram."""
+    """Aggregates all active and pending positions and sends a summary to Telegram."""
     positions = trader.active_positions
     if not positions:
         return
 
-    msg = "📊 **Active Positions** 📊\n\n"
+    active_lines = []
+    pending_lines = []
     total_pnl_usd = 0
     
     for key, pos in positions.items():
-        # key format: EXCHANGE_SYMBOL_TIMEFRAME
+        # Filter out closed/cancelled
+        status = str(pos.get('status', '')).lower()
+        if status in ['closed', 'cancelled']:
+            continue
+            
         parts = key.split('_')
         symbol = pos.get('symbol', parts[1] if len(parts) >= 3 else parts[0])
         tf = pos.get('timeframe', parts[-1] if len(parts) >= 3 else '1h')
         side = pos.get('side', 'N/A').upper()
-        entry = pos.get('entry_price', 0)
-        qty = pos.get('qty', 0)
-        sl = pos.get('sl', 0)
-        tp = pos.get('tp', 0)
+        entry = float(pos.get('entry_price') or pos.get('price') or 0)
+        qty = float(pos.get('qty') or 0)
+        sl = float(pos.get('sl') or 0)
+        tp = float(pos.get('tp') or 0)
         
-        # Get current price from data store
-        df = data_manager.get_data(symbol, tf, exchange=trader.exchange_name)
-        current_price = df.iloc[-1]['close'] if df is not None and not df.empty else entry
-        
-        # Calculate PnL
-        if side == 'BUY':
-            pnl_pct = ((current_price - entry) / entry) * 100 if entry > 0 else 0
+        if status == 'filled':
+            # Get current price from data store
+            df = data_manager.get_data(symbol, tf, exchange=trader.exchange_name)
+            current_price = df.iloc[-1]['close'] if df is not None and not df.empty else entry
+            
+            # Calculate PnL
+            if side == 'BUY':
+                pnl_pct = ((current_price - entry) / entry) * 100 if entry > 0 else 0
+            else:
+                pnl_pct = ((entry - current_price) / entry) * 100 if entry > 0 else 0
+            
+            pnl_usd = (pnl_pct / 100) * qty * entry
+            total_pnl_usd += pnl_usd
+            pnl_icon = "🟢" if pnl_pct >= 0 else "🔴"
+            
+            active_lines.append(
+                f"{pnl_icon} **{symbol}** ({side})\n"
+                f"   Entry: {entry:.4f} | Now: {current_price:.4f}\n"
+                f"   PnL: {pnl_pct:+.2f}% | ${pnl_usd:+.2f}\n"
+                f"   SL: {sl:.4f} | TP: {tp:.4f}"
+            )
         else:
-            pnl_pct = ((entry - current_price) / entry) * 100 if entry > 0 else 0
-        
-        pnl_usd = (pnl_pct / 100) * qty * entry
-        total_pnl_usd += pnl_usd
-        pnl_icon = "🟢" if pnl_pct > 0 else "🔴"
-        
-        msg += (
-            f"{pnl_icon} **{symbol}** ({side})\n"
-            f"Entry: {entry:.4f} | Now: {current_price:.4f}\n"
-            f"PnL: {pnl_pct:+.2f}% | ${pnl_usd:+.2f}\n"
-            f"SL: {sl:.4f} | TP: {tp:.4f}\n"
-            f"---\n"
-        )
+            # Pending Entries
+            pending_lines.append(f"⏳ **{symbol}** ({side}) @ `{entry:.4f}` | Qty: {qty}")
+
+    if not active_lines and not pending_lines:
+        return
+
+    msg_sections = []
+    now = time.strftime('%d/%m %H:%M')
+    msg_sections.append(f"📊 **PORTFOLIO UPDATE** - {now}")
     
-    total_icon = "🟢" if total_pnl_usd > 0 else "🔴"
-    msg += f"\n{total_icon} **Total PnL: ${total_pnl_usd:+.2f}**"
+    if active_lines:
+        msg_sections.append("\n🟢 **ACTIVE POSITIONS**")
+        msg_sections.append("-" * 15)
+        msg_sections.extend(active_lines)
+        
+        total_icon = "🟢" if total_pnl_usd >= 0 else "🔴"
+        msg_sections.append(f"\n{total_icon} **Total PnL: ${total_pnl_usd:+.2f}**")
     
-    await send_telegram_chunked(msg, exchange_name=trader.exchange.name)
+    if pending_lines:
+        msg_sections.append("\n⏳ **PENDING ENTRIES**")
+        msg_sections.append("-" * 15)
+        msg_sections.extend(pending_lines)
+    
+    final_msg = "\n".join(msg_sections)
+    await send_telegram_chunked(final_msg, exchange_name=trader.exchange_name)
 
 async def main():
     import argparse

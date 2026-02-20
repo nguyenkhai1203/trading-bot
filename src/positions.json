@@ -13,16 +13,14 @@
             "leverage": 5
         },
         "XLM/USDT:USDT_adopted": {
-            "order_id": "df70e77c-99e1-4044-ad50-70dad636edb3",
+            "order_id": "db8a0ccb-3aee-4f37-a441-4bbaa28e67a4",
             "symbol": "XLM/USDT:USDT",
-            "side": "BUY",
-            "price": 0.0,
-            "qty": 54.0,
+            "side": "SELL",
+            "price": 0.16129,
+            "qty": 56.0,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771494788128,
-            "adopted": true,
-            "leverage": 3
+            "timestamp": 1771540019550
         },
         "ARB/USDT:USDT_adopted": {
             "order_id": "14980266391",
@@ -238,73 +236,15 @@
             "timestamp": 1771551127000,
             "leverage": 5
         },
-        "BINANCE_BCH_USDT_2h": {
+        "BCH/USDT:USDT_adopted": {
+            "order_id": "afd95049-417d-40f8-a5e9-0d98752fc969",
             "symbol": "BCH/USDT:USDT",
             "side": "BUY",
-            "qty": 0.042,
-            "entry_price": 550.753,
-            "sl": 542.492,
-            "tp": 567.275,
-            "timeframe": "2h",
-            "order_type": "limit",
-            "status": "cancelled",
-            "leverage": 4,
-            "order_id": "38118824726",
-            "signals_used": [
-                "Brain:WaitData"
-            ],
-            "entry_confidence": 0.54,
-            "snapshot": {
-                "norm_RSI_7": 0.47160731472569767,
-                "norm_RSI_14": 0.47158829836115773,
-                "norm_RSI_21": 0.4732554020545522,
-                "norm_MACD": null,
-                "norm_BB_Width": 0.04629307980852372,
-                "norm_Price_in_BB": 0.625354715917718,
-                "norm_Volume": null,
-                "norm_ADX": 0.24127126733141016,
-                "norm_ATR": 0.014940035462623744,
-                "state_pnl_pct": 0.0,
-                "state_leverage": 0.0,
-                "state_equity_ratio": 1.0
-            },
-            "timestamp": 1771531254823,
-            "sl_order_id": "4000000698329352",
-            "tp_order_id": "4000000698329368"
-        },
-        "BINANCE_SOL_USDT_2h": {
-            "symbol": "SOL/USDT:USDT",
-            "side": "BUY",
-            "qty": 0.1,
-            "entry_price": 80.878,
-            "sl": 78.452,
-            "tp": 83.305,
-            "timeframe": "2h",
-            "order_type": "limit",
-            "status": "cancelled",
-            "leverage": 3,
-            "order_id": "198444864250",
-            "signals_used": [
-                "Brain:WaitData"
-            ],
-            "entry_confidence": 0.2,
-            "snapshot": {
-                "norm_RSI_7": 0.4769539078156309,
-                "norm_RSI_14": 0.49936948297604,
-                "norm_RSI_21": 0.375786163522013,
-                "norm_MACD": null,
-                "norm_BB_Width": 0.066458026978761,
-                "norm_Price_in_BB": 0.5244124955019813,
-                "norm_Volume": null,
-                "norm_ADX": 0.4310622643982854,
-                "norm_ATR": 0.014144788350122662,
-                "state_pnl_pct": 0.0,
-                "state_leverage": 0.0,
-                "state_equity_ratio": 1.0
-            },
-            "timestamp": 1771533103152,
-            "sl_order_id": "4000000698498891",
-            "tp_order_id": "4000000698498966"
+            "price": 553.3,
+            "qty": 0.04,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771543878069
         },
         "BINANCE_SEI_USDT:USDT_adopted": {
             "order_id": "8413938542",
@@ -316,46 +256,6 @@
             "status": "pending",
             "timestamp": 1771530993097
         },
-        "BINANCE_AVAX_USDT:USDT_adopted": {
-            "order_id": "36784412340",
-            "symbol": "AVAX/USDT:USDT",
-            "side": "SELL",
-            "price": 9.013,
-            "qty": 2.0,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771530995436
-        },
-        "BINANCE_LTC_USDT:USDT_adopted": {
-            "order_id": "41608336797",
-            "symbol": "LTC/USDT:USDT",
-            "side": "SELL",
-            "price": 53.38,
-            "qty": 0.456,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771530995741
-        },
-        "BINANCE_DOT_USDT:USDT_adopted": {
-            "order_id": "31131454240",
-            "symbol": "DOT/USDT:USDT",
-            "side": "SELL",
-            "price": 1.299,
-            "qty": 7.0,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771530995984
-        },
-        "BINANCE_TAO_USDT:USDT_adopted": {
-            "order_id": "9596435724",
-            "symbol": "TAO/USDT:USDT",
-            "side": "SELL",
-            "price": 180.06,
-            "qty": 0.05,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771530996505
-        },
         "BINANCE_ARB_USDT:USDT_adopted": {
             "order_id": "14980266391",
             "symbol": "ARB/USDT:USDT",
@@ -366,16 +266,6 @@
             "status": "pending",
             "timestamp": 1771530997404
         },
-        "BINANCE_NEAR_USDT:USDT_adopted": {
-            "order_id": "31682433772",
-            "symbol": "NEAR/USDT:USDT",
-            "side": "SELL",
-            "price": 1.016,
-            "qty": 8.0,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771531000452
-        },
         "BINANCE_XRP_USDT:USDT_adopted": {
             "order_id": "142162027336",
             "symbol": "XRP/USDT:USDT",
@@ -385,16 +275,6 @@
             "timeframe": "sync",
             "status": "pending",
             "timestamp": 1771531002992
-        },
-        "BINANCE_ADA_USDT:USDT_adopted": {
-            "order_id": "62616243629",
-            "symbol": "ADA/USDT:USDT",
-            "side": "SELL",
-            "price": 0.277,
-            "qty": 87.0,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771531003470
         },
         "BINANCE_FIL_USDT_adopted": {
             "order_id": "None",
@@ -475,42 +355,80 @@
             "timestamp": 1771551127000,
             "leverage": 5
         },
-        "BINANCE_INJ_USDT_15m": {
-            "symbol": "INJ/USDT:USDT",
+        "BINANCE_SOL_USDT_1d": {
+            "symbol": "SOL/USDT:USDT",
             "side": "SELL",
-            "qty": 1.6,
-            "entry_price": 3.274,
-            "sl": 3.373,
-            "tp": 3.176,
-            "timeframe": "15m",
+            "qty": 0.1,
+            "entry_price": 85.747,
+            "sl": 87.033,
+            "tp": 83.175,
+            "timeframe": "1d",
             "order_type": "limit",
-            "status": "cancelled",
+            "status": "pending",
             "leverage": 3,
-            "order_id": "12537205122",
+            "order_id": "198544023048",
             "signals_used": [
-                "MACD_lt_signal",
-                "MACD_Bearish_Div",
+                "EMA_50_lt_200",
                 "RSI_14_lt_50",
-                "Ichimoku_TK_Cross_Down"
+                "Ichimoku_TK_Cross_Down",
+                "Price_Below_VWAP"
             ],
-            "entry_confidence": 0.37,
+            "entry_confidence": 0.54,
             "snapshot": {
-                "norm_RSI_7": 0.5955056179775275,
-                "norm_RSI_14": 0.4437869822485211,
-                "norm_RSI_21": 0.4383259911894274,
+                "norm_RSI_7": 0.5069191551347414,
+                "norm_RSI_14": 0.4490997229916898,
+                "norm_RSI_21": 0.3049787635677207,
                 "norm_MACD": NaN,
-                "norm_BB_Width": 0.053272098038920544,
-                "norm_Price_in_BB": 0.445461891535783,
+                "norm_BB_Width": 0.32222343794863245,
+                "norm_Price_in_BB": 0.4087051507147417,
                 "norm_Volume": NaN,
-                "norm_ADX": 0.38593452291036806,
-                "norm_ATR": 0.01397130457886812,
+                "norm_ADX": 0.7388867657579626,
+                "norm_ATR": 0.06045386904761903,
                 "state_pnl_pct": 0.0,
                 "state_leverage": 0.0,
                 "state_equity_ratio": 1.0
             },
-            "timestamp": 1771555486018,
-            "sl_order_id": "4000000700375167",
-            "tp_order_id": "4000000700375195"
+            "timestamp": 1771582351141,
+            "sl_order_id": "4000000702719119",
+            "tp_order_id": "4000000702719128"
+        },
+        "BINANCE_BNB_USDT_30m": {
+            "symbol": "BNB/USDT:USDT",
+            "side": "SELL",
+            "qty": 0.01,
+            "entry_price": 613.902,
+            "sl": 632.32,
+            "tp": 586.277,
+            "timeframe": "30m",
+            "order_type": "limit",
+            "status": "cancelled",
+            "leverage": 3,
+            "order_id": "86377045849",
+            "signals_used": [
+                "EMA_9_cross_21_down",
+                "MACD_lt_signal",
+                "breakout_below_support",
+                "bounce_from_resistance",
+                "Price_Below_VWAP"
+            ],
+            "entry_confidence": 0.595,
+            "snapshot": {
+                "norm_RSI_7": 0.09119999999999977,
+                "norm_RSI_14": 0.3138493944181144,
+                "norm_RSI_21": 0.4398868458274395,
+                "norm_MACD": NaN,
+                "norm_BB_Width": 0.01637990262110709,
+                "norm_Price_in_BB": -0.07220476749502369,
+                "norm_Volume": NaN,
+                "norm_ADX": 0.29980369383991745,
+                "norm_ATR": 0.003950342599219202,
+                "state_pnl_pct": 0.0,
+                "state_leverage": 0.0,
+                "state_equity_ratio": 1.0
+            },
+            "timestamp": 1771594486263,
+            "sl_order_id": "4000000703863085",
+            "tp_order_id": "4000000703863101"
         },
         "BYBIT_ARB_USDT_30m": {
             "symbol": "ARB/USDT:USDT",
@@ -544,134 +462,6 @@
             },
             "timestamp": null
         },
-        "BYBIT_NEAR_USDT_1h": {
-            "symbol": "NEAR/USDT:USDT",
-            "side": "SELL",
-            "qty": 8.9,
-            "entry_price": 1.015,
-            "sl": 1.051,
-            "tp": 0.926,
-            "timeframe": "1h",
-            "order_type": "limit",
-            "status": "pending",
-            "leverage": 3,
-            "order_id": "d7b47205-6c10-4b16-b5da-e1183e301924",
-            "signals_used": [
-                "Brain:WaitData"
-            ],
-            "entry_confidence": 0.44000000000000006,
-            "snapshot": {
-                "norm_RSI_7": 0.5763157894736837,
-                "norm_RSI_14": 0.3698412698412714,
-                "norm_RSI_21": 0.41126461211477255,
-                "norm_MACD": null,
-                "norm_BB_Width": 0.035252883796836505,
-                "norm_Price_in_BB": 0.37182376489447205,
-                "norm_Volume": null,
-                "norm_ADX": 0.45771115212665525,
-                "norm_ATR": 0.012626046219327608,
-                "state_pnl_pct": 0.0,
-                "state_leverage": 0.0,
-                "state_equity_ratio": 1.0
-            },
-            "timestamp": null
-        },
-        "BYBIT_LTC_USDT_2h": {
-            "symbol": "LTC/USDT:USDT",
-            "side": "SELL",
-            "qty": 0.4,
-            "entry_price": 53.328,
-            "sl": 54.128,
-            "tp": 51.728,
-            "timeframe": "2h",
-            "order_type": "limit",
-            "status": "pending",
-            "leverage": 4,
-            "order_id": "aaa9f677-664d-41cd-9c5e-6c8cf05ddcc3",
-            "signals_used": [
-                "Brain:WaitData"
-            ],
-            "entry_confidence": 0.64,
-            "snapshot": {
-                "norm_RSI_7": 0.33333333333333326,
-                "norm_RSI_14": 0.32512315270936015,
-                "norm_RSI_21": 0.36111111111111094,
-                "norm_MACD": null,
-                "norm_BB_Width": 0.061206562576212854,
-                "norm_Price_in_BB": 0.296095972123642,
-                "norm_Volume": null,
-                "norm_ADX": 0.2235332096782967,
-                "norm_ATR": 0.012194790363804456,
-                "state_pnl_pct": 0.0,
-                "state_leverage": 0.0,
-                "state_equity_ratio": 1.0
-            },
-            "timestamp": null
-        },
-        "BYBIT_SOL_USDT_1d": {
-            "symbol": "SOL/USDT:USDT",
-            "side": "SELL",
-            "qty": 0.2,
-            "entry_price": 83.636,
-            "sl": 84.891,
-            "tp": 81.127,
-            "timeframe": "1d",
-            "order_type": "limit",
-            "status": "pending",
-            "leverage": 4,
-            "order_id": "47edd637-9e3e-499d-88b1-ed24c8eea8b6",
-            "signals_used": [
-                "Brain:WaitData"
-            ],
-            "entry_confidence": 0.54,
-            "snapshot": {
-                "norm_RSI_7": 0.42006802721088443,
-                "norm_RSI_14": 0.4069810620126255,
-                "norm_RSI_21": 0.2877341389728096,
-                "norm_MACD": null,
-                "norm_BB_Width": 0.3250468435872768,
-                "norm_Price_in_BB": 0.3395980327345888,
-                "norm_Volume": null,
-                "norm_ADX": 0.7439056570927957,
-                "norm_ATR": 0.060272191400832176,
-                "state_pnl_pct": 0.0,
-                "state_leverage": 0.0,
-                "state_equity_ratio": 1.0
-            },
-            "timestamp": null
-        },
-        "BYBIT_AVAX_USDT:USDT_adopted": {
-            "order_id": "4ba78940-2e8f-43b1-acaf-5bc4262043ff",
-            "symbol": "AVAX/USDT:USDT",
-            "side": "SELL",
-            "price": 8.99,
-            "qty": 0.9,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771532438144,
-            "adopted": true,
-            "leverage": 1
-        },
-        "BYBIT_DOT_USDT:USDT_adopted": {
-            "order_id": "689a0e83-cbe0-4071-b474-0c594c80ac82",
-            "symbol": "DOT/USDT:USDT",
-            "side": "SELL",
-            "price": 1.2984,
-            "qty": 7.0,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771531359549
-        },
-        "BYBIT_ADA_USDT:USDT_adopted": {
-            "order_id": "06d7f8d4-d72b-45cc-b24c-8307ccc97001",
-            "symbol": "ADA/USDT:USDT",
-            "side": "SELL",
-            "price": 0.2767,
-            "qty": 88.0,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771531365487
-        },
         "BYBIT_XRP_USDT:USDT_adopted": {
             "order_id": "97823886-ce67-42b0-a953-9eb321bda4a2",
             "symbol": "XRP/USDT:USDT",
@@ -683,55 +473,179 @@
             "timestamp": 1771531365036,
             "leverage": 1
         },
-        "BYBIT_XLM/USDT:USDT_order_adopted": {
-            "order_id": "db8a0ccb-3aee-4f37-a441-4bbaa28e67a4",
+        "BYBIT_SOL/USDT:USDT_adopted": {
+            "order_id": "01bc0e9c-347a-47fd-b863-3b7954377f27",
+            "symbol": "SOL/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 0.2,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376243,
+            "adopted": true
+        },
+        "BYBIT_NEAR/USDT:USDT_adopted": {
+            "order_id": "6224e2de-82ff-41a2-9cb9-86b217b3b5e2",
+            "symbol": "NEAR/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 8.9,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376284,
+            "adopted": true
+        },
+        "BYBIT_XLM/USDT:USDT_adopted": {
+            "order_id": "c13b2499-bc15-45a7-996d-38bb0b0de9f7",
             "symbol": "XLM/USDT:USDT",
-            "side": "SELL",
-            "price": 0.16129,
+            "side": "BUY",
+            "price": 0.0,
             "qty": 56.0,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771540019550
+            "timestamp": 1771596376326,
+            "adopted": true
         },
-        "BYBIT_BCH/USDT:USDT_order_adopted": {
-            "order_id": "afd95049-417d-40f8-a5e9-0d98752fc969",
-            "symbol": "BCH/USDT:USDT",
+        "BYBIT_DOT/USDT:USDT_adopted": {
+            "order_id": "63987627-8457-4b6c-b8b0-81024e14e168",
+            "symbol": "DOT/USDT:USDT",
             "side": "BUY",
-            "price": 553.3,
-            "qty": 0.04,
+            "price": 0.0,
+            "qty": 7.0,
             "timeframe": "sync",
             "status": "pending",
-            "timestamp": 1771543878069
+            "timestamp": 1771596376369,
+            "adopted": true
         },
-        "BYBIT_LINK_USDT_1h": {
+        "BYBIT_AVAX/USDT:USDT_adopted": {
+            "order_id": "5d3c44f6-c74e-4776-9d11-9face14592e2",
+            "symbol": "AVAX/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 2.6,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771572774596,
+            "adopted": true
+        },
+        "BYBIT_LINK/USDT:USDT_adopted": {
+            "order_id": "9e676699-cbaa-4774-8c12-8bddad92bf7d",
             "symbol": "LINK/USDT:USDT",
-            "side": "SELL",
+            "side": "BUY",
+            "price": 0.0,
             "qty": 1.0,
-            "entry_price": 8.716,
-            "sl": 8.977,
-            "tp": 8.193,
-            "timeframe": "1h",
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376419,
+            "adopted": true
+        },
+        "BYBIT_ADA/USDT:USDT_adopted": {
+            "order_id": "5c1c97ce-0331-4602-8ad5-cd7e913aca2f",
+            "symbol": "ADA/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 88.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376470,
+            "adopted": true
+        },
+        "BYBIT_BCH_USDT_8h": {
+            "symbol": "BCH/USDT:USDT",
+            "side": "SELL",
+            "qty": 0.04,
+            "entry_price": 551.551,
+            "sl": 559.824,
+            "tp": 535.004,
+            "timeframe": "8h",
+            "order_type": "limit",
+            "status": "pending",
+            "leverage": 4,
+            "order_id": "e060828c-5bd2-4f24-807e-76f2b6c2ee91",
+            "signals_used": [
+                "MACD_lt_signal",
+                "RSI_14_lt_50",
+                "Ichimoku_TK_Cross_Down",
+                "Price_Below_VWAP",
+                "breakout_below_support"
+            ],
+            "entry_confidence": 0.53,
+            "snapshot": {
+                "norm_RSI_7": 0.44099378881987455,
+                "norm_RSI_14": 0.33429394812680086,
+                "norm_RSI_21": 0.38029661016949134,
+                "norm_MACD": NaN,
+                "norm_BB_Width": 0.04318198026339855,
+                "norm_Price_in_BB": -0.09480137513336839,
+                "norm_Volume": NaN,
+                "norm_ADX": 0.23282942663245598,
+                "norm_ATR": 0.02032178347967825,
+                "state_pnl_pct": 0.0,
+                "state_leverage": 0.0,
+                "state_equity_ratio": 1.0
+            },
+            "timestamp": null
+        },
+        "BYBIT_TRX_USDT_30m": {
+            "symbol": "TRX/USDT:USDT",
+            "side": "BUY",
+            "qty": 31.0,
+            "entry_price": 0.281,
+            "sl": 0.271,
+            "tp": 0.3,
+            "timeframe": "30m",
             "order_type": "limit",
             "status": "pending",
             "leverage": 3,
-            "order_id": "f8943538-af76-4b86-a625-8e789d3df889",
+            "order_id": "8039047f-a229-47b9-8f78-f167dba78f35",
             "signals_used": [
-                "EMA_50_lt_200",
-                "RSI_14_overbought",
-                "RSI_7_overbought",
-                "Price_Below_VWAP"
+                "EMA_50_gt_200",
+                "bounce_from_support"
             ],
-            "entry_confidence": 0.608,
+            "entry_confidence": 0.3,
             "snapshot": {
-                "norm_RSI_7": 0.7388059701492534,
-                "norm_RSI_14": 0.7351485148514836,
-                "norm_RSI_21": 0.41192787794729513,
+                "norm_RSI_7": 0.39361702127660075,
+                "norm_RSI_14": 0.768292682926831,
+                "norm_RSI_21": 0.6578449905482057,
                 "norm_MACD": NaN,
-                "norm_BB_Width": 0.03228736617891033,
-                "norm_Price_in_BB": 0.7002025874968896,
+                "norm_BB_Width": 0.011781868036581006,
+                "norm_Price_in_BB": 0.7648140290093111,
                 "norm_Volume": NaN,
-                "norm_ADX": 0.44076918625432393,
-                "norm_ATR": 0.00982382006022392,
+                "norm_ADX": 0.32810967329908214,
+                "norm_ATR": 0.002106297830513225,
+                "state_pnl_pct": 0.0,
+                "state_leverage": 0.0,
+                "state_equity_ratio": 1.0
+            },
+            "timestamp": null
+        },
+        "BYBIT_UNI_USDT_30m": {
+            "symbol": "UNI/USDT:USDT",
+            "side": "BUY",
+            "qty": 2.6,
+            "entry_price": 3.29,
+            "sl": 3.224,
+            "tp": 3.372,
+            "timeframe": "30m",
+            "order_type": "limit",
+            "status": "pending",
+            "leverage": 3,
+            "order_id": "6ace6d41-43eb-4ea9-9034-d183554eebca",
+            "signals_used": [
+                "Price_lt_BB_Low",
+                "bounce_from_support"
+            ],
+            "entry_confidence": 0.25,
+            "snapshot": {
+                "norm_RSI_7": 0.11428571428571103,
+                "norm_RSI_14": 0.3384615384615371,
+                "norm_RSI_21": 0.40780141843971607,
+                "norm_MACD": NaN,
+                "norm_BB_Width": 0.031190752128074106,
+                "norm_Price_in_BB": -0.018000518675651864,
+                "norm_Volume": NaN,
+                "norm_ADX": 0.23011790116968683,
+                "norm_ATR": 0.007848588537211302,
                 "state_pnl_pct": 0.0,
                 "state_leverage": 0.0,
                 "state_equity_ratio": 1.0
@@ -740,53 +654,208 @@
         }
     },
     "pending_orders": {
-        "BYBIT_XLM/USDT:USDT_order_adopted": {
-            "order_id": "db8a0ccb-3aee-4f37-a441-4bbaa28e67a4",
-            "symbol": "XLM/USDT:USDT",
+        "BINANCE_SOL_USDT_1d": {
+            "order_id": "198544023048",
+            "symbol": "SOL/USDT:USDT",
             "side": "SELL",
-            "price": 0.16129,
-            "qty": 56.0,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771540019550
-        },
-        "BYBIT_BCH/USDT:USDT_order_adopted": {
-            "order_id": "afd95049-417d-40f8-a5e9-0d98752fc969",
-            "symbol": "BCH/USDT:USDT",
-            "side": "BUY",
-            "price": 553.3,
-            "qty": 0.04,
-            "timeframe": "sync",
-            "status": "pending",
-            "timestamp": 1771543878069
-        },
-        "BYBIT_LINK_USDT_1h": {
-            "order_id": "f8943538-af76-4b86-a625-8e789d3df889",
-            "symbol": "LINK/USDT:USDT",
-            "side": "SELL",
-            "qty": 1.0,
-            "price": 8.715805,
-            "sl": 8.97727915,
-            "tp": 8.192856699999998,
-            "timeframe": "1h",
+            "qty": 0.1,
+            "price": 85.74719999999999,
+            "sl": 87.03340799999998,
+            "tp": 83.17478399999999,
+            "timeframe": "1d",
             "leverage": 3,
             "signals_used": [
                 "EMA_50_lt_200",
-                "RSI_14_overbought",
-                "RSI_7_overbought",
+                "RSI_14_lt_50",
+                "Ichimoku_TK_Cross_Down",
                 "Price_Below_VWAP"
             ],
-            "entry_confidence": 0.608,
+            "entry_confidence": 0.54,
             "snapshot": {
-                "norm_RSI_7": 0.7388059701492534,
-                "norm_RSI_14": 0.7351485148514836,
-                "norm_RSI_21": 0.41192787794729513,
+                "norm_RSI_7": 0.5069191551347414,
+                "norm_RSI_14": 0.4490997229916898,
+                "norm_RSI_21": 0.3049787635677207,
                 "norm_MACD": NaN,
-                "norm_BB_Width": 0.03228736617891033,
-                "norm_Price_in_BB": 0.7002025874968896,
+                "norm_BB_Width": 0.32222343794863245,
+                "norm_Price_in_BB": 0.4087051507147417,
                 "norm_Volume": NaN,
-                "norm_ADX": 0.44076918625432393,
-                "norm_ATR": 0.00982382006022392,
+                "norm_ADX": 0.7388867657579626,
+                "norm_ATR": 0.06045386904761903,
+                "state_pnl_pct": 0.0,
+                "state_leverage": 0.0,
+                "state_equity_ratio": 1.0
+            },
+            "timestamp": 1771582351141,
+            "sl_order_id": "4000000702719119",
+            "tp_order_id": "4000000702719128"
+        },
+        "BYBIT_SOL/USDT:USDT_adopted": {
+            "order_id": "01bc0e9c-347a-47fd-b863-3b7954377f27",
+            "symbol": "SOL/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 0.2,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376243,
+            "adopted": true
+        },
+        "BYBIT_NEAR/USDT:USDT_adopted": {
+            "order_id": "6224e2de-82ff-41a2-9cb9-86b217b3b5e2",
+            "symbol": "NEAR/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 8.9,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376284,
+            "adopted": true
+        },
+        "BYBIT_XLM/USDT:USDT_adopted": {
+            "order_id": "c13b2499-bc15-45a7-996d-38bb0b0de9f7",
+            "symbol": "XLM/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 56.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376326,
+            "adopted": true
+        },
+        "BYBIT_DOT/USDT:USDT_adopted": {
+            "order_id": "63987627-8457-4b6c-b8b0-81024e14e168",
+            "symbol": "DOT/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 7.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376369,
+            "adopted": true
+        },
+        "BYBIT_AVAX/USDT:USDT_adopted": {
+            "order_id": "5d3c44f6-c74e-4776-9d11-9face14592e2",
+            "symbol": "AVAX/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 2.6,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771572774596,
+            "adopted": true
+        },
+        "BYBIT_LINK/USDT:USDT_adopted": {
+            "order_id": "9e676699-cbaa-4774-8c12-8bddad92bf7d",
+            "symbol": "LINK/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 1.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376419,
+            "adopted": true
+        },
+        "BYBIT_ADA/USDT:USDT_adopted": {
+            "order_id": "5c1c97ce-0331-4602-8ad5-cd7e913aca2f",
+            "symbol": "ADA/USDT:USDT",
+            "side": "BUY",
+            "price": 0.0,
+            "qty": 88.0,
+            "timeframe": "sync",
+            "status": "pending",
+            "timestamp": 1771596376470,
+            "adopted": true
+        },
+        "BYBIT_BCH_USDT_8h": {
+            "order_id": "e060828c-5bd2-4f24-807e-76f2b6c2ee91",
+            "symbol": "BCH/USDT:USDT",
+            "side": "SELL",
+            "qty": 0.04,
+            "price": 551.5509999999999,
+            "sl": 559.8242649999999,
+            "tp": 535.00447,
+            "timeframe": "8h",
+            "leverage": 4,
+            "signals_used": [
+                "MACD_lt_signal",
+                "RSI_14_lt_50",
+                "Ichimoku_TK_Cross_Down",
+                "Price_Below_VWAP",
+                "breakout_below_support"
+            ],
+            "entry_confidence": 0.53,
+            "snapshot": {
+                "norm_RSI_7": 0.44099378881987455,
+                "norm_RSI_14": 0.33429394812680086,
+                "norm_RSI_21": 0.38029661016949134,
+                "norm_MACD": NaN,
+                "norm_BB_Width": 0.04318198026339855,
+                "norm_Price_in_BB": -0.09480137513336839,
+                "norm_Volume": NaN,
+                "norm_ADX": 0.23282942663245598,
+                "norm_ATR": 0.02032178347967825,
+                "state_pnl_pct": 0.0,
+                "state_leverage": 0.0,
+                "state_equity_ratio": 1.0
+            },
+            "timestamp": null
+        },
+        "BYBIT_TRX_USDT_30m": {
+            "order_id": "8039047f-a229-47b9-8f78-f167dba78f35",
+            "symbol": "TRX/USDT:USDT",
+            "side": "BUY",
+            "qty": 31.0,
+            "price": 0.2805871,
+            "sl": 0.27076655149999995,
+            "tp": 0.300228197,
+            "timeframe": "30m",
+            "leverage": 3,
+            "signals_used": [
+                "EMA_50_gt_200",
+                "bounce_from_support"
+            ],
+            "entry_confidence": 0.3,
+            "snapshot": {
+                "norm_RSI_7": 0.39361702127660075,
+                "norm_RSI_14": 0.768292682926831,
+                "norm_RSI_21": 0.6578449905482057,
+                "norm_MACD": NaN,
+                "norm_BB_Width": 0.011781868036581006,
+                "norm_Price_in_BB": 0.7648140290093111,
+                "norm_Volume": NaN,
+                "norm_ADX": 0.32810967329908214,
+                "norm_ATR": 0.002106297830513225,
+                "state_pnl_pct": 0.0,
+                "state_leverage": 0.0,
+                "state_equity_ratio": 1.0
+            },
+            "timestamp": null
+        },
+        "BYBIT_UNI_USDT_30m": {
+            "order_id": "6ace6d41-43eb-4ea9-9034-d183554eebca",
+            "symbol": "UNI/USDT:USDT",
+            "side": "BUY",
+            "qty": 2.6,
+            "price": 3.2899,
+            "sl": 3.224102,
+            "tp": 3.3721474999999996,
+            "timeframe": "30m",
+            "leverage": 3,
+            "signals_used": [
+                "Price_lt_BB_Low",
+                "bounce_from_support"
+            ],
+            "entry_confidence": 0.25,
+            "snapshot": {
+                "norm_RSI_7": 0.11428571428571103,
+                "norm_RSI_14": 0.3384615384615371,
+                "norm_RSI_21": 0.40780141843971607,
+                "norm_MACD": NaN,
+                "norm_BB_Width": 0.031190752128074106,
+                "norm_Price_in_BB": -0.018000518675651864,
+                "norm_Volume": NaN,
+                "norm_ADX": 0.23011790116968683,
+                "norm_ATR": 0.007848588537211302,
                 "state_pnl_pct": 0.0,
                 "state_leverage": 0.0,
                 "state_equity_ratio": 1.0
@@ -794,5 +863,5 @@
             "timestamp": null
         }
     },
-    "last_sync": 1771556560.8195753
+    "last_sync": 1771596376.479116
 }
