@@ -475,6 +475,80 @@
       "exit_reason": "Exchange Sync (Closed outside bot)",
       "entry_time": 1771459200608,
       "exit_time": 1771489472403
+    },
+    {
+      "timestamp": "2026-02-20T07:44:53.716811",
+      "symbol": "INJ/USDT:USDT",
+      "timeframe": "8h",
+      "side": "BUY",
+      "signals": [
+        "Brain:WaitData"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -6.040061633281963,
+      "pnl_usdt": null,
+      "entry_price": null,
+      "exit_price": null,
+      "qty": null,
+      "exit_reason": null,
+      "entry_time": null,
+      "exit_time": null,
+      "sl_original": null,
+      "sl_final": null,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.6145833333333334,
+        "norm_RSI_14": 0.5014058106841613,
+        "norm_RSI_21": 0.5898916967509025,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.10819145727914807,
+        "norm_Price_in_BB": 0.8985044526029968,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.2177297175135315,
+        "norm_ATR": 0.047553994275305725,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-20T07:44:53.718228",
+      "symbol": "INJ/USDT",
+      "timeframe": "8h",
+      "side": "BUY",
+      "signals": [
+        "Brain:WaitData"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -1.6291,
+      "pnl_usdt": -0.381,
+      "entry_price": 3.245,
+      "exit_price": 3.196,
+      "qty": 7.2,
+      "exit_reason": "STOP LOSS hit at 3.196",
+      "entry_time": 1771536946167,
+      "exit_time": 1771548293718,
+      "sl_original": null,
+      "sl_final": 3.196,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.6145833333333334,
+        "norm_RSI_14": 0.5014058106841613,
+        "norm_RSI_21": 0.5898916967509025,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.10819145727914807,
+        "norm_Price_in_BB": 0.8985044526029968,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.2177297175135315,
+        "norm_ATR": 0.047553994275305725,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
     }
   ],
   "signal_stats": {
@@ -643,6 +717,15 @@
       "recent_results": [
         0,
         1
+      ]
+    },
+    "Brain:WaitData": {
+      "total": 2,
+      "wins": 0,
+      "losses": 2,
+      "recent_results": [
+        0,
+        0
       ]
     }
   }

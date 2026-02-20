@@ -30,49 +30,79 @@ def load_training_data():
     targets = []
     
     for t in trades:
-        # We need both result and snapshot to train
-        if 'result' not in t or 'snapshot' not in t:
+        # We need the result to train (snapshot will be bootstrapped if missing)
+        if 'result' not in t:
             continue
             
-        snapshot = t['snapshot']
-        if not snapshot:
-            continue
+        snapshot = t.get('snapshot')
             
-        # Convert snapshot dict to list (ORDER MATTERS - must match strategy.py)
-        # Strategy order: 
-        # [RSI_7, RSI_14, RSI_21, MACD, BB_W, P_BB, Vol, ADX, ATR, PnL, Lev, Eq]
-        
-        # Use explicit key access to ensure order
+        # ─── EXTRACTION & BOOTSTRAPPING ───
         try:
             # Handle both list (legacy) and dict (new) snapshots if any
-            if isinstance(snapshot, list):
-                feature_vector = snapshot
+            if snapshot:
+                if isinstance(snapshot, list):
+                    feature_vector = snapshot
+                else:
+                    feature_vector = [
+                        snapshot.get('norm_RSI_7', 0.5),
+                        snapshot.get('norm_RSI_14', 0.5),
+                        snapshot.get('norm_RSI_21', 0.5),
+                        snapshot.get('norm_MACD', 0.5),
+                        snapshot.get('norm_BB_Width', 0.5),
+                        snapshot.get('norm_Price_in_BB', 0.5),
+                        snapshot.get('norm_Volume', 0.5),
+                        snapshot.get('norm_ADX', 0.5),
+                        snapshot.get('norm_ATR', 0.5),
+                        snapshot.get('state_pnl_pct', 0.0),
+                        snapshot.get('state_leverage', 0.0),
+                        snapshot.get('state_equity_ratio', 1.0)
+                    ]
             else:
-                feature_vector = [
-                    snapshot.get('norm_RSI_7', 0.5),
-                    snapshot.get('norm_RSI_14', 0.5),
-                    snapshot.get('norm_RSI_21', 0.5),
-                    snapshot.get('norm_MACD', 0.5),
-                    snapshot.get('norm_BB_Width', 0.5),
-                    snapshot.get('norm_Price_in_BB', 0.5),
-                    snapshot.get('norm_Volume', 0.0),
-                    snapshot.get('norm_ADX', 0.0),
-                    snapshot.get('norm_ATR', 0.0),
-                    snapshot.get('state_pnl_pct', 0.0),
-                    snapshot.get('state_leverage', 0.0),
-                    snapshot.get('state_equity_ratio', 1.0)
-                ]
+                # 🛠 BOOTSTRAP: Reconstruct approximate snapshot from signals (for legacy trades)
+                signals = t.get('signals', [])
                 
-            # Add Dynamic Context Features (v4.0) - Always 17 features now
-            entry = t.get('entry_price', 1)
+                # Default neutral state
+                f_rsi7, f_rsi14, f_rsi21 = 0.5, 0.5, 0.5
+                f_macd, f_bbw, f_p_bb = 0.5, 0.2, 0.5
+                f_vol, f_adx, f_atr = 0.5, 0.2, 0.05
+                f_pnl, f_lev, f_eq = 0.0, 0.0, 1.0
+                
+                # Heuristic mapping
+                for s in signals:
+                    s_low = s.lower()
+                    if 'rsi_7' in s_low and 'oversold' in s_low: f_rsi7 = 0.25
+                    if 'rsi_7' in s_low and 'overbought' in s_low: f_rsi7 = 0.75
+                    if 'rsi_14' in s_low and 'oversold' in s_low: f_rsi14 = 0.25
+                    if 'rsi_14' in s_low and 'overbought' in s_low: f_rsi14 = 0.75
+                    if 'rsi_21' in s_low and 'oversold' in s_low: f_rsi21 = 0.25
+                    if 'rsi_21' in s_low and 'overbought' in s_low: f_rsi21 = 0.75
+                    
+                    if 'macd' in s_low and ('cross_up' in s_low or 'gt_signal' in s_low): f_macd = 0.7
+                    if 'macd' in s_low and ('cross_down' in s_low or 'lt_signal' in s_low): f_macd = 0.3
+                    
+                    if 'bb_low' in s_low or 'lower_touch' in s_low: f_p_bb = 0.1
+                    if 'bb_up' in s_low or 'upper_touch' in s_low: f_p_bb = 0.9
+                    
+                    if 'vol_spike' in s_low: f_vol = 0.8
+                    if 'adx_strong' in s_low: f_adx = 0.6
+                
+                feature_vector = [f_rsi7, f_rsi14, f_rsi21, f_macd, f_bbw, f_p_bb, f_vol, f_adx, f_atr, f_pnl, f_lev, f_eq]
+                
+            # Safe extraction of entry and side
+            raw_entry = t.get('entry_price')
+            entry = float(raw_entry) if isinstance(raw_entry, (int, float)) else 1.0
             side_mult = 1 if t.get('side') == 'BUY' else -1
             
             # SL Distances (Normalized: 0 = -5%, 0.5 = 0%, 1 = +5%)
-            sl_orig = t.get('sl_original', t.get('entry_price'))
-            sl_final = t.get('sl_final', t.get('entry_price'))
+            # Handle NoneType correctly to avoid subtraction errors
+            raw_sl_orig = t.get('sl_original')
+            raw_sl_final = t.get('sl_final')
             
-            dist_orig = ((sl_orig - entry) / entry) * side_mult if entry else 0
-            dist_final = ((sl_final - entry) / entry) * side_mult if entry else 0
+            sl_orig = float(raw_sl_orig) if isinstance(raw_sl_orig, (int, float)) else entry
+            sl_final = float(raw_sl_final) if isinstance(raw_sl_final, (int, float)) else entry
+            
+            dist_orig = ((sl_orig - entry) / entry) * side_mult if entry and entry > 0 else 0
+            dist_final = ((sl_final - entry) / entry) * side_mult if entry and entry > 0 else 0
             
             norm_sl_orig = np.clip((dist_orig + 0.05) / 0.1, 0, 1)
             norm_sl_final = np.clip((dist_final + 0.05) / 0.1, 0, 1)
@@ -80,15 +110,14 @@ def load_training_data():
             dynamic_features = [
                 norm_sl_orig,
                 norm_sl_final,
-                min(t.get('sl_move_count', 0) / 10.0, 1.0),
+                min(float(t.get('sl_move_count', 0) or 0) / 10.0, 1.0),
                 1.0 if t.get('sl_tightened') else 0.0,
-                min(t.get('max_pnl_pct', 0) / 10.0, 1.0)
+                min(float(t.get('max_pnl_pct', 0) or 0) / 10.0, 1.0)
             ]
             
             feature_vector.extend(dynamic_features)
-                
-            # Clean NaNs
-            feature_vector = [0.5 if x is None else x for x in feature_vector]
+            # Clean NaNs and Infinities (CRITICAL: prevents MSE: nan)
+            feature_vector = [0.5 if (x is None or not np.isfinite(x)) else float(x) for x in feature_vector]
             
             inputs.append(feature_vector)
             
