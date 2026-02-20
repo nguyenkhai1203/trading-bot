@@ -13,14 +13,26 @@ import os
 import json
 import asyncio
 import time
+import sys
+
+# Add src to path if running directly
+if __name__ == '__main__':
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    if src_dir not in sys.path:
+        sys.path.append(src_dir)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES, MAX_WORKERS
+import config
+from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES, MAX_WORKERS, GLOBAL_MAX_LEVERAGE, GLOBAL_MAX_COST_PER_TRADE
 from feature_engineering import FeatureEngineer
 import subprocess
+from train_brain import run_nn_training
 
 class StrategyAnalyzer:
-    def __init__(self, data_dir='data'):
+    def __init__(self, data_dir=None):
+        # Default to src/data (absolute, regardless of CWD)
+        if data_dir is None:
+            data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
         self.data_dir = data_dir
         self.feature_engineer = FeatureEngineer()
         # OPTIMIZATION 1: Cache for loaded data and calculated features
@@ -29,17 +41,24 @@ class StrategyAnalyzer:
         # OPTIMIZATION 2: Cache validation results for cross-TF lookup
         self._validation_cache = {}
 
-    def load_data(self, symbol, timeframe='1h'):
-        """Load data with caching."""
-        cache_key = f"{symbol}_{timeframe}"
+    def load_data(self, symbol, timeframe='1h', exchange='BINANCE'):
+        """Load data with caching and exchange awareness."""
+        cache_key = f"{exchange}_{symbol}_{timeframe}"
         if cache_key in self._data_cache:
             return self._data_cache[cache_key]
         
-        safe_symbol = symbol.replace('/', '').replace(':', '')
-        file_path = os.path.join(self.data_dir, f"{safe_symbol}_{timeframe}.csv")
+        # Strip :USDT suffix first, then remove /  -> BTC/USDT:USDT -> BTCUSDT
+        safe_symbol = symbol.split(':')[0].replace('/', '')
+        # Data files: {EXCHANGE}_{SYMBOL}_{TF}.csv  OR legacy  {SYMBOL}_{TF}.csv
+        file_path = os.path.join(self.data_dir, f"{exchange}_{safe_symbol}_{timeframe}.csv")
         
         if not os.path.exists(file_path):
-            return None
+            # Fallback 1: legacy without exchange prefix
+            legacy_path = os.path.join(self.data_dir, f"{safe_symbol}_{timeframe}.csv")
+            if os.path.exists(legacy_path):
+                file_path = legacy_path
+            else:
+                return None
             
         df = pd.read_csv(file_path)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -52,13 +71,13 @@ class StrategyAnalyzer:
         self._data_cache[cache_key] = df
         return df
 
-    def get_features(self, symbol, timeframe):
-        """Get features with caching - MAJOR OPTIMIZATION."""
-        cache_key = f"{symbol}_{timeframe}"
+    def get_features(self, symbol, timeframe, exchange='BINANCE'):
+        """Get features with caching and exchange awareness."""
+        cache_key = f"{exchange}_{symbol}_{timeframe}"
         if cache_key in self._features_cache:
             return self._features_cache[cache_key]
         
-        df = self.load_data(symbol, timeframe)
+        df = self.load_data(symbol, timeframe, exchange=exchange)
         if df is None:
             return None
         
@@ -81,12 +100,12 @@ class StrategyAnalyzer:
             return 'Volume'
         return 'Other'
 
-    def analyze(self, symbol, timeframe='1h', horizon=4):
+    def analyze(self, symbol, timeframe='1h', horizon=4, exchange='BINANCE'):
         """
         Analyzes signals with Layer 1: Trend Filter and Layer 2: Diversity.
-        OPTIMIZED: Uses cached features.
+        OPTIMIZED: Uses cached features with exchange awareness.
         """
-        df = self.get_features(symbol, timeframe)
+        df = self.get_features(symbol, timeframe, exchange=exchange)
         if df is None:
             return None
 
@@ -100,8 +119,20 @@ class StrategyAnalyzer:
             config_key = name.replace('signal_', '')
             cat = self.get_signal_category(config_key)
             
-            is_long = any(x in config_key for x in ['oversold', 'up', 'golden', 'gt_200', 'gt_signal', 'lt_BB', 'cross_up', 'gt_50', 'gt_', 'bullish', 'above', 'strong_uptrend'])
-            is_short = any(x in config_key for x in ['overbought', 'down', 'death', 'lt_200', 'lt_signal', 'gt_BB', 'cross_down', 'lt_50', 'lt_', 'bearish', 'below', 'strong_downtrend'])
+            is_long = any(x in config_key for x in [
+                '_cross_21_up', '_gt_200', 'MACD_cross_up', 'MACD_gt_signal',
+                'MACD_Bullish', 'RSI_Bullish', 'Bullish', 'oversold',
+                'TK_Cross_Up', 'Vol_Spike', 'Price_Above_VWAP', 'Price_lt_BB_Low',
+                'bounce_from_support', 'breakout_above_resistance',
+                'Stoch_Oversold', 'Stoch_K_Cross_Up', '_gt_50',
+            ])
+            is_short = any(x in config_key for x in [
+                '_cross_21_down', '_lt_200', 'MACD_cross_down', 'MACD_lt_signal',
+                'MACD_Bearish', 'RSI_Bearish', 'Bearish', 'overbought',
+                'TK_Cross_Down', 'Price_Below_VWAP', 'Price_gt_BB_Up',
+                'bounce_from_resistance', 'breakout_below_support',
+                'Stoch_Overbought', 'Stoch_K_Cross_Down', '_lt_50',
+            ])
             
             # LAYER 1: TREND FILTER
             if is_long:
@@ -147,7 +178,7 @@ class StrategyAnalyzer:
             
         return results
 
-    def validate_weights(self, df, weights, symbol, timeframe):
+    def validate_weights(self, df, weights, symbol, timeframe, exchange='BINANCE'):
         """
         LAYER 3: Walk-Forward Validation - OPTIMIZED v2.2
         - FULL GRID SEARCH (không giảm quality!)
@@ -231,7 +262,7 @@ class StrategyAnalyzer:
                 }
         
         # Cache result for cross-TF lookup
-        cache_key = f"{symbol}_{timeframe}"
+        cache_key = f"{exchange}_{symbol}_{timeframe}"
         if best_overall:
             self._validation_cache[cache_key] = best_overall
         
@@ -308,21 +339,20 @@ class StrategyAnalyzer:
             'win_rate': wins / trades if trades > 0 else 0
         }
 
-    def get_cross_tf_support(self, symbol, timeframes):
+    def get_cross_tf_support(self, symbol, timeframes, exchange='BINANCE'):
         """
-        OPTIMIZED: Check cross-TF support using cached validation results.
-        NO redundant recalculation!
+        OPTIMIZED: Check cross-TF support using cached validation results with exchange awareness.
         """
         supported = 0
         for tf in timeframes:
-            cache_key = f"{symbol}_{tf}"
+            cache_key = f"{exchange}_{symbol}_{tf}"
             if cache_key in self._validation_cache:
                 result = self._validation_cache[cache_key]
                 if result and (result['pnl'] > 0 or result['win_rate'] >= 0.50):
                     supported += 1
         return supported
 
-    def update_config(self, symbol, timeframe, new_weights, sl_pct=0.02, tp_pct=0.04, entry_score=5.0, stats=None, enabled=None):
+    def update_config(self, symbol, timeframe, new_weights, sl_pct=0.02, tp_pct=0.04, entry_score=5.0, stats=None, enabled=None, exchange='BINANCE'):
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
         
         if os.path.exists(config_path):
@@ -331,7 +361,9 @@ class StrategyAnalyzer:
         else:
             data = {"default": {}}
 
-        key = f"{symbol}_{timeframe}"
+        # Use exchange-prefixed key for specific weights (Issue 9)
+        clean_symbol = symbol.split(':')[0].replace('/', '_').upper()
+        key = f"{exchange}_{clean_symbol}_{timeframe}"
         if key not in data:
             data[key] = {
                 "enabled": True,
@@ -339,8 +371,16 @@ class StrategyAnalyzer:
                 "thresholds": {"entry_score": entry_score, "exit_score": 2.5},
                 "risk": {"sl_pct": sl_pct, "tp_pct": tp_pct},
                 "tiers": {
-                    "low": {"min_score": entry_score, "leverage": 8, "cost_usdt": 3.0},
-                    "high": {"min_score": entry_score + 2.0, "leverage": 12, "cost_usdt": 5.0}
+                    "low": {
+                        "min_score": entry_score, 
+                        "leverage": min(4, GLOBAL_MAX_LEVERAGE), 
+                        "cost_usdt": min(3.0, GLOBAL_MAX_COST_PER_TRADE)
+                    },
+                    "high": {
+                        "min_score": entry_score + 2.0, 
+                        "leverage": min(5, GLOBAL_MAX_LEVERAGE), 
+                        "cost_usdt": min(5.0, GLOBAL_MAX_COST_PER_TRADE)
+                    }
                 }
             }
         
@@ -413,7 +453,8 @@ class StrategyAnalyzer:
                 if os.path.exists(config_path):
                     with open(config_path, 'r') as f:
                         config = json.load(f)
-                    key = f"{symbol}_{tf}"
+                    exchange_name = getattr(self, 'exchange_name', 'BINANCE')
+                    key = f"{exchange_name}_{symbol}_{tf}"
                     if key in config and 'performance' in config[key]:
                         current_pnl = config[key]['performance'].get('pnl_sim', 0)
                 
@@ -493,7 +534,7 @@ class StrategyAnalyzer:
                         enabled=True
                     )
                     
-                    print(f"    [OK] UPDATED: PnL ${current_pnl:.0f} -> ${best_result['pnl']:.0f} (+{improvement*100:.0f}%)")
+                    print(f"    ✨ UPDATED: PnL ${current_pnl:.0f} -> ${best_result['pnl']:.0f} (+{improvement*100:.0f}%)")
                 else:
                     print(f"    [SKIP] No significant improvement (current: ${current_pnl:.0f}, new: ${best_result['pnl']:.0f})")
         
@@ -517,7 +558,12 @@ async def run_global_optimization():
     # STEP 0: Download Fresh Data
     print("\n[*] Step 0: Downloading fresh market data...")
     try:
-        subprocess.run(['py', 'scripts/download_data.py'], check=True)
+        import sys
+        # Ensure we use the current python executable (important for venv)
+        # and point to the correct scripts location relative to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        download_script = os.path.join(project_root, 'scripts', 'download_data.py')
+        subprocess.run([sys.executable, download_script], check=True)
         print("✅ Data download complete.")
     except Exception as e:
         print(f"⚠️  Data download failed or skipped: {e}")
@@ -531,49 +577,68 @@ async def run_global_optimization():
     
     results_summary = []
     horizon = 15
-    all_weights = {}  # {symbol: {tf: weights}}
+    all_weights = {}  # {(exchange, symbol): {tf: weights}}
     
     # ========== STEP 1: Parallel Signal Analysis ==========
-    print("\n[STEP 1/3] Signal Analysis (parallel by symbol)...")
+    from config import BINANCE_SYMBOLS, BYBIT_SYMBOLS, ACTIVE_EXCHANGES
+    
+    # Map exchange name to its specific symbols
+    exchange_symbols = {
+        'BINANCE': [s for s in BINANCE_SYMBOLS if s in TRADING_SYMBOLS],
+        'BYBIT': [s for s in BYBIT_SYMBOLS if s in TRADING_SYMBOLS]
+    }
+    
+    # If a generic symbols list is used but not mapped, fallback to all
+    # But here we standardizing.
+    
+    active_tasks = []
+    for ex_name in ACTIVE_EXCHANGES:
+        ex_name = ex_name.strip()
+        symbols = exchange_symbols.get(ex_name, TRADING_SYMBOLS)
+        for symbol in symbols:
+            active_tasks.append((ex_name, symbol))
+
+    print(f"\n[STEP 1/3] Signal Analysis (parallel for {len(active_tasks)} exchange/symbol pairs)...")
     step1_start = time.time()
     
-    def analyze_symbol(symbol):
+    def analyze_task(args):
+        exchange, symbol = args
         weights_by_tf = {}
         for tf in TRADING_TIMEFRAMES:
-            weights = analyzer.analyze(symbol, timeframe=tf, horizon=horizon)
+            weights = analyzer.analyze(symbol, timeframe=tf, horizon=horizon, exchange=exchange)
             if weights:
                 weights_by_tf[tf] = weights
-        return symbol, weights_by_tf
+        return (exchange, symbol), weights_by_tf
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(analyze_symbol, sym): sym for sym in TRADING_SYMBOLS}
+        futures = {executor.submit(analyze_task, task): task for task in active_tasks}
         for i, future in enumerate(as_completed(futures)):
-            symbol, weights_by_tf = future.result()
-            all_weights[symbol] = weights_by_tf
+            task_key, weights_by_tf = future.result()
+            all_weights[task_key] = weights_by_tf
             if (i + 1) % 5 == 0:
-                print(f"  [{i+1}/{len(TRADING_SYMBOLS)}] symbols analyzed...")
+                print(f"  [{i+1}/{len(active_tasks)}] tasks analyzed...")
     
     step1_time = time.time() - step1_start
-    print(f"  [OK] Step 1 complete: {step1_time:.1f}s")
+    print(f"  ✨ Step 1 complete: {step1_time:.1f}s")
     
     # ========== STEP 2: Parallel Validation ==========
     print("\n[STEP 2/3] Walk-Forward Validation (parallel)...")
     step2_start = time.time()
     
     validation_tasks = []
-    for symbol in TRADING_SYMBOLS:
-        for tf in TRADING_TIMEFRAMES:
-            if tf in all_weights.get(symbol, {}):
-                validation_tasks.append((symbol, tf, all_weights[symbol][tf]))
+    for (exchange, symbol), weights_by_tf in all_weights.items():
+        for tf, weights in weights_by_tf.items():
+            validation_tasks.append((exchange, symbol, tf, weights))
     
     def validate_task(args):
-        symbol, tf, weights = args
-        df = analyzer.get_features(symbol, tf)
+        exchange, symbol, tf, weights = args
+        df = analyzer.get_features(symbol, tf, exchange=exchange)
         if df is None:
             return None
-        result = analyzer.validate_weights(df, weights, symbol, tf)
+        result = analyzer.validate_weights(df, weights, symbol, tf, exchange=exchange)
         if result:
             return {
+                'exchange': exchange,
                 'symbol': symbol,
                 'tf': tf,
                 'weights': weights,
@@ -587,7 +652,7 @@ async def run_global_optimization():
         validation_results = [r for r in futures if r is not None]
     
     step2_time = time.time() - step2_start
-    print(f"  [OK] Step 2 complete: {len(validation_results)} validated in {step2_time:.1f}s")
+    print(f"  ✨ Step 2 complete: {len(validation_results)} validated in {step2_time:.1f}s")
     
     # ========== STEP 3: Cross-TF Check & Config Update ==========
     print("\n[STEP 3/3] Cross-TF Validation & Config Update...")
@@ -596,8 +661,11 @@ async def run_global_optimization():
     enabled_count = 0
     disabled_count = 0
     
+    # Sort results by exchange and symbol for better grouping in report
+    validation_results.sort(key=lambda x: (x.get('exchange', 'BYBIT'), x.get('symbol', '')))
+    
     for v in validation_results:
-        symbol, tf = v['symbol'], v['tf']
+        exchange, symbol, tf = v['exchange'], v['symbol'], v['tf']
         result = v['result']
         weights = v['weights']
         
@@ -606,7 +674,7 @@ async def run_global_optimization():
         consistency = result.get('consistency', 0)
         
         # Check cross-TF support using cached results
-        cross_tf_support = analyzer.get_cross_tf_support(symbol, TRADING_TIMEFRAMES)
+        cross_tf_support = analyzer.get_cross_tf_support(symbol, TRADING_TIMEFRAMES, exchange=exchange)
         
         # Use configurable thresholds from config
         from config import MIN_WIN_RATE_TRAIN, MIN_WIN_RATE_TEST, MAX_CONSISTENCY, MIN_CROSS_TF_SUPPORT
@@ -617,7 +685,7 @@ async def run_global_optimization():
         
         if is_enabled:
             enabled_count += 1
-            status = f"[OK] {symbol} {tf} | WR={wr*100:.1f}% | PnL=${result['pnl']:.0f} | CrossTF={cross_tf_support}"
+            status = f"{exchange} | {symbol} {tf} | WR={wr*100:.1f}% | PnL=${result['pnl']:.0f} | CrossTF={cross_tf_support}"
             print(f"  {status}")
             results_summary.append(status)
         else:
@@ -629,25 +697,83 @@ async def run_global_optimization():
             tp_pct=result['tp_pct'],
             entry_score=result['entry_score'],
             stats=result,
-            enabled=is_enabled
+            enabled=is_enabled,
+            exchange=exchange
         )
     
     step3_time = time.time() - step3_start
     total_time = time.time() - start_time
     
-    print("\n" + "=" * 60)
-    print(f"[COMPLETE] Total time: {total_time:.1f}s")
-    print(f"  Step 1 (Analysis): {step1_time:.1f}s")
-    print(f"  Step 2 (Validation): {step2_time:.1f}s")
-    print(f"  Step 3 (Config): {step3_time:.1f}s")
-    print(f"  Enabled: {enabled_count} | Disabled: {disabled_count}")
+    print("=" * 60)
+    
+    # ========== NEW STEP 5: Summary Portfolio Backtest ==========
+    if enabled_count > 0:
+        print("\n[STEP 5/3] Summary Portfolio Backtest...")
+        summary_start = time.time()
+        
+        # Simple aggregated performance estimate
+        total_pnl = 0
+        total_trades = 0
+        combined_win_rate = 0
+        
+        for v in validation_results:
+            if v.get('is_enabled', True): # We already filtered in Step 3 but double check
+                total_pnl += v['result'].get('pnl', 0)
+                total_trades += v['result'].get('trades', 0)
+                combined_win_rate += v['result'].get('win_rate', 0)
+        
+        avg_win_rate = (combined_win_rate / enabled_count) * 100 if enabled_count > 0 else 0
+        summary_time = time.time() - summary_start
+        
+        print(f"  ✅ Portfolio Summary: {enabled_count} pairs | Est. PnL: ${total_pnl:.0f} | Avg WR: {avg_win_rate:.1f}%")
+        print(f"  ✨ Step 5 complete: {summary_time:.1f}s")
+    
     print("=" * 60)
     
     if results_summary:
-        final_msg = f"[OK] **OPTIMIZATION COMPLETE** ({total_time:.0f}s)\n\nEnabled: {enabled_count}\n\n" + "\n".join(results_summary[:15])
+        # Group by exchange for the Telegram message
+        grouped_summary = {}
+        for s in results_summary:
+            ex_name = s.split(' | ')[0]
+            if ex_name not in grouped_summary:
+                grouped_summary[ex_name] = []
+            grouped_summary[ex_name].append(" | ".join(s.split(' | ')[1:]))
+        
+        final_lines = [f"✨ **OPTIMIZATION COMPLETE** ({total_time:.0f}s)\n\nEnabled: {enabled_count}\n"]
+        for ex, lines in grouped_summary.items():
+            final_lines.append(f"🏛️ **{ex.upper()}**")
+            final_lines.extend([f"• {l}" for l in lines[:10]]) # Limit to top 10 per exchange
+            final_lines.append("")
+            
+        final_msg = "\n".join(final_lines)
         await send_telegram_chunked(final_msg)
         
-        # STEP 4: Run Summary Backtest (Optional but recommended)
+        # STEP 4: Neural Brain Training
+        from notification import send_telegram_chunked
+        print("\n[*] Step 4: Updating Neural Brain (RL Model)...")
+        try:
+            # Training on at least 20 samples to ensure quality
+            brain_stats = run_nn_training(min_samples=20, epochs=100)
+            
+            if isinstance(brain_stats, dict) and brain_stats.get('status') == 'success':
+                brain_msg = (
+                    "🧠 **Neural Brain Updated**\n"
+                    f"📊 Samples: {brain_stats['samples']}\n"
+                    f"🎯 Accuracy: {brain_stats['accuracy']:.1f}%\n"
+                    f"📉 MSE: {brain_stats['mse']:.4f}\n"
+                    "✅ Model redeployed and active."
+                )
+            else:
+                brain_msg = "🧠 **Neural Brain**: Not enough new data to retrain (needs 20+ trades)."
+            
+            await send_telegram_chunked(brain_msg)
+            
+        except Exception as e:
+            err_msg = f"⚠️ **Neural Brain Update Failed**: {e}"
+            print(err_msg)
+            await send_telegram_chunked(err_msg)
+        
+        # STEP 5: Run Summary Backtest (Optional but recommended)
         print("\n[*] Step 4: Running summary backtest...")
         try:
             # You might want to run backtester.py for the top enabled symbols

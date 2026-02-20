@@ -7,6 +7,9 @@ import time
 from typing import Any, Callable
 
 
+import logging
+
+
 class BaseExchangeClient:
     """
     Base class providing unified exchange interaction patterns.
@@ -15,8 +18,31 @@ class BaseExchangeClient:
     
     def __init__(self, exchange):
         self.exchange = exchange
+        self.logger = logging.getLogger(self.__class__.__name__)
         self._time_synced = False
         self._server_offset_ms = 0 # Manual offset: serverTime - localTime
+        
+        # Permissions / Capabilities System
+        # Default to restricted until explicitly promoted by Factory
+        self.permissions = {
+            'can_trade': False,          # Can place/cancel orders
+            'can_view_balance': False,   # Can fetch account balance/positions
+            'can_use_private': False,    # Can use any private endpoints
+            'is_public_only': True       # Is this a read-only observer?
+        }
+
+    def set_permissions(self, can_trade: bool, can_view_balance: bool):
+        """Configure adapter permissions based on credentials."""
+        self.permissions['can_trade'] = can_trade
+        self.permissions['can_view_balance'] = can_view_balance
+        self.permissions['can_use_private'] = can_trade or can_view_balance
+        self.permissions['is_public_only'] = not (can_trade or can_view_balance)
+        
+    @property
+    def can_trade(self): return self.permissions['can_trade']
+    
+    @property
+    def is_public_only(self): return self.permissions['is_public_only']
         
     async def sync_server_time(self) -> bool:
         """Sync local time with exchange server manually to ensure absolute accuracy."""
@@ -46,11 +72,13 @@ class BaseExchangeClient:
 
     def get_synced_timestamp(self) -> int:
         """Get current timestamp synchronized with exchange with safety padding."""
-        # Use manual offset for absolute control
+        # Use manual offset as primary for absolute control
         local_now = int(time.time() * 1000)
-        # We subtract 5000ms safety padding to ensure we are NEVER "ahead" of server
-        # (Binance is strict about future timestamps). recvWindow (60s) handles the lag.
-        return local_now + self._server_offset_ms - 5000
+        
+        # We subtract 1000ms safety padding (reduced from 5000ms) to ensure we are 
+        # NOT "ahead" of server even with micro-oscillations.
+        # Binance is strict about future timestamps. recvWindow (60s) handles the lag.
+        return local_now + self._server_offset_ms - 1000
     
     async def resync_time_if_needed(self, error_msg: str = "") -> bool:
         """Re-sync time if timestamp error detected."""
@@ -83,7 +111,11 @@ class BaseExchangeClient:
         """
         for attempt in range(max_retries):
             try:
-                return await api_call(*args, **kwargs)
+                res = await api_call(*args, **kwargs)
+                # Double safety: if we somehow got a coroutine back (due to nested calls), await it.
+                if asyncio.iscoroutine(res):
+                    return await res
+                return res
             except Exception as e:
                 error_msg = str(e).lower()
                 # Check for timestamp-related errors (-1021 is Binance timestamp error code)
@@ -113,9 +145,12 @@ class BaseExchangeClient:
                             if attempt < max_retries - 1:
                                 continue
 
-                        # Silence known "informational" errors to avoid user confusion
-                        silence_errors = ["-4067", "-4046", "-4061", "no change", "side cannot be changed"]
-                        if not any(s in error_msg for s in silence_errors):
+                        # Silence known "informational" or handled errors to avoid user confusion
+                        silence_errors = [
+                            "-4067", "-4046", "-4061", "no change", "side cannot be changed",
+                            "last 500 orders", "acknowledged", "already", "not modified"
+                        ]
+                        if not any(s.lower() in error_msg for s in silence_errors):
                             print(f"[API ERROR] Non-timestamp error, not retrying: {str(e)[:100]}")
                     else:
                         print(f"[TIMESTAMP ERROR] Max retries reached, giving up: {str(e)[:100]}")

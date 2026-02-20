@@ -13,9 +13,14 @@ load_dotenv()
 
 async def cancel_all():
     print("=" * 60)
-    print("🧨 CANCEL ALL OPEN ORDERS")
-    print("=" * 60)
     
+    apiKey = os.getenv('BINANCE_API_KEY')
+    secret = os.getenv('BINANCE_API_SECRET')
+    
+    if not apiKey or not secret or 'your_' in apiKey:
+        print("❌ API Keys missing or invalid. Cannot run CANCEL ALL.")
+        return
+
     exchange = ccxt.binance({
         'apiKey': os.getenv('BINANCE_API_KEY'),
         'secret': os.getenv('BINANCE_API_SECRET'),

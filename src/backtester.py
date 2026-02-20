@@ -6,7 +6,7 @@ import sys
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES, RISK_PER_TRADE, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES, RISK_PER_TRADE, STOP_LOSS_PCT, TAKE_PROFIT_PCT, TRADING_COMMISSION, SLIPPAGE_PCT
 from feature_engineering import FeatureEngineer
 from strategy import WeightedScoringStrategy
 from data_fetcher import DataFetcher
@@ -14,23 +14,25 @@ import asyncio
 from risk_manager import RiskManager # Need this for sizing logic if not already used heavily
 
 class Backtester:
-    def __init__(self, symbol, timeframe, initial_balance=10000, commission=0.0006):
+    def __init__(self, symbol, timeframe, exchange='BINANCE', initial_balance=10000, commission=TRADING_COMMISSION, slippage=SLIPPAGE_PCT):
         self.symbol = symbol
         self.timeframe = timeframe
+        self.exchange = exchange.upper()
         self.initial_balance = initial_balance
         self.balance = initial_balance
         self.commission = commission
+        self.slippage = slippage
         self.trades = []
         self.position = None 
         self.equity_curve = []
         
         self.feature_engineer = FeatureEngineer()
-        self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe)
+        self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe, exchange=exchange)
         # Mock Risk Manager for backtest sizing logic
         self.risk_manager = RiskManager(risk_per_trade=RISK_PER_TRADE)
 
-        # Data Caching Config
-        self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+        # Data dir: absolute path to src/data where CSVs are stored
+        self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
         os.makedirs(self.data_dir, exist_ok=True)
 
     async def run(self):
@@ -39,13 +41,19 @@ class Backtester:
         status = "[ACTIVE]" if wa else "[INACTIVE]"
         print(f"[{self.symbol}] Strategy Status: {status} ({len(wa)} parameters)")
         
-        # Check cache first
-        file_path = os.path.join(self.data_dir, f"{self.symbol.replace('/', '').replace(':', '')}_{self.timeframe}.csv")
+        # Check cache first — strip :USDT suffix -> BTC/USDT:USDT -> BTCUSDT
+        safe_symbol = self.symbol.split(':')[0].replace('/', '')
+        exchange = self.exchange
+        
+        # Try exchange-prefixed first, then legacy
+        file_path_ex = os.path.join(self.data_dir, f"{exchange}_{safe_symbol}_{self.timeframe}.csv")
+        file_path_leg = os.path.join(self.data_dir, f"{safe_symbol}_{self.timeframe}.csv")
+        file_path = file_path_ex if os.path.exists(file_path_ex) else file_path_leg
 
         df = None
         # 1. Try Load from Disk
         if os.path.exists(file_path):
-            print(f"[{self.symbol}] Loading data from cache: {file_path}")
+            print(f"[{self.symbol}] Loading data from cache: {os.path.basename(file_path)}")
             df = pd.read_csv(file_path)
             df['timestamp'] = pd.to_datetime(df['timestamp'])
         
@@ -58,7 +66,7 @@ class Backtester:
             
             if df is not None and not df.empty:
                 print(f"[{self.symbol}] Saving data to cache...")
-                df.to_csv(file_path, index=False)
+                df.to_csv(file_path_leg, index=False)
         
         if df is None or df.empty:
             print(f"[{self.symbol}] No data found.")
@@ -81,14 +89,14 @@ class Backtester:
                 p = self.position
                 # Check SL/TP
                 if p['type'] == 'long':
-                    if row['low'] <= p['sl']:
+                    if p.get('sl') is not None and row['low'] <= p['sl']:
                         self._close_position(timestamp, p['sl'], 'SL')
-                    elif row['high'] >= p['tp']:
+                    elif p.get('tp') is not None and row['high'] >= p['tp']:
                         self._close_position(timestamp, p['tp'], 'TP')
                 elif p['type'] == 'short':
-                    if row['high'] >= p['sl']:
+                    if p.get('sl') is not None and row['high'] >= p['sl']:
                         self._close_position(timestamp, p['sl'], 'SL')
-                    elif row['low'] <= p['tp']:
+                    elif p.get('tp') is not None and row['low'] <= p['tp']:
                         self._close_position(timestamp, p['tp'], 'TP')
                         
             # --- Check Entry Signals ---
@@ -146,15 +154,30 @@ class Backtester:
         qty = p['qty']
         entry = p['entry_price']
         
-        # Calculate PnL
+        # REAL-WORLD FRICTION MODEL (Backtrader standard)
+        # 1. Commission: Paid on BOTH Entry and Exit (Total 2x)
+        # 2. Slippage: Price impact against us on BOTH Entry and Exit
+        
+        entry_friction = entry * self.slippage
+        exit_friction = price * self.slippage
+        
+        # Effective Entry/Exit prices after slippage
+        eff_entry = entry + entry_friction if p['type'] == 'long' else entry - entry_friction
+        eff_exit = price - exit_friction if p['type'] == 'long' else price + exit_friction
+        
+        # Recalculate PnL with effective prices
         if p['type'] == 'long':
-            raw_pnl = (price - entry) * qty
+            raw_pnl = (eff_exit - eff_entry) * qty
         else:
-            raw_pnl = (entry - price) * qty
+            raw_pnl = (eff_entry - eff_exit) * qty
             
-        # Commission (Entry + Exit) assuming taker
-        comm_cost = (qty * entry * self.commission) + (qty * price * self.commission)
-        net_pnl = raw_pnl - comm_cost
+        # Commission Cost (Volume * Rate)
+        # Note: Commission is based on Notional Value (Price * Qty)
+        comm_entry = (qty * eff_entry) * self.commission
+        comm_exit = (qty * eff_exit) * self.commission
+        
+        total_cost = comm_entry + comm_exit
+        net_pnl = raw_pnl - total_cost
         
         self.balance += net_pnl
         self.trades.append({
@@ -198,13 +221,39 @@ class Backtester:
         else:
             max_drawdown = 0
         
-        # Sharpe Ratio (assuming daily returns, risk-free rate = 0)
+        # Advanced Risk Metrics (Sharpe & Sortino)
+        # 1. Determine annualization factor (252 days * candles per day)
+        if '15m' in self.timeframe: freq = 96 * 252
+        elif '30m' in self.timeframe: freq = 48 * 252
+        elif '1h' in self.timeframe: freq = 24 * 252
+        elif '4h' in self.timeframe: freq = 6 * 252
+        elif '1d' in self.timeframe: freq = 252
+        else: freq = 252 # Default
+        
         if len(df) > 1:
-            returns = df['pnl'].values
-            log_returns = np.log(1 + returns / self.initial_balance)
-            sharpe = (np.mean(log_returns) / np.std(log_returns)) * np.sqrt(252) if np.std(log_returns) > 0 else 0
+            # ROI per trade
+            returns = df['pnl'] / self.initial_balance
+            
+            # Sharpe Ratio (Mean / StdFlow)
+            mean_ret = np.mean(returns)
+            std_ret = np.std(returns)
+            sharpe = (mean_ret / std_ret) * np.sqrt(freq) if std_ret > 0 else 0
+            
+            # Sortino Ratio (Mean / Downside Deviation)
+            # Downside Deviation = Sqrt(Mean(Negative_Returns^2)) [Target Return = 0]
+            # This is more robust than std() for single values
+            negative_returns = returns[returns < 0]
+            
+            if len(negative_returns) > 0:
+                # Root Mean Square of negative returns (assuming target return 0)
+                downside_dev = np.sqrt(np.mean(negative_returns**2))
+                sortino = (mean_ret / downside_dev) * np.sqrt(freq) if downside_dev > 0 else 0
+            else:
+                # No downside volatility = Infinite Sortino (technically), but cap at high number
+                sortino = 999.0 if mean_ret > 0 else 0.0
         else:
             sharpe = 0
+            sortino = 0
         
         # Consecutive wins/losses
         max_consecutive_wins = 0
@@ -237,6 +286,7 @@ class Backtester:
             'roi': roi,
             'max_drawdown': max_drawdown,
             'sharpe_ratio': sharpe,
+            'sortino_ratio': sortino,
             'max_consecutive_wins': max_consecutive_wins,
             'max_consecutive_losses': max_consecutive_losses,
             'balance': self.balance
@@ -276,6 +326,7 @@ class Backtester:
         print(f"ROI:                   {metrics['roi']:.2f}%")
         print(f"Max Drawdown:          {metrics['max_drawdown']:.2f}%")
         print(f"Sharpe Ratio:          {metrics['sharpe_ratio']:.2f}")
+        print(f"Sortino Ratio:         {metrics['sortino_ratio']:.2f}")
         print(f"Max Consecutive W/L:   {metrics['max_consecutive_wins']} / {metrics['max_consecutive_losses']}")
         print(f"Final Balance:         ${metrics['balance']:.3f}")
         print(f"{'='*70}")
@@ -295,6 +346,7 @@ class Backtester:
             'roi': round(metrics['roi'], 2),
             'max_drawdown': round(metrics['max_drawdown'], 2),
             'sharpe_ratio': round(metrics['sharpe_ratio'], 2),
+            'sortino_ratio': round(metrics['sortino_ratio'], 2),
             'balance': round(metrics['balance'], 3)
         }
 
@@ -315,27 +367,41 @@ async def main():
     enabled_results = []
     watched_results = []
     
-    for s in TRADING_SYMBOLS:
-        for tf in TRADING_TIMEFRAMES:
-            key = f"{s}_{tf}"
-            config = strategy_config.get(key, {})
-            is_enabled = config.get('enabled', False)
-            status = config.get('status', 'UNKNOWN')
-            
-            # Skip if neither ENABLED nor WATCHED
-            if not is_enabled and 'WATCH' not in status:
-                continue
-            
-            bt = Backtester(s, tf)
-            res = await bt.run()
-            if res:
-                res['status'] = status.split('(')[0].strip() if '(' in status else 'N/A'  # Extract status
-                all_results.append(res)
+    # Import active exchanges from config
+    from config import ACTIVE_EXCHANGES, BINANCE_SYMBOLS, BYBIT_SYMBOLS
+    exchange_symbols = {
+        'BINANCE': BINANCE_SYMBOLS if BINANCE_SYMBOLS else TRADING_SYMBOLS,
+        'BYBIT': BYBIT_SYMBOLS if BYBIT_SYMBOLS else TRADING_SYMBOLS,
+    }
+    active_exchanges = [e for e in ['BINANCE', 'BYBIT'] if e in ACTIVE_EXCHANGES]
+    
+    for exchange in active_exchanges:
+        symbols = exchange_symbols.get(exchange, TRADING_SYMBOLS)
+        for s in symbols:
+            for tf in TRADING_TIMEFRAMES:
+                clean_sym = s.split(':')[0].replace('/', '_').upper()
+                # Try exchange-prefixed key first, then legacy key
+                key_ex = f"{exchange}_{clean_sym}_{tf}"
+                key_legacy = f"{s}_{tf}"
                 
-                if is_enabled:
-                    enabled_results.append(res)
-                else:
-                    watched_results.append(res)
+                config = strategy_config.get(key_ex) or strategy_config.get(key_legacy, {})
+                is_enabled = config.get('enabled', False)
+                status = config.get('status', 'UNKNOWN')
+                
+                # Skip if neither ENABLED nor WATCHED
+                if not is_enabled and 'WATCH' not in status:
+                    continue
+                
+                bt = Backtester(s, tf, exchange=exchange)
+                res = await bt.run()
+                if res:
+                    res['exchange'] = exchange
+                    res['status'] = status.split('(')[0].strip() if '(' in status else 'N/A'
+                    all_results.append(res)
+                    if is_enabled:
+                        enabled_results.append(res)
+                    else:
+                        watched_results.append(res)
     
     # Print ENABLED Results First
     if enabled_results:

@@ -9,22 +9,62 @@ import ccxt.async_support as ccxt
 import pandas as pd
 import os
 import sys
+import time
 from datetime import datetime
 
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-from config import BINANCE_API_KEY, BINANCE_API_SECRET
+from config import (
+    BINANCE_API_KEY, BINANCE_API_SECRET, 
+    BYBIT_API_KEY, BYBIT_API_SECRET,
+    ACTIVE_EXCHANGES, BINANCE_SYMBOLS, BYBIT_SYMBOLS
+)
 
-async def download_historical_data(symbol, timeframe, limit=5000):
-    """Download OHLCV data for a symbol/timeframe pair."""
+async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', limit=5000):
+    """Download OHLCV data for a symbol/timeframe pair with 1h freshness check."""
+    # Strip :USDT suffix -> BTC/USDT:USDT -> BTCUSDT
+    safe_symbol = symbol.split(':')[0].replace('/', '').upper()
+    filename = f"data/{exchange_name}_{safe_symbol}_{timeframe}.csv"
+    
+    # [v2.3] Freshness check: Skip if file < 1 hour old
+    if os.path.exists(filename):
+        mtime = os.path.getmtime(filename)
+        age_seconds = time.time() - mtime
+        if age_seconds < 3600:  # 1 hour
+            print(f"  [SKIP] {exchange_name} {symbol} {timeframe} is fresh ({age_seconds/60:.1f}m old)")
+            return 1  # Skipped (fresh)
+
     try:
-        exchange = ccxt.binance({
+        # Bybit-specific timeframe mapping
+        if exchange_name.upper() == 'BYBIT':
+            mapping = {'8h': '4h'}
+            timeframe = mapping.get(timeframe, timeframe)
+
+        ex_class = getattr(ccxt, exchange_name.lower())
+        config = {
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'future',
                 'adjustForTimeDifference': True,
             }
-        })
+        }
+        if exchange_name.upper() == 'BINANCE':
+            if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY:
+                config['apiKey'] = BINANCE_API_KEY
+                config['secret'] = BINANCE_API_SECRET
+        elif exchange_name.upper() == 'BYBIT':
+            if BYBIT_API_KEY and 'your_' not in BYBIT_API_KEY:
+                config['apiKey'] = BYBIT_API_KEY
+                config['secret'] = BYBIT_API_SECRET
+            
+        exchange = ex_class(config)
+        
+        # [v2.4] Robust Time Sync for Binance/Bybit
+        # Fetch server time and calculate offset to prevent -1021 error
+        if exchange_name.upper() in ['BINANCE', 'BYBIT']:
+            exchange.options['recvWindow'] = 60000 # Max safety window
+            await exchange.load_time_difference()
+            print(f"  [TIME] {exchange_name} offset: {exchange.options.get('timeDifference', 0)}ms")
         
         print(f"[*] Downloading {symbol} {timeframe} ({limit} candles)...")
         
@@ -40,7 +80,10 @@ async def download_historical_data(symbol, timeframe, limit=5000):
                 all_ohlcv.extend(ohlcv)
                 since = ohlcv[-1][0] + 1
                 print(f"    {len(all_ohlcv)} candles fetched...", end='\r')
-                await asyncio.sleep(0.2)  # Rate limit
+                # Increased delay for Bybit rate limits
+                # Bybit allows ~10 req/s typically, but with multiple symbols in parallel we need to go slower
+                delay = 1.0 if exchange_name.upper() == 'BYBIT' else 0.2
+                await asyncio.sleep(delay)
             except Exception as e:
                 print(f"    Error: {e}")
                 break
@@ -49,61 +92,78 @@ async def download_historical_data(symbol, timeframe, limit=5000):
         all_ohlcv = all_ohlcv[-limit:]
         
         # Convert to DataFrame
+        if not all_ohlcv:
+            print(f"  [WARN] {exchange_name} {symbol:12s} {timeframe:3s} -> NO DATA fetched")
+            return False
+
         df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         
         # Save to CSV
-        safe_symbol = symbol.replace('/', '').upper()
-        filename = f"data/{safe_symbol}_{timeframe}.csv"
         os.makedirs('data', exist_ok=True)
         df.to_csv(filename, index=False)
         
-        print(f"[OK] {symbol:12s} {timeframe:3s} -> {len(df):5d} candles saved to {filename}")
-        
-        await exchange.close()
-        return True
+        print(f"[OK] {exchange_name} {symbol:12s} {timeframe:3s} -> {len(df):5d} candles saved to {filename}")
+        return 2  # Actually downloaded
         
     except Exception as e:
         print(f"[ERROR] {symbol} {timeframe}: {e}")
-        return False
+        return 0  # Failed
+    finally:
+        if 'exchange' in locals() and exchange:
+            await exchange.close()
 
 async def main():
     """Main download routine."""
-    # All 25 trading symbols
-    from config import TRADING_SYMBOLS
-    symbols = TRADING_SYMBOLS
-    
-    # All 7 timeframes for comprehensive analysis
+    import time
     timeframes = ['15m', '30m', '1h', '2h', '4h', '8h', '1d']
     
-    print("=" * 80)
-    print("TRADING BOT - BULK DATA DOWNLOADER")
-    print(f"Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Target: {len(symbols)} symbols x {len(timeframes)} timeframes = {len(symbols)*len(timeframes)} files")
-    print("=" * 80)
-    print()
+    # Map exchange name to its specific symbols
+    exchange_symbols = {
+        'BINANCE': BINANCE_SYMBOLS,
+        'BYBIT': BYBIT_SYMBOLS
+    }
     
-    # Download in batches to avoid rate limits
-    batch_size = 10
     all_tasks = []
-    for symbol in symbols:
-        for timeframe in timeframes:
-            all_tasks.append((symbol, timeframe))
+    for ex_name in ACTIVE_EXCHANGES:
+        ex_name = ex_name.strip().upper()
+        symbols = exchange_symbols.get(ex_name, [])
+        for symbol in symbols:
+            for timeframe in timeframes:
+                all_tasks.append((symbol, timeframe, ex_name))
     
     total = len(all_tasks)
     success_count = 0
+    
+    # Dynamic batch size based on exchange
+    # Bybit is stricter with rate limits, so we process it slower or in smaller batches
+    # If mixed, we stick to conservative limits
+    is_bybit_active = 'BYBIT' in [x.upper() for x in ACTIVE_EXCHANGES]
+    batch_size = 4 if is_bybit_active else 10
+    
+    print(f"[*] Starting download with batch size: {batch_size}")
     
     for i in range(0, total, batch_size):
         batch = all_tasks[i:i+batch_size]
         print(f"\n[Batch {i//batch_size + 1}/{(total + batch_size - 1)//batch_size}] Processing {len(batch)} downloads...")
         
-        tasks = [download_historical_data(symbol, timeframe, limit=5000) for symbol, timeframe in batch]
+        # Create tasks
+        tasks = []
+        for symbol, timeframe, ex_name in batch:
+            limit = 5000
+            tasks.append(download_historical_data(symbol, timeframe, ex_name, limit))
+            
         results = await asyncio.gather(*tasks)
-        success_count += sum(results)
+        # 2=downloaded, 1=skipped(fresh), 0=error
+        actual_downloads = sum(1 for r in results if r == 2)
+        success_count += sum(1 for r in results if r > 0)
         
-        # Pause between batches
-        if i + batch_size < total:
-            await asyncio.sleep(2)
+        # Only sleep if we made real API calls this batch
+        if i + batch_size < total and actual_downloads > 0:
+            has_bybit = any(t[2] == 'BYBIT' for t in batch)
+            wait_time = 5 if has_bybit else 2
+            print(f"    Sleeping {wait_time}s to respect rate limits...")
+            await asyncio.sleep(wait_time)
     
     print()
     print("=" * 80)

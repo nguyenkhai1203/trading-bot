@@ -15,6 +15,10 @@ from config import BINANCE_API_KEY, BINANCE_API_SECRET
 async def diagnose():
     print("🔍 STARTING FULL ACCOUNT DIAGNOSIS...")
     
+    if not BINANCE_API_KEY or not BINANCE_API_SECRET or 'your_' in BINANCE_API_KEY:
+        print("❌ API Keys missing or invalid. Cannot run diagnosis.")
+        return
+
     exchange = ccxt.binance({
         'apiKey': BINANCE_API_KEY,
         'secret': BINANCE_API_SECRET,
