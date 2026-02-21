@@ -2417,8 +2417,72 @@ class Trader:
                                     self.active_positions[pos_key] = pos
                                     self._save_positions()
                                 else:
-                                    # CANCELLED
-                                    self.logger.info(f"[SYNC] Pending order {order_id} gone. Removing.")
+                                    # Order is gone from open, but not in current active_ex_pos.
+                                    # Check if it was FILLED and then IMMEDIATELY CLOSED or SL'd
+                                    self.logger.info(f"[SYNC] Pending order {order_id} gone from open. Checking trade history for fill...")
+                                    
+                                    found_fill = False
+                                    try:
+                                        # Use a small grace period and fetch trades
+                                        await asyncio.sleep(0.5)
+                                        since = pos.get('timestamp')
+                                        recent_trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
+                                        
+                                        if recent_trades:
+                                            # Look for trades matching this order_id
+                                            order_trades = [t for t in recent_trades if str(t.get('order') or t.get('orderId')) == str(order_id)]
+                                            
+                                            if order_trades:
+                                                self.logger.info(f"[SYNC] Detected fill in trade history for 'gone' pending order {order_id}.")
+                                                found_fill = True
+                                                
+                                                # Calculate fill details
+                                                fill_qty = sum(self._safe_float(t.get('amount')) for t in order_trades)
+                                                fill_weighted_price = sum(self._safe_float(t.get('price')) * self._safe_float(t.get('amount')) for t in order_trades)
+                                                entry_price = fill_weighted_price / fill_qty if fill_qty > 0 else pos.get('entry_price', 0)
+                                                
+                                                # Temporarily mark as filled to use log_trade logic
+                                                pos['status'] = 'filled'
+                                                pos['entry_price'] = entry_price
+                                                pos['qty'] = fill_qty
+                                                
+                                                # Now check for CLOSING trades (SL or exit)
+                                                target_side = 'sell' if side == 'BUY' else 'buy'
+                                                close_trades = [t for t in recent_trades if t.get('side', '').lower() == target_side and str(t.get('order')) != str(order_id)]
+                                                
+                                                exit_price = 0
+                                                if close_trades:
+                                                    total_close_qty = sum(self._safe_float(t.get('amount')) for t in close_trades)
+                                                    if total_close_qty > 0:
+                                                        weighted_close_sum = sum(self._safe_float(t.get('price')) * self._safe_float(t.get('amount')) for t in close_trades)
+                                                        exit_price = weighted_close_sum / total_close_qty
+                                                        
+                                                        # Extract actual fees
+                                                        actual_fees = sum(self._safe_float((t.get('fee') or {}).get('cost', 0)) for t in order_trades + close_trades)
+                                                        if actual_fees > 0:
+                                                            pos['_exit_fees'] = actual_fees
+                                                
+                                                # If no closing trades found but position is gone, use current price as fallback for closure logging
+                                                if exit_price == 0:
+                                                    df = self.data_manager.get_data(symbol, pos.get('timeframe', '1h'), exchange=self.exchange_name)
+                                                    exit_price = df.iloc[-1]['close'] if df is not None and not df.empty else entry_price
+                                                
+                                                # Apply Cooldown if loss
+                                                is_loss = (side == 'BUY' and exit_price < entry_price) or (side == 'SELL' and exit_price > entry_price)
+                                                if is_loss:
+                                                    self.logger.info(f"[{symbol}] Sync detected loss for fast pending-to-SL trade. Applying Cooldown.")
+                                                    print(f"🛡️ [{self.exchange_name}] [{symbol}] Applying SL Cooldown after fast SL hit.")
+                                                    self.set_sl_cooldown(symbol)
+                                                
+                                                await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Fast Fill + SL)")
+                                            
+                                    except Exception as e:
+                                        self.logger.warning(f"[SYNC] Trade history check failed for {pos_key}: {e}")
+                                    
+                                    if not found_fill:
+                                        # ACTUAL CANCELLED
+                                        self.logger.info(f"[SYNC] Pending order {order_id} gone. No fill trades found. Removing.")
+                                        
                                     if pos_key in self.pending_orders:
                                         del self.pending_orders[pos_key]
                                     del self.active_positions[pos_key]
