@@ -173,7 +173,13 @@ async def get_status_message(force_live: bool = False) -> str:
                 # 1. Fetch Positions
                 try:
                     raw_list = await adapter.fetch_positions()
-                    live_positions = {current_trader._normalize_symbol(p['symbol']): p for p in raw_list if float(p.get('contracts', 0)) > 0}
+                    # Robust filter: check contracts, amount, and size in info
+                    live_positions = {}
+                    for p in raw_list:
+                        qty = float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('size') or 0)
+                        if qty > 0:
+                            norm_sym = current_trader._normalize_symbol(p['symbol'])
+                            live_positions[norm_sym] = p
                 except Exception as e:
                     logging.warning(f"Failed to fetch live positions for {ex_name}: {e}")
                 
@@ -203,21 +209,24 @@ async def get_status_message(force_live: bool = False) -> str:
                     
                     # Merge with local metadata if exists (for timeframe/manual SL/TP fallback)
                     prefix = f"{ex_name}_"
-                    found_local = False
+                    potential_matches = []
                     for l_key, l_pos in local_active.items():
-                        # Robust matching
                         l_sym = l_pos.get('symbol', '')
-                        if (l_key.startswith(prefix) or not l_key.startswith(('BINANCE_', 'BYBIT_'))) and \
-                           (current_trader._normalize_symbol(l_sym) == norm_sym or l_sym == symbol):
-                            
-                            timeframe = l_pos.get('timeframe', timeframe)
-                            if lev <= 1: 
-                                lev = int(l_pos.get('leverage') or lev)
-                            # Fallback check for Sl/TP if missing from live
-                            if sl == 0: sl = float(l_pos.get('sl') or 0)
-                            if tp == 0: tp = float(l_pos.get('tp') or 0)
-                            found_local = True
-                            break
+                        has_any_prefix = l_key.startswith(('BINANCE_', 'BYBIT_'))
+                        is_ex_match = l_key.startswith(prefix) or (not has_any_prefix and ex_name == 'BINANCE')
+                        
+                        if is_ex_match and (current_trader._normalize_symbol(l_sym) == norm_sym or l_sym == symbol):
+                            potential_matches.append(l_pos)
+                    
+                    if potential_matches:
+                        # Prioritize 'active' status over 'pending'
+                        best_match = next((m for m in potential_matches if m.get('status') == 'active'), potential_matches[0])
+                        timeframe = best_match.get('timeframe', timeframe)
+                        if lev <= 1: 
+                            lev = int(best_match.get('leverage') or lev)
+                        if sl == 0: sl = float(best_match.get('sl') or best_match.get('stop_loss') or 0)
+                        if tp == 0: tp = float(best_match.get('tp') or best_match.get('take_profit') or 0)
+                        found_local = True
                     
                     # Try to pull leverage from info if unify field is 1/missing
                     if lev <= 1 and 'info' in ex_p:
@@ -322,7 +331,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = await get_status_message()
+    msg = await get_status_message(force_live=True)
     await update.message.reply_text(msg, parse_mode='Markdown')
     
     # Broadcast to channel if command came from elsewhere (e.g. DM)
@@ -337,11 +346,18 @@ async def summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Trigger reconciliation between persisted positions and exchange state."""
-    await update.message.reply_text("🔁 Starting sync with exchange...", parse_mode='Markdown')
+    """Trigger reconciliation between persisted positions and exchange state for ALL exchangers."""
+    await update.message.reply_text("🔁 Starting full sync with ALL exchanges...", parse_mode='Markdown')
+    results = []
     try:
-        summary = await trader.reconcile_positions()
-        msg = f"✅ Sync complete. Recovered order_ids: {summary.get('recovered_order_ids',0)}, created_tp_sl: {summary.get('created_tp_sl',0)}"
+        for ex_name, t in traders.items():
+            try:
+                summary = await t.reconcile_positions()
+                results.append(f"✅ {ex_name}: Recovered {summary.get('recovered_order_ids',0)}, Created TP/SL: {summary.get('created_tp_sl',0)}")
+            except Exception as ex_err:
+                results.append(f"❌ {ex_name}: {ex_err}")
+                
+        msg = "\n".join(results)
     except Exception as e:
         msg = f"❌ Sync failed: {e}"
     await update.message.reply_text(msg)
@@ -359,7 +375,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
     
     if query.data == 'status':
-        msg = await get_status_message()
+        msg = await get_status_message(force_live=True)
         await query.edit_message_text(msg, parse_mode='Markdown')
         
         # Broadcast to channel if clicked in DM

@@ -142,7 +142,8 @@ class SelfTest:
                 elif '_' in key:
                     # Fallback for old style keys (just symbol_tf)
                     symbol = key.split('_')[0]
-                    if symbol not in TRADING_SYMBOLS:
+                    # We only log it as an error if it's REALLY not in config. For trailing stops some people use 'BTC/USDT' without exchange prefix
+                    if symbol not in TRADING_SYMBOLS and "UNKNOWN" not in unauthorized_configs:
                         unauthorized_configs.append(f"UNKNOWN {symbol}")
             
             if unauthorized_configs:
@@ -173,12 +174,15 @@ class SelfTest:
                 return
             
             with open(positions_file, 'r') as f:
-                positions = json.load(f)
+                raw_data = json.load(f)
+                
+            positions = raw_data.get('active_positions', raw_data) if isinstance(raw_data, dict) else raw_data
             
             self.log_test("Positions File", True, f"{len(positions)} positions loaded")
             
             # Validate structure
             for key, pos in positions.items():
+                if key == 'last_sync': continue # Skip metadata
                 required_fields = ['symbol', 'side', 'qty', 'entry_price']
                 missing = [f for f in required_fields if f not in pos]
                 if missing:

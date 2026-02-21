@@ -9,6 +9,15 @@ import json
 # Add src to path if running directly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Enhanced Terminal Logging with Timestamps
+import builtins
+from datetime import datetime
+_orig_print = builtins.print
+def custom_print(*args, **kwargs):
+    now = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+    _orig_print(f"{now}", *args, **kwargs)
+builtins.print = custom_print
+
 from config import (
     BINANCE_API_KEY, BINANCE_API_SECRET,
     BYBIT_API_KEY, BYBIT_API_SECRET,
@@ -343,70 +352,77 @@ class TradingBot:
                         exit_reason = f"TAKE PROFIT hit at {current_price}"
 
                 if exit_hit:
-                    # Calculate PnL (with leverage)
-                    entry_price = existing_pos.get('entry_price', current_price)
-                    qty = existing_pos.get('qty', 0)
-                    leverage = existing_pos.get('leverage', 3)
-                    
-                    if side == 'BUY':
-                        pnl_pct = ((current_price - entry_price) / entry_price) * 100 * leverage
+                    if self.trader.dry_run:
+                        # Calculate PnL (with leverage)
+                        entry_price = existing_pos.get('entry_price', current_price)
+                        qty = existing_pos.get('qty', 0)
+                        leverage = existing_pos.get('leverage', 3)
+                        
+                        if side == 'BUY':
+                            pnl_pct = ((current_price - entry_price) / entry_price) * 100 * leverage
+                        else:
+                            pnl_pct = ((entry_price - current_price) / entry_price) * 100 * leverage
+                        
+                        # USD P&L based on actual notional change (not multiplied by leverage again)
+                        notional = qty * entry_price
+                        pnl_usd = (pnl_pct / 100) * notional / leverage
+                        
+                        # Determine exit reason for notification
+                        exit_reason_label = "TP" if "TAKE PROFIT" in exit_reason else "SL" if "STOP LOSS" in exit_reason else exit_reason
+                        
+                        # Unified notification
+                        terminal_msg, telegram_msg = format_position_closed(
+                            symbol=self.symbol,
+                            timeframe=self.timeframe,
+                            side=side,
+                            entry_price=entry_price,
+                            exit_price=current_price,
+                            pnl=pnl_usd,
+                            pnl_pct=pnl_pct,
+                            reason=exit_reason_label,
+                            dry_run=self.trader.dry_run,
+                            exchange_name=self.trader.exchange_name
+                        )
+                        print(terminal_msg)
+                        await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange_name)
+                        
+                        # Set cooldown after STOP LOSS to prevent immediate re-entry
+                        if "STOP LOSS" in exit_reason:
+                            self.trader.set_sl_cooldown(self.symbol)
+                        
+                        # ADAPTIVE LEARNING: Record trade outcome
+                        signals_used = existing_pos.get('signals_used', [])
+                        snapshot = existing_pos.get('snapshot')
+                        result = 'WIN' if 'TAKE PROFIT' in exit_reason else 'LOSS'
+                        
+                        # Get BTC 1h change for market condition check
+                        btc_change = None
+                        try:
+                            btc_df = self.data_manager.get_data('BTC/USDT', '1h', exchange=self.trader.exchange_name)
+                            if btc_df is not None and len(btc_df) >= 2:
+                                btc_change = (btc_df.iloc[-1]['close'] - btc_df.iloc[-2]['close']) / btc_df.iloc[-2]['close']
+                        except Exception:
+                            pass
+                        
+                        signal_tracker.record_trade(
+                            symbol=self.symbol,
+                            timeframe=self.timeframe,
+                            side=side,
+                            signals_used=signals_used,
+                            result=result,
+                            pnl_pct=pnl_pct,
+                            btc_change=btc_change,
+                            snapshot=snapshot
+                        )
+                        
+                        await self.trader.remove_position(self.symbol, timeframe=self.timeframe, exit_price=current_price, exit_reason=exit_reason)
+                        return
                     else:
-                        pnl_pct = ((entry_price - current_price) / entry_price) * 100 * leverage
-                    
-                    # USD P&L based on actual notional change (not multiplied by leverage again)
-                    notional = qty * entry_price
-                    pnl_usd = (pnl_pct / 100) * notional / leverage
-                    
-                    # Determine exit reason for notification
-                    exit_reason_label = "TP" if "TAKE PROFIT" in exit_reason else "SL" if "STOP LOSS" in exit_reason else exit_reason
-                    
-                    # Unified notification
-                    terminal_msg, telegram_msg = format_position_closed(
-                        symbol=self.symbol,
-                        timeframe=self.timeframe,
-                        side=side,
-                        entry_price=entry_price,
-                        exit_price=current_price,
-                        pnl=pnl_usd,
-                        pnl_pct=pnl_pct,
-                        reason=exit_reason_label,
-                        dry_run=self.trader.dry_run,
-                        exchange_name=self.trader.exchange_name
-                    )
-                    print(terminal_msg)
-                    await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange_name)
-                    
-                    # Set cooldown after STOP LOSS to prevent immediate re-entry
-                    if "STOP LOSS" in exit_reason:
-                        self.trader.set_sl_cooldown(self.symbol)
-                    
-                    # ADAPTIVE LEARNING: Record trade outcome
-                    signals_used = existing_pos.get('signals_used', [])
-                    snapshot = existing_pos.get('snapshot')
-                    result = 'WIN' if 'TAKE PROFIT' in exit_reason else 'LOSS'
-                    
-                    # Get BTC 1h change for market condition check
-                    btc_change = None
-                    try:
-                        btc_df = self.data_manager.get_data('BTC/USDT', '1h', exchange=self.trader.exchange_name)
-                        if btc_df is not None and len(btc_df) >= 2:
-                            btc_change = (btc_df.iloc[-1]['close'] - btc_df.iloc[-2]['close']) / btc_df.iloc[-2]['close']
-                    except Exception:
-                        pass
-                    
-                    signal_tracker.record_trade(
-                        symbol=self.symbol,
-                        timeframe=self.timeframe,
-                        side=side,
-                        signals_used=signals_used,
-                        result=result,
-                        pnl_pct=pnl_pct,
-                        btc_change=btc_change,
-                        snapshot=snapshot
-                    )
-                    
-                    await self.trader.remove_position(self.symbol, timeframe=self.timeframe, exit_price=current_price, exit_reason=exit_reason)
-                    return 
+                        # LIVE MODE: Rely on exchange state!
+                        # The exchange handles SL/TP via real orders. Wait for reconcile_positions to detect the closure.
+                        print(f"⏳ [{self.trader.exchange_name}] [{self.symbol}] Price crossed SL/TP internally. Waiting for exchange sync to confirm closure.")
+                        # Return to prevent further logic (like trailing SL updates) from running on a potentially closed position.
+                        return 
 
                 # 2.5 Check for Profit Lock-in & Dynamic TP Extension (v3.0)
                 # Proactively adjust SL/TP if profit threshold reached
@@ -1070,6 +1086,11 @@ async def main():
             # Since main loop waits for all bots to finish each cycle, any leftover reservations are leaks.
             balance_tracker.reset_reservations()
             
+            # -0.5. Fast Deep Sync (Before bot logic runs)
+            for ex_name, trader in traders.items():
+                try: await trader.reconcile_positions()
+                except: pass
+            
             # 0. Sync Server Time
             if curr_time - last_time_sync >= 3600:
                 print("⏲ Syncing server time for all exchanges...")
@@ -1175,9 +1196,17 @@ async def main():
                     if rm:
                         stop_trading, cb_reason = rm.check_circuit_breaker(current_bal)
                 
+                # Initialize CB throttle dict if not exists
+                if not hasattr(main, 'last_cb_alert'):
+                    main.last_cb_alert = {}
+                
                 if stop_trading:
                     print(f"🚨 [{ex_name}] CIRCUIT BREAKER: {cb_reason}")
-                    await send_telegram_message(f"🚨 [{ex_name}] CIRCUIT BREAKER: {cb_reason}", exchange_name=ex_name)
+                    
+                    last_alert_time = main.last_cb_alert.get(ex_name, 0)
+                    if curr_time - last_alert_time >= 7200:  # 7200 seconds = 2 hours
+                        await send_telegram_message(f"🚨 CIRCUIT BREAKER: {cb_reason} (Next reminder in 2h)", exchange_name=ex_name)
+                        main.last_cb_alert[ex_name] = curr_time
 
             # 3. Run Logic for all bots
             # SKIP unauthenticated exchanges to prevent pointless signal analysis/errors
@@ -1186,17 +1215,17 @@ async def main():
                 if not bot.running: continue
                 
                 ex_name = bot.trader.exchange_name
+                
+                # Check if this exchange tripped the circuit breaker
+                bot_stop_trading, _ = risk_managers.get(ex_name).check_circuit_breaker(balance_tracker.get_available(ex_name)) if risk_managers.get(ex_name) and balance_tracker.get_available(ex_name) > 0 else (False, "")
+
                 # Only run if it's paper trading OR authenticated live trading OR PUBLIC MODE (Task requirement)
                 # Public mode allowed: we just skip ordering logic inside run_step
-                active_tasks.append(bot.run_step())
+                active_tasks.append(bot.run_step(circuit_breaker_triggered=bot_stop_trading))
                 
             if active_tasks: 
                 await asyncio.gather(*active_tasks)
             
-            # 4. Fast Deep Sync
-            for ex_name, trader in traders.items():
-                try: await trader.reconcile_positions()
-                except: pass
             
             from config import HEARTBEAT_INTERVAL, FAST_HEARTBEAT_INTERVAL
             # Dynamic Sleep: Fast if no data update, Slow if data updated

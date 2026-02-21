@@ -131,17 +131,52 @@ Allows remote interaction with the bot instance.
 
 ---
 
-## 🩸 Lessons Learned & Bug History
+## 🩸 Lessons Learned & Technical Debt Log
 
 ### 1. Race Condition — `positions.json` Overwrite
+*   **Discovery**: Multiple bot instances or fast updates could lead to state corruption.
 *   **Solution**: Shared `Trader` Singleton + `asyncio.Lock` per Symbol ensures atomic writes.
 
-### 2. "Invisible" Algo Orders (Binance)
-*   **Solution**: Adapter merge logic to call `fapiPrivateGetOpenAlgoOrders` and combine results.
+### 2. The "Optimistic Deletion" Trap
+*   **Discovery**: Internal price checks often trigger faster than exchange settlement.
+*   **Impact**: Deleting local state before exchange confirmation leads to "Orphaned Orders".
+*   **Lesson**: **Never delete local state in LIVE mode until the exchange confirms closure.** The exchange is the only source of truth.
 
-### 3. Bybit V5 Category Missing
-*   **Solution**: Injected category into all Bybit adapter calls.
+### 3. The "Invisible" Algo Order Queue (Binance)
+*   **Discovery**: Binance REST API `fetch_order` often misses SL/TP (Algo) orders.
+*   **Impact**: Bot assumes the order is dead and enters an inconsistent state.
+*   **Lesson**: Implement a **Fallback Query Pattern**. Check `fapiPrivateGetOpenAlgoOrders` if standard fetch fails.
 
+### 4. Bulk Cancellation Filtering (Bybit & Binance)
+*   **Discovery**: Standard `cancel_all_orders` often ignores conditional/algo orders.
+*   **Impact**: Closing a position leaves live "Naked" SL/TP orders on the exchange.
+*   **Lesson**: Use **Multi-Queue Sweeping**. Binance: `fapiPrivateDeleteAlgoOpenOrders`. Bybit: Double call with `orderFilter='Order'` and `'StopOrder'`.
+
+### 5. Exchange Indexing Lag
+*   **Lesson**: Implement a 500ms **Graceful Sync Sleep** before querying history after a closure to ensure accurate PnL capture.
+
+### 6. Telegram "Authoritative Fetch"
+*   **Discovery**: Defaulting to local cache (`positions.json`) for Telegram `/status` led to stale/wrong information.
+*   **Lesson**: Manual user commands (buttons/slash commands) must **force a live exchange query** (`force_live=True`).
+
+### 7. Global Exchange Sync
+*   **Discovery**: The `/sync` command only reconciled the primary exchange, missing orphaned positions on secondary accounts.
+*   **Lesson**: Implement **Parallel Multi-Exchange Reconciliation**. Loop through all active `traders` to ensure total synchronization across the entire portfolio.
+
+---
+
+## 🏛 Strategic Architectural Decisions
+
+### 1. "Fast Deep Sync" Pattern
+*   **Decision**: Move `reconcile_positions()` to the very beginning of the main bot loop.
+*   **Rationale**: Prevents "Action on Stale Data". Synchronizing exchange reality *before* making trade decisions reduces race conditions.
+
+### 2. Data Freshness Transparency
+*   **Decision**: Label notifications with `[SYNCED]` or `[CACHED]`.
+*   **Rationale**: Reduces "reporting dissonance" and improves user confidence by being explicit about the data source.
+### 3. Authoritative Telegram Status
+*   **Decision**: Expanded detection logic to check `contracts`, `amount`, and `info.size`.
+*   **Rationale**: Bybit and Binance use different JSON keys for the "live" position size. Abstracting this in the status aggregator ensures no position is left behind just because of a naming convention.
 ---
 
 ## ⚙️ Operational Commands

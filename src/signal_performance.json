@@ -891,15 +891,738 @@
         "state_leverage": 0.0,
         "state_equity_ratio": 1.0
       }
+    },
+    {
+      "timestamp": "2026-02-20T22:16:07.718682",
+      "symbol": "ADA/USDT",
+      "timeframe": "2h",
+      "side": "BUY",
+      "signals": [
+        "EMA_9_cross_21_up",
+        "MACD_gt_signal",
+        "RSI_14_gt_50",
+        "Ichimoku_TK_Cross_Up",
+        "Price_Above_VWAP",
+        "RSI_Bullish_Div",
+        "MACD_Bullish_Div"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -0.4055,
+      "pnl_usdt": -0.159,
+      "entry_price": 0.28,
+      "exit_price": 0.2792,
+      "qty": 140.0,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": 1771599796566,
+      "exit_time": 1771600567718,
+      "sl_original": null,
+      "sl_final": 0.2758,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.7142857142857146,
+        "norm_RSI_14": 0.679640718562874,
+        "norm_RSI_21": 0.6262135922330092,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.047210983740388325,
+        "norm_Price_in_BB": 1.2834692100735134,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.2569389582601218,
+        "norm_ATR": 0.016851106639839023,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-20T22:25:25.419701",
+      "symbol": "DOT/USDT",
+      "timeframe": "30m",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "MACD_Bearish_Div",
+        "RSI_Bearish_Div",
+        "Price_gt_BB_Up"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -0.053,
+      "pnl_usdt": -0.005,
+      "entry_price": 1.345,
+      "exit_price": 1.3441,
+      "qty": 6.7,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": 1771599874548,
+      "exit_time": 1771601125419,
+      "sl_original": null,
+      "sl_final": 1.38535,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.7445008460236892,
+        "norm_RSI_14": 0.6625000000000004,
+        "norm_RSI_21": 0.6980108499095848,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.027585596935735427,
+        "norm_Price_in_BB": 1.2308443717637207,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.2594930053798658,
+        "norm_ATR": 0.00904240987228539,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-20T23:16:52.857045",
+      "symbol": "BCH/USDT:USDT",
+      "timeframe": "8h",
+      "side": "SELL",
+      "signals": [
+        "MACD_lt_signal",
+        "RSI_14_lt_50",
+        "Ichimoku_TK_Cross_Down",
+        "Price_Below_VWAP",
+        "breakout_below_support"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -9.427121102248005,
+      "pnl_usdt": null,
+      "entry_price": null,
+      "exit_price": null,
+      "qty": null,
+      "exit_reason": null,
+      "entry_time": null,
+      "exit_time": null,
+      "sl_original": null,
+      "sl_final": null,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.44099378881987455,
+        "norm_RSI_14": 0.33429394812680086,
+        "norm_RSI_21": 0.38029661016949134,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.04318198026339855,
+        "norm_Price_in_BB": -0.09480137513336839,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.23282942663245598,
+        "norm_ATR": 0.02032178347967825,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-20T23:16:52.859723",
+      "symbol": "BCH/USDT",
+      "timeframe": "8h",
+      "side": "SELL",
+      "signals": [
+        "MACD_lt_signal",
+        "RSI_14_lt_50",
+        "Ichimoku_TK_Cross_Down",
+        "Price_Below_VWAP",
+        "breakout_below_support"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -2.4782,
+      "pnl_usdt": -0.547,
+      "entry_price": 551.6,
+      "exit_price": 564.6,
+      "qty": 0.04,
+      "exit_reason": "STOP LOSS hit at 564.6",
+      "entry_time": 1771594338892,
+      "exit_time": 1771604212859,
+      "sl_original": null,
+      "sl_final": 559.874,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.44099378881987455,
+        "norm_RSI_14": 0.33429394812680086,
+        "norm_RSI_21": 0.38029661016949134,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.04318198026339855,
+        "norm_Price_in_BB": -0.09480137513336839,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.23282942663245598,
+        "norm_ATR": 0.02032178347967825,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-20T23:37:36.259484",
+      "symbol": "BCH/USDT:USDT",
+      "timeframe": "8h",
+      "side": "BUY",
+      "signals": [
+        "EMA_50_gt_200",
+        "Ichimoku_TK_Cross_Up",
+        "Price_Above_VWAP",
+        "Price_lt_BB_Low"
+      ],
+      "result": "WIN",
+      "pnl_pct": 15.852010067139153,
+      "pnl_usdt": null,
+      "entry_price": null,
+      "exit_price": null,
+      "qty": null,
+      "exit_reason": null,
+      "entry_time": null,
+      "exit_time": null,
+      "sl_original": null,
+      "sl_final": null,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.28571428571428453,
+        "norm_RSI_14": 0.44735682819383205,
+        "norm_RSI_21": 0.49987896393125164,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.04077296447970325,
+        "norm_Price_in_BB": -0.16929327566423766,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.34502112424625025,
+        "norm_ATR": 0.031766903465814775,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-20T23:37:36.261784",
+      "symbol": "BCH/USDT",
+      "timeframe": "8h",
+      "side": "BUY",
+      "signals": [
+        "EMA_50_gt_200",
+        "Ichimoku_TK_Cross_Up",
+        "Price_Above_VWAP",
+        "Price_lt_BB_Low"
+      ],
+      "result": "WIN",
+      "pnl_pct": 3.8406,
+      "pnl_usdt": 0.905,
+      "entry_price": 535.604,
+      "exit_price": 556.83,
+      "qty": 0.044,
+      "exit_reason": "TAKE PROFIT hit at 556.83",
+      "entry_time": 1771601732701,
+      "exit_time": 1771605456261,
+      "sl_original": null,
+      "sl_final": 527.57,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.28571428571428453,
+        "norm_RSI_14": 0.44735682819383205,
+        "norm_RSI_21": 0.49987896393125164,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.04077296447970325,
+        "norm_Price_in_BB": -0.16929327566423766,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.34502112424625025,
+        "norm_ATR": 0.031766903465814775,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T00:19:51.817370",
+      "symbol": "SOL/USDT:USDT",
+      "timeframe": "1d",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "RSI_14_lt_50",
+        "Ichimoku_TK_Cross_Down",
+        "Price_Below_VWAP"
+      ],
+      "result": "WIN",
+      "pnl_pct": 9.190992104680031,
+      "pnl_usdt": null,
+      "entry_price": null,
+      "exit_price": null,
+      "qty": null,
+      "exit_reason": null,
+      "entry_time": null,
+      "exit_time": null,
+      "sl_original": null,
+      "sl_final": null,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.5069191551347414,
+        "norm_RSI_14": 0.4490997229916898,
+        "norm_RSI_21": 0.3049787635677207,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.32222343794863245,
+        "norm_Price_in_BB": 0.4087051507147417,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.7388867657579626,
+        "norm_ATR": 0.06045386904761903,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T00:19:51.819838",
+      "symbol": "SOL/USDT",
+      "timeframe": "1d",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "RSI_14_lt_50",
+        "Ichimoku_TK_Cross_Down",
+        "Price_Below_VWAP"
+      ],
+      "result": "WIN",
+      "pnl_pct": 2.9455,
+      "pnl_usdt": 0.253,
+      "entry_price": 85.747,
+      "exit_price": 83.12,
+      "qty": 0.1,
+      "exit_reason": "TAKE PROFIT hit at 83.12",
+      "entry_time": 1771582351141,
+      "exit_time": 1771607991819,
+      "sl_original": null,
+      "sl_final": 87.033,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.5069191551347414,
+        "norm_RSI_14": 0.4490997229916898,
+        "norm_RSI_21": 0.3049787635677207,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.32222343794863245,
+        "norm_Price_in_BB": 0.4087051507147417,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.7388867657579626,
+        "norm_ATR": 0.06045386904761903,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T00:50:58.952632",
+      "symbol": "SOL/USDT",
+      "timeframe": "1d",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "RSI_14_lt_50",
+        "Ichimoku_TK_Cross_Down",
+        "Price_Below_VWAP"
+      ],
+      "result": "WIN",
+      "pnl_pct": 0.2962,
+      "pnl_usdt": 0.07,
+      "entry_price": 84.14,
+      "exit_price": 83.79,
+      "qty": 0.28,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": 1771608065161,
+      "exit_time": 1771609858952,
+      "sl_original": null,
+      "sl_final": 85.406,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.4427983539094649,
+        "norm_RSI_14": 0.41721611721611734,
+        "norm_RSI_21": 0.2917768694397691,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.32431737831837765,
+        "norm_Price_in_BB": 0.3559911392809626,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.7385632063709855,
+        "norm_ATR": 0.06218335343787695,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T00:50:59.456660",
+      "symbol": "SOL/USDT",
+      "timeframe": "1d",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "RSI_14_lt_50",
+        "Ichimoku_TK_Cross_Down",
+        "Price_Below_VWAP"
+      ],
+      "result": "WIN",
+      "pnl_pct": 0.4264,
+      "pnl_usdt": 0.072,
+      "entry_price": 84.24,
+      "exit_price": 83.78,
+      "qty": 0.2,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": 1771607985927,
+      "exit_time": 1771609859456,
+      "sl_original": null,
+      "sl_final": 85.509,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.4478827361563517,
+        "norm_RSI_14": 0.41967213114754115,
+        "norm_RSI_21": 0.29266242344181576,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.324060178133318,
+        "norm_Price_in_BB": 0.3593914944246539,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.7366093293193019,
+        "norm_ATR": 0.06251290877796901,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T00:50:59.621461",
+      "symbol": "UNI/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "RSI_7_overbought"
+      ],
+      "result": "WIN",
+      "pnl_pct": 0.6315,
+      "pnl_usdt": 0.057,
+      "entry_price": 3.462,
+      "exit_price": 3.436,
+      "qty": 2.6,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": 1771609120687,
+      "exit_time": 1771609859621,
+      "sl_original": null,
+      "sl_final": 3.566,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.7344632768361592,
+        "norm_RSI_14": 0.36082474226804157,
+        "norm_RSI_21": 0.38519637462235634,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.0867374232464661,
+        "norm_Price_in_BB": 0.3838964508799542,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.508892953932711,
+        "norm_ATR": 0.026217699040918033,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T09:04:19.599928",
+      "symbol": "BCH/USDT:USDT",
+      "timeframe": "2h",
+      "side": "BUY",
+      "signals": [
+        "EMA_50_gt_200",
+        "RSI_14_gt_50",
+        "Ichimoku_TK_Cross_Up",
+        "Vol_Spike"
+      ],
+      "result": "WIN",
+      "pnl_pct": 12.446115781380449,
+      "pnl_usdt": null,
+      "entry_price": null,
+      "exit_price": null,
+      "qty": null,
+      "exit_reason": null,
+      "entry_time": null,
+      "exit_time": null,
+      "sl_original": null,
+      "sl_final": null,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.43544303797468453,
+        "norm_RSI_14": 0.6641763167725074,
+        "norm_RSI_21": 0.4986804222648751,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.04585427768460771,
+        "norm_Price_in_BB": 0.5930337362707412,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.13508881498283368,
+        "norm_ATR": 0.016954062770795836,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T09:04:19.602647",
+      "symbol": "BCH/USDT",
+      "timeframe": "2h",
+      "side": "BUY",
+      "signals": [
+        "EMA_50_gt_200",
+        "RSI_14_gt_50",
+        "Ichimoku_TK_Cross_Up",
+        "Vol_Spike"
+      ],
+      "result": "WIN",
+      "pnl_pct": 2.9897,
+      "pnl_usdt": 0.706,
+      "entry_price": 548.862,
+      "exit_price": 565.94,
+      "qty": 0.043,
+      "exit_reason": "TAKE PROFIT hit at 565.94",
+      "entry_time": 1771605523393,
+      "exit_time": 1771639459602,
+      "sl_original": null,
+      "sl_final": 540.629,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.43544303797468453,
+        "norm_RSI_14": 0.6641763167725074,
+        "norm_RSI_21": 0.4986804222648751,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.04585427768460771,
+        "norm_Price_in_BB": 0.5930337362707412,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.13508881498283368,
+        "norm_ATR": 0.016954062770795836,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T10:35:28.307666",
+      "symbol": "NEAR/USDT",
+      "timeframe": "4h",
+      "side": "SELL",
+      "signals": [
+        "Stoch_Overbought",
+        "Ichimoku_TK_Cross_Down"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -0.1106,
+      "pnl_usdt": -0.01,
+      "entry_price": 1.065,
+      "exit_price": 1.0649,
+      "qty": 8.5,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": 1771635034966,
+      "exit_time": 1771644928307,
+      "sl_original": null,
+      "sl_final": 1.09695,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.900763358778628,
+        "norm_RSI_14": 0.6470028544243581,
+        "norm_RSI_21": 0.5278409090909092,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.07762277565323428,
+        "norm_Price_in_BB": 0.7860644092545547,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.5268509967618779,
+        "norm_ATR": 0.01977581956607605,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T16:19:10.784401",
+      "symbol": "ARB/USDT",
+      "timeframe": "30m",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "Price_gt_BB_Up"
+      ],
+      "result": "WIN",
+      "pnl_pct": 0.2648,
+      "pnl_usdt": 0.024,
+      "entry_price": 0.104,
+      "exit_price": 0.1036,
+      "qty": 88.0,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": 1771663906384,
+      "exit_time": 1771665550784,
+      "sl_original": null,
+      "sl_final": 0.10712,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.8148148148148131,
+        "norm_RSI_14": 0.8518518518518501,
+        "norm_RSI_21": 0.787878787878786,
+        "norm_MACD": 1.0,
+        "norm_BB_Width": 0.07100895544456874,
+        "norm_Price_in_BB": 1.1155441951391305,
+        "norm_Volume": 0.5991050718729322,
+        "norm_ADX": 0.340064230315664,
+        "norm_ATR": 0.010553536483086377,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T16:21:51.445143",
+      "symbol": "ARB/USDT",
+      "timeframe": "30m",
+      "side": "SELL",
+      "signals": [
+        "EMA_50_lt_200",
+        "Price_gt_BB_Up"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -0.2162,
+      "pnl_usdt": -0.02,
+      "entry_price": 0.104,
+      "exit_price": 0.1041,
+      "qty": 87.7,
+      "exit_reason": "Exchange Sync (Closed outside bot)",
+      "entry_time": 1771664170234,
+      "exit_time": 1771665711445,
+      "sl_original": null,
+      "sl_final": 0.10712,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.8202054794520555,
+        "norm_RSI_14": 0.8399545970488077,
+        "norm_RSI_21": 0.7867435158501442,
+        "norm_MACD": 1.0,
+        "norm_BB_Width": 0.07325003691390941,
+        "norm_Price_in_BB": 1.1444789771593196,
+        "norm_Volume": 0.6028445116593429,
+        "norm_ADX": 0.3629402183499711,
+        "norm_ATR": 0.0102677700688233,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T20:55:28.893885",
+      "symbol": "BNB/USDT:USDT",
+      "timeframe": "30m",
+      "side": "SELL",
+      "signals": [
+        "EMA_9_cross_21_down",
+        "MACD_lt_signal",
+        "breakout_below_support",
+        "bounce_from_resistance",
+        "Price_Below_VWAP"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -9.1470625604738,
+      "pnl_usdt": null,
+      "entry_price": null,
+      "exit_price": null,
+      "qty": null,
+      "exit_reason": null,
+      "entry_time": null,
+      "exit_time": null,
+      "sl_original": null,
+      "sl_final": null,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.09119999999999977,
+        "norm_RSI_14": 0.3138493944181144,
+        "norm_RSI_21": 0.4398868458274395,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.01637990262110709,
+        "norm_Price_in_BB": -0.07220476749502369,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.29980369383991745,
+        "norm_ATR": 0.003950342599219202,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
+    },
+    {
+      "timestamp": "2026-02-21T20:55:28.896952",
+      "symbol": "BNB/USDT",
+      "timeframe": "30m",
+      "side": "SELL",
+      "signals": [
+        "EMA_9_cross_21_down",
+        "MACD_lt_signal",
+        "breakout_below_support",
+        "bounce_from_resistance",
+        "Price_Below_VWAP"
+      ],
+      "result": "LOSS",
+      "pnl_pct": -3.1709,
+      "pnl_usdt": -0.195,
+      "entry_price": 613.902,
+      "exit_price": 632.62,
+      "qty": 0.01,
+      "exit_reason": "STOP LOSS hit at 632.62",
+      "entry_time": 1771594486263,
+      "exit_time": 1771682128896,
+      "sl_original": null,
+      "sl_final": 632.32,
+      "sl_move_count": 0,
+      "sl_tightened": false,
+      "max_pnl_pct": 0,
+      "snapshot": {
+        "norm_RSI_7": 0.09119999999999977,
+        "norm_RSI_14": 0.3138493944181144,
+        "norm_RSI_21": 0.4398868458274395,
+        "norm_MACD": NaN,
+        "norm_BB_Width": 0.01637990262110709,
+        "norm_Price_in_BB": -0.07220476749502369,
+        "norm_Volume": NaN,
+        "norm_ADX": 0.29980369383991745,
+        "norm_ATR": 0.003950342599219202,
+        "state_pnl_pct": 0.0,
+        "state_leverage": 0.0,
+        "state_equity_ratio": 1.0
+      }
     }
   ],
   "signal_stats": {
     "EMA_50_gt_200": {
-      "total": 1,
-      "wins": 0,
+      "total": 5,
+      "wins": 4,
       "losses": 1,
       "recent_results": [
-        0
+        0,
+        1,
+        1,
+        1,
+        1
       ]
     },
     "EMA_9_gt_21": {
@@ -911,10 +1634,18 @@
       ]
     },
     "EMA_50_lt_200": {
-      "total": 5,
-      "wins": 4,
-      "losses": 1,
+      "total": 13,
+      "wins": 10,
+      "losses": 3,
       "recent_results": [
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        1,
+        1,
         1,
         1,
         1,
@@ -934,13 +1665,17 @@
       ]
     },
     "MACD_lt_signal": {
-      "total": 3,
+      "total": 7,
       "wins": 3,
-      "losses": 0,
+      "losses": 4,
       "recent_results": [
         1,
         1,
-        1
+        1,
+        0,
+        0,
+        0,
+        0
       ]
     },
     "RSI_7_lt_50": {
@@ -1048,11 +1783,14 @@
       ]
     },
     "Price_gt_BB_Up": {
-      "total": 1,
-      "wins": 1,
-      "losses": 0,
+      "total": 4,
+      "wins": 2,
+      "losses": 2,
       "recent_results": [
-        1
+        1,
+        0,
+        1,
+        0
       ]
     },
     "manual_sync": {
@@ -1078,24 +1816,6 @@
       ]
     },
     "MACD_Bearish_Div": {
-      "total": 2,
-      "wins": 2,
-      "losses": 0,
-      "recent_results": [
-        1,
-        1
-      ]
-    },
-    "RSI_14_lt_50": {
-      "total": 2,
-      "wins": 2,
-      "losses": 0,
-      "recent_results": [
-        1,
-        1
-      ]
-    },
-    "Ichimoku_TK_Cross_Down": {
       "total": 3,
       "wins": 2,
       "losses": 1,
@@ -1105,19 +1825,60 @@
         0
       ]
     },
-    "Price_Below_VWAP": {
-      "total": 1,
-      "wins": 0,
-      "losses": 1,
+    "RSI_14_lt_50": {
+      "total": 8,
+      "wins": 6,
+      "losses": 2,
       "recent_results": [
+        1,
+        1,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "Ichimoku_TK_Cross_Down": {
+      "total": 10,
+      "wins": 6,
+      "losses": 4,
+      "recent_results": [
+        1,
+        1,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        0
+      ]
+    },
+    "Price_Below_VWAP": {
+      "total": 9,
+      "wins": 4,
+      "losses": 5,
+      "recent_results": [
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
         0
       ]
     },
     "Stoch_Overbought": {
-      "total": 1,
+      "total": 2,
       "wins": 0,
-      "losses": 1,
+      "losses": 2,
       "recent_results": [
+        0,
         0
       ]
     },
@@ -1128,6 +1889,133 @@
       "recent_results": [
         1,
         1
+      ]
+    },
+    "EMA_9_cross_21_up": {
+      "total": 1,
+      "wins": 0,
+      "losses": 1,
+      "recent_results": [
+        0
+      ]
+    },
+    "MACD_gt_signal": {
+      "total": 1,
+      "wins": 0,
+      "losses": 1,
+      "recent_results": [
+        0
+      ]
+    },
+    "RSI_14_gt_50": {
+      "total": 3,
+      "wins": 2,
+      "losses": 1,
+      "recent_results": [
+        0,
+        1,
+        1
+      ]
+    },
+    "Ichimoku_TK_Cross_Up": {
+      "total": 5,
+      "wins": 4,
+      "losses": 1,
+      "recent_results": [
+        0,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    "Price_Above_VWAP": {
+      "total": 3,
+      "wins": 2,
+      "losses": 1,
+      "recent_results": [
+        0,
+        1,
+        1
+      ]
+    },
+    "RSI_Bullish_Div": {
+      "total": 1,
+      "wins": 0,
+      "losses": 1,
+      "recent_results": [
+        0
+      ]
+    },
+    "MACD_Bullish_Div": {
+      "total": 1,
+      "wins": 0,
+      "losses": 1,
+      "recent_results": [
+        0
+      ]
+    },
+    "RSI_Bearish_Div": {
+      "total": 1,
+      "wins": 0,
+      "losses": 1,
+      "recent_results": [
+        0
+      ]
+    },
+    "breakout_below_support": {
+      "total": 4,
+      "wins": 0,
+      "losses": 4,
+      "recent_results": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "Price_lt_BB_Low": {
+      "total": 2,
+      "wins": 2,
+      "losses": 0,
+      "recent_results": [
+        1,
+        1
+      ]
+    },
+    "RSI_7_overbought": {
+      "total": 1,
+      "wins": 1,
+      "losses": 0,
+      "recent_results": [
+        1
+      ]
+    },
+    "Vol_Spike": {
+      "total": 2,
+      "wins": 2,
+      "losses": 0,
+      "recent_results": [
+        1,
+        1
+      ]
+    },
+    "EMA_9_cross_21_down": {
+      "total": 2,
+      "wins": 0,
+      "losses": 2,
+      "recent_results": [
+        0,
+        0
+      ]
+    },
+    "bounce_from_resistance": {
+      "total": 2,
+      "wins": 0,
+      "losses": 2,
+      "recent_results": [
+        0,
+        0
       ]
     }
   }
