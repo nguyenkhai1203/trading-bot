@@ -208,12 +208,12 @@ def format_pending_order(
     mode = get_mode_label(dry_run)
     ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     terminal = (
-        f"{ex_prefix}⚪ PENDING | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
+        f"⚪ PENDING | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}"
     )
     
     telegram = (
-        f"{ex_prefix}{mode} | ⚪ PENDING\n"
+        f"{mode} | ⚪ PENDING\n"
         f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}\n"
@@ -255,7 +255,7 @@ def format_position_filled(
     )
     
     telegram = (
-        f"{ex_prefix}{mode} | ⚪ FILLED\n"
+        f"{mode} | ⚪ FILLED\n"
         f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label} ({int(score*100) if score else 0}%)\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Size: {format_size(size, symbol)} {base_currency} (${notional:.0f})\n"
@@ -310,7 +310,7 @@ def format_position_closed(
     )
     
     telegram_parts = [
-        f"{ex_prefix}{mode} | {status_emoji} {reason_label}",
+        f"{mode} | {status_emoji} {reason_label}",
         f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}",
         f"Entry: {format_price(entry_price)} → Exit: {format_price(exit_price)}",
         f"PnL: {format_pnl(pnl, pnl_pct)}"
@@ -349,7 +349,7 @@ def format_order_cancelled(
     terminal = f"{ex_prefix}❌ [{symbol} {timeframe}] CANCELLED | Reason: {reason}"
     
     telegram = (
-        f"{ex_prefix}{mode} | ❌ CANCELLED\n"
+        f"{mode} | ❌ CANCELLED\n"
         f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Reason: {reason}"
@@ -376,7 +376,8 @@ def format_status_update(
     positions: list,
     total_pnl: float,
     total_pnl_pct: float,
-    exchange_name: Optional[str] = None
+    exchange_name: Optional[str] = None,
+    is_live_sync: bool = True
 ) -> Tuple[str, str]:
     """
     Format periodic status update.
@@ -397,15 +398,15 @@ def format_status_update(
     # Terminal summary
     status_icons = f"{profit_count}🟢 {loss_count}🔴 {neutral_count}⚪" if active_count > 0 else "None"
     ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
+    sync_tag = "[SYNCED]" if is_live_sync else "[LOCAL CACHE]"
     terminal = (
-        f"{ex_prefix}📊 [STATUS] {active_count} active | "
+        f"{ex_prefix}📊 {sync_tag} [STATUS] {active_count} active | "
         f"PnL: {format_pnl(total_pnl, total_pnl_pct)} | {status_icons}"
     )
     
     # Telegram detailed
-    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     telegram_parts = [
-        f"{ex_prefix}📊 POSITION STATUS UPDATE\n",
+        f"📊 POSITION STATUS UPDATE {sync_tag}\n",
         f"Active: {active_count} positions",
         f"Total PnL: {format_pnl(total_pnl, total_pnl_pct)}\n"
     ]

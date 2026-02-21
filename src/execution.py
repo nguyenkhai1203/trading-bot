@@ -1390,6 +1390,32 @@ class Trader:
                 sl_tightened=pos.get('sl_tightened', False),
                 max_pnl_pct=pos.get('max_pnl_pct', 0),
             )
+            # Notify Telegram if closed outside bot (Sync)
+            # We only notify here if `exit_reason` contains "Sync" to avoid duplicate notifications 
+            # for bot-initiated closes which already notify in bot.py
+            if exit_reason and "Sync" in exit_reason:
+                from notification import send_telegram_message, format_position_closed
+                
+                # Use format_position_closed for consistent formatting
+                terminal_msg, telegram_msg = format_position_closed(
+                    symbol=symbol,
+                    timeframe=pos.get('timeframe', '1h'),
+                    side=side,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    reason="EXCHANGE SYNC (CLOSED)",
+                    entry_time=pos.get('timestamp'),
+                    exit_time=exit_ts,
+                    dry_run=self.dry_run,
+                    exchange_name=self.exchange_name
+                )
+                print(f"🔄 {terminal_msg}")
+                # Ensure we don't block execution thread
+                import asyncio
+                asyncio.create_task(send_telegram_message(telegram_msg, exchange_name=self.exchange_name))
+
         except Exception as e:
             self.logger.warning(f"Failed to record trade in signal_tracker: {e}")
 
@@ -2276,12 +2302,15 @@ class Trader:
                 if status == 'filled' and not ex_match:
                     if fetch_success:
                         self.logger.info(f"[SYNC] Position {pos_key} no longer on exchange. Logging and removing.")
-                        
                         # Determine exit price: prioritize actual fill from exchange (Issue 3)
                         exit_price = 0
                         side = pos.get('side')
                         try:
                             # 1. Try to fetch recent trades for this symbol
+                            # Give the exchange a tiny grace period to index the trade if it just closed
+                            import asyncio
+                            await asyncio.sleep(0.5)
+                            
                             # Only look for trades since the position's entry timestamp (reduced window)
                             since = pos.get('timestamp')
                             recent_trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
@@ -2314,6 +2343,19 @@ class Trader:
                             self.logger.warning(f"[SYNC] Failed to fetch actual fill for {symbol}: {e}")
                             # Final fallback
                             exit_price = pos.get('entry_price', 0)
+                        
+                        # Apply SL Cooldown if this was a loss
+                        if exit_price > 0 and pos.get('entry_price', 0) > 0:
+                            is_loss = False
+                            if side == 'BUY' and exit_price < pos.get('entry_price'):
+                                is_loss = True
+                            elif side == 'SELL' and exit_price > pos.get('entry_price'):
+                                is_loss = True
+                                
+                            if is_loss:
+                                self.logger.info(f"[{symbol}] Sync detected loss closure. Applying SL Cooldown.")
+                                print(f"🛡️ [{self.exchange_name}] [{symbol}] Applying SL Cooldown after external closure.")
+                                self.set_sl_cooldown(symbol)
                         
                         await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Closed outside bot)")
                         del self.active_positions[pos_key]
@@ -2603,7 +2645,14 @@ class Trader:
                     is_conditional = 'STOP' in o_type or 'TAKE' in o_type or o.get('algoType') in ('STOP_LOSS', 'TAKE_PROFIT')
                     
                     if is_conditional and o_id not in managed_ids:
-                        self.logger.warning(f"🧹 [REAPER] Cancelling orphaned {o_type} order {o_id} for {o_symbol}")
+                        # Throttle terminal output to avoid spam
+                        import time
+                        current_sec = time.time()
+                        if not hasattr(self, '_last_reaper_log') or current_sec - getattr(self, '_last_reaper_log', 0) > 60:
+                            print(f"🧹 [{self.exchange_name}] [REAPER] Cleaning orphaned conditional orders...")
+                            self._last_reaper_log = current_sec
+                            
+                        self.logger.info(f"🧹 [REAPER] Cancelling orphaned {o_type} order {o_id} for {o_symbol}")
                         self._debug_log('reaper:orphan_found', {'id': o_id, 'type': o_type, 'symbol': o_symbol})
                         try:
                             # Use adapter's cancel_order which handles Standard/Algo fallback
@@ -2614,7 +2663,7 @@ class Trader:
                             # Rate limit protection: Increased to 0.5s + Batch limit
                             await asyncio.sleep(0.5)
                         except Exception as e:
-                            self.logger.warning(f"[REAPER] Failed to cancel {o_id}: {e}")
+                            self.logger.info(f"[REAPER] Failed to cancel {o_id}: {e}")
 
         return summary
 
