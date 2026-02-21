@@ -181,14 +181,26 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         """Cancel ALL orders for a symbol (Standard + Conditional) on Bybit V5."""
         self.logger.info(f"[Bybit] Purging all orders for {symbol}...")
         try:
-            # Bybit V5 cancelAll with category: linear should cancel both standard and conditional
-            # depending on CCXT implementation and account type.
-            # We explicitly pass category to be safe.
-            params = {'category': 'linear'}
-            await self._execute_with_timestamp_retry(self.exchange.cancel_all_orders, symbol, params=params)
-            self.logger.info(f"[Bybit] All orders purged for {symbol}")
+            # Bybit V5 requires explicit orderFilter to cancel conditional orders
+            # 1. Cancel Standard Orders
+            try:
+                await self._execute_with_timestamp_retry(
+                    self.exchange.cancel_all_orders, symbol, params={'category': 'linear', 'orderFilter': 'Order'}
+                )
+            except Exception as e1:
+                pass # Ignore if no standard orders exist
+
+            # 2. Cancel Conditional Orders (SL/TP)
+            try:
+                await self._execute_with_timestamp_retry(
+                    self.exchange.cancel_all_orders, symbol, params={'category': 'linear', 'orderFilter': 'StopOrder'}
+                )
+            except Exception as e2:
+                pass # Ignore if no conditional orders exist
+
+            self.logger.info(f"[Bybit] All orders (Standard + Conditional) purged for {symbol}")
         except Exception as e:
-            self.logger.warning(f"[Bybit] Cancel all orders failed or nothing to cancel: {e}")
+            self.logger.warning(f"[Bybit] Cancel all orders failed: {e}")
 
     async def set_leverage(self, symbol: str, leverage: int, params: Dict = {}):
         """Set leverage for a symbol (V5 linear)."""

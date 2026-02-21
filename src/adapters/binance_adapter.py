@@ -234,28 +234,15 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
 
         # 2. Cancel algo orders (Stop Loss / Take Profit)
         try:
-            # Fetch open algo orders
-            open_algo = await self._execute_with_timestamp_retry(
-                self.exchange.fapiPrivateGetOpenAlgoOrders,
+            await self._execute_with_timestamp_retry(
+                self.exchange.fapiPrivateDeleteAlgoOpenOrders,
                 {'symbol': api_symbol}
             )
-            
-            if open_algo:
-                for algo in open_algo:
-                    algo_id = algo.get('algoId')
-                    self.logger.info(f"[Binance] Purging algo order {algo_id} for {symbol}")
-                    try:
-                        await self._execute_with_timestamp_retry(
-                            self.exchange.fapiPrivateDeleteAlgoOrder,
-                            {'symbol': api_symbol, 'algoId': algo_id}
-                        )
-                    except Exception as inner_e:
-                        self.logger.warning(f"[Binance] Failed to cancel algo {algo_id}: {inner_e}")
-            else:
-                self.logger.debug(f"[Binance] No algo orders found for {symbol}")
-                
+            self.logger.info(f"[Binance] Algo orders cancelled for {symbol}")
         except Exception as e:
-            self.logger.warning(f"[Binance] Failed to fetch/cancel algo orders for {symbol}: {e}")
+            err_str = str(e).lower()
+            if "not found" not in err_str and "2011" not in err_str:
+                self.logger.warning(f"[Binance] Failed to cancel algo orders for {symbol}: {e}")
 
     async def set_leverage(self, symbol: str, leverage: int, params: Dict = {}):
         """Set leverage using signed POST."""
@@ -343,13 +330,33 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             return None
 
     async def fetch_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
-        """Fetch a specific order."""
-        return await self._execute_with_timestamp_retry(
-            self.exchange.fetch_order,
-            order_id,
-            symbol,
-            params
-        )
+        """Fetch a specific order, checking both standard and algo endpoints."""
+        try:
+            return await self._execute_with_timestamp_retry(
+                self.exchange.fetch_order,
+                order_id,
+                symbol,
+                params
+            )
+        except Exception as e:
+            err_str = str(e).lower()
+            if "not found" in err_str or "does not exist" in err_str or "2013" in err_str or "orderid" in err_str:
+                self.logger.info(f"[Binance] Order {order_id} not found in standard queue. Checking Algo orders...")
+                try:
+                    algo_params = {'symbol': self._get_api_symbol(symbol)} if symbol else {}
+                    open_algos = await self._execute_with_timestamp_retry(
+                        self.exchange.fapiPrivateGetOpenAlgoOrders, algo_params
+                    )
+                    if isinstance(open_algos, list):
+                        for algo in open_algos:
+                            if str(algo.get('algoId')) == str(order_id) or str(algo.get('clientOrderId')) == str(order_id):
+                                algo['is_algo'] = True
+                                algo['id'] = str(algo.get('algoId', order_id))
+                                algo['status'] = 'open' if algo.get('algoStatus') == 'WORKING' else algo.get('algoStatus', 'open').lower()
+                                return algo
+                except Exception as algo_e:
+                    self.logger.warning(f"[Binance] Algo check failed for {order_id}: {algo_e}")
+            raise e
 
     async def place_stop_orders(
         self, symbol: str, side: str, qty: float,
