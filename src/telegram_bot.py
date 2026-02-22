@@ -378,6 +378,28 @@ async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         msg = f"❌ Sync failed: {e}"
     await update.message.reply_text(msg)
+async def reset_peak_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually reset peak balance to current balance for all traders."""
+    try:
+        from config import RISK_PER_TRADE, LEVERAGE
+        from risk_manager import RiskManager
+        results = []
+        for name, t in traders.items():
+            # Get current balance from exchange or simulated
+            try:
+                bal_data = await t.exchange.fetch_balance()
+                current_bal = float(bal_data.get('total', {}).get('USDT', 0) or bal_data.get('free', {}).get('USDT', 0) or 0)
+            except:
+                current_bal = 1000 # fallback
+                
+            rm = RiskManager(risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE)
+            msg = rm.reset_peak(current_bal)
+            results.append(f"🏦 {name}: {msg}")
+            
+        await update.message.reply_text("\n".join(results))
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to reset peak: {e}")
+
 async def optimize_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Trigger global optimization and brain training."""
     await update.message.reply_text("🚀 Starting Global Optimization & Neural Brain Training...\n_This may take a few minutes._", parse_mode='Markdown')
@@ -458,6 +480,7 @@ def main():
         app.add_handler(CommandHandler("sync", sync_cmd))
         app.add_handler(CommandHandler("summary", summary_cmd))
         app.add_handler(CommandHandler("optimize", optimize_cmd))
+        app.add_handler(CommandHandler("reset_peak", reset_peak_cmd))
         app.add_handler(CallbackQueryHandler(button_handler))
         app.add_error_handler(error_handler)
         

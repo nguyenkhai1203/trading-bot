@@ -42,6 +42,12 @@ class RiskManager:
         except Exception:
             pass
 
+    def reset_peak(self, current_balance):
+        """Force reset peak to current balance (use after clearing data)."""
+        self.peak_balance = current_balance
+        self._save_daily_config()
+        return f"Peak reset to {current_balance}"
+
     def check_circuit_breaker(self, current_balance):
         """
         Returns: True if trading should STOP, False otherwise.
