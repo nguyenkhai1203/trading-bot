@@ -1,3 +1,5 @@
+import json
+import os
 from datetime import datetime
 
 class RiskManager:
@@ -7,9 +9,38 @@ class RiskManager:
         self.max_drawdown_pct = max_drawdown_pct
         self.daily_loss_limit_pct = daily_loss_limit_pct
         
+        self.config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'daily_config.json')
         self.starting_balance_day = None
         self.peak_balance = 0
         self._last_reset_date = None  # Track daily reset
+        self._load_daily_config()
+
+    def _load_daily_config(self):
+        """Load daily balance and reset date from file."""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r') as f:
+                    data = json.load(f)
+                    self.starting_balance_day = data.get('starting_balance_day')
+                    self._last_reset_date = data.get('last_reset_date')
+                    if self._last_reset_date:
+                        self._last_reset_date = datetime.strptime(self._last_reset_date, '%Y-%m-%d').date()
+                    self.peak_balance = data.get('peak_balance', 0)
+            except Exception:
+                pass
+
+    def _save_daily_config(self):
+        """Save daily balance and reset date to file."""
+        try:
+            data = {
+                'starting_balance_day': self.starting_balance_day,
+                'last_reset_date': str(self._last_reset_date) if self._last_reset_date else None,
+                'peak_balance': self.peak_balance
+            }
+            with open(self.config_file, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception:
+            pass
 
     def check_circuit_breaker(self, current_balance):
         """
@@ -21,14 +52,17 @@ class RiskManager:
         if self._last_reset_date != today:
             self.starting_balance_day = current_balance
             self._last_reset_date = today
+            self._save_daily_config()
         
         # Init peak tracker if needed
         if self.peak_balance == 0:
             self.peak_balance = current_balance
+            self._save_daily_config()
             
         # Update Peak
         if current_balance > self.peak_balance:
             self.peak_balance = current_balance
+            self._save_daily_config()
             
         # 1. Max Drawdown Check (from Peak)
         if self.peak_balance > 0:

@@ -27,6 +27,7 @@ from config import BINANCE_API_KEY, BINANCE_API_SECRET, DRY_RUN
 from execution import Trader
 from data_manager import MarketDataManager
 from analyzer import run_global_optimization
+from notification import format_position_v2, format_portfolio_update_v2
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -60,247 +61,241 @@ async def close():
         pass
 
 # ============== STATUS MESSAGE ==============
-async def get_status_message(force_live: bool = False) -> str:
-    """Generate authoritative status message by fetching live data from exchanges."""
+# ============== STATUS MESSAGE ==============
+async def get_total_equity() -> float:
+    """Calculate total equity across all exchanges+local history."""
+    total = 1000 # initial seed from bot.py logic
+    
+    # 1. Closed trades PnL
+    perf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_performance.json')
+    if os.path.exists(perf_file):
+        try:
+            with open(perf_file, 'r') as f:
+                data = json.load(f)
+            trades = data.get('trades', [])
+            total += sum(float(t.get('pnl_usdt', 0) or 0) for t in trades)
+        except: pass
+    
+    # 2. Unrealized PnL and account balances if possible
+    for ex_name, t in traders.items():
+        # Account balance (USDT)
+        try:
+            bal = await t.exchange.fetch_balance()
+            total_usdt = float(bal.get('total', {}).get('USDT', 0) or bal.get('free', {}).get('USDT', 0) or 0)
+            # If we are in dry run, we use the initial balance + realized, but what about active positions?
+            # get_current_balance in bot.py adds unrealized to dry-run balance.
+            if t.dry_run:
+                # In dry run, we already added realized to 'total' above. 
+                # Now add unrealized from memory.
+                for pos in t.active_positions.values():
+                    if pos.get('status') == 'filled':
+                        # need live price
+                        sym = pos.get('symbol')
+                        ticker = await data_manager.fetch_ticker(sym, exchange=ex_name)
+                        if ticker:
+                            cur = float(ticker['last'])
+                            entry = float(pos.get('entry_price', cur))
+                            qty = float(pos.get('qty', 0))
+                            side = pos.get('side', 'BUY').upper()
+                            unrealized = (cur - entry) * qty if side in ['BUY', 'LONG'] else (entry - cur) * qty
+                            total += unrealized
+            else:
+                # Live mode: fetch_balance 'total' usually includes unrealized pnl on most exchanges (e.g. Bybit Unified)
+                total += total_usdt
+        except: pass
+        
+    return total
+
+async def get_status_message(force_live: bool = False, is_portfolio: bool = False) -> str:
+    """Generate authoritative status message or Portfolio Update in BOT STATUS v2 style."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     positions_file = os.path.join(script_dir, 'positions.json')
     
-    # 1. Load local metadata Draft
+    # Load local metadata for fallback/enrichment
     local_data = {}
     try:
         if os.path.exists(positions_file) and os.path.getsize(positions_file) > 0:
             with open(positions_file, 'r', encoding='utf-8') as f:
-                disk_data = json.load(f)
-                # Handle both formats (flat or nested)
-                if 'active_positions' in disk_data:
-                    local_data = disk_data
-                else:
-                    local_data = {'active_positions': disk_data}
-    except Exception as e:
-        logging.error(f"Failed to load positions.json: {e}")
+                local_data = json.load(f)
+                if 'active_positions' not in local_data:
+                    local_data = {'active_positions': local_data, 'pending_orders': {}}
+    except: pass
 
     local_active = local_data.get('active_positions', {})
     local_pending = local_data.get('pending_orders', {})
-    
     last_sync = local_data.get('last_sync', 0)
     use_cache = not force_live and (time.time() - last_sync < 60)
 
-    now = datetime.now().strftime('%d/%m %H:%M')
-    cache_tag = " (CACHED)" if use_cache else ""
-    lines = [f"📊 *BOT STATUS v2*{cache_tag} - {now}", ""]
+    # 1. Calculate Portfolio Data
+    total_balance = await get_total_equity()
     
-    # 2. Fetch LIVE data from all adapters
-    is_virtual_any = False
-    is_live_any = False
+    # Get daily start from RiskManager's persistent file
+    daily_config_file = os.path.join(script_dir, 'daily_config.json')
+    starting_balance = total_balance
+    if os.path.exists(daily_config_file):
+        try:
+            with open(daily_config_file, 'r') as f:
+                d_data = json.load(f)
+                starting_balance = d_data.get('starting_balance_day', total_balance)
+        except: pass
+    
+    daily_pnl_pct = ((total_balance - starting_balance) / starting_balance * 100) if starting_balance > 0 else 0
+    
+    # 2. Gather Position Data grouped by Exchange
+    exchanges_payload = {}
+    total_active = 0
+    total_pending = 0
     
     for ex_name, adapter in data_manager.adapters.items():
-        ex_name = ex_name.upper()
-        # Get corresponding trader for internal helper methods
-        current_trader = traders.get(ex_name, trader)
+        ex_name_up = ex_name.upper()
+        current_trader = traders.get(ex_name_up)
+        if not current_trader: continue
         
-        # Detect Public Mode
-        is_public = not adapter.exchange.apiKey or getattr(adapter, 'is_public_only', False)
-        if is_public:
-            is_virtual_any = True
-            header = f"🏦 *{ex_name}* (VIRTUAL)"
+        exchanges_payload[ex_name_up] = {'active': [], 'pending': []}
+        
+        # Determine positions and orders
+        live_pos_list = []
+        pending_list = []
+        
+        if use_cache or getattr(current_trader, 'dry_run', False):
+            # Use local data for dry run or cached
+            prefix = f"{ex_name_up}_"
+            for k, p in local_active.items():
+                if k.startswith(prefix) or (ex_name_up == 'BINANCE' and not k.startswith(('BINANCE_', 'BYBIT_'))):
+                    status = str(p.get('status', '')).lower()
+                    if status in ['filled', 'active']:
+                        live_pos_list.append(p)
+                    elif status == 'pending':
+                        pending_list.append(p)
+            for k, o in local_pending.items():
+                if k.startswith(prefix):
+                    pending_list.append(o)
         else:
-            is_live_any = True
-            header = f"🏦 *{ex_name}*"
+            # Live authoritative fetch
+            try:
+                raw_p = await adapter.fetch_positions()
+                live_pos_list = [p for p in raw_p if abs(float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('size', 0))) > 0]
+                raw_o = await adapter.fetch_open_orders()
+                pending_list = [o for o in raw_o if not o.get('reduceOnly')]
+            except: pass
+
+        # Format and append ACTIVE
+        for p in live_pos_list:
+            sym = p.get('symbol')
+            # Enrichment
+            ticker = await data_manager.fetch_ticker(sym, exchange=ex_name_up)
+            cur = float(ticker['last']) if ticker else float(p.get('entryPrice') or 0)
+            entry = float(p.get('entryPrice') or p.get('entry_price') or 0)
+            qty = float(p.get('contracts') or p.get('qty') or p.get('amount') or 0)
+            lev = int(p.get('leverage') or 1)
+            side = p.get('side', 'BUY').upper()
             
-        lines.append(header)
-        
-        try:
-            live_positions = {}
-            pending_entries = []
+            # PnL calc
+            if 'unrealizedPnl' in p and p['unrealizedPnl'] is not None:
+                pnl_usd = float(p['unrealizedPnl'])
+                roe = (pnl_usd / ((qty * entry) / lev) * 100) if (qty * entry) > 0 else 0
+            else:
+                pnl_usd = (cur - entry) * qty if side in ['BUY', 'LONG'] else (entry - cur) * qty
+                roe = ((cur - entry) / entry * 100 * lev) if entry > 0 else 0
+                if side in ['SELL', 'SHORT']: roe = -roe
             
-            if is_public or use_cache:
-                # --- PUBLIC/CACHED MODE: Use Local Data as Source of Truth ---
-                prefix = f"{ex_name}_"
-                seen_order_ids = set()
-                
-                # 1. Process active_positions
+            # SL/TP fallback to local
+            sl = float(p.get('stopLoss') or p.get('sl') or 0)
+            tp = float(p.get('takeProfit') or p.get('tp') or 0)
+            if sl == 0 or tp == 0 or lev <= 1:
+                norm_sym = current_trader._normalize_symbol(sym)
+                prefix = f"{ex_name_up}_"
+                potential_matches = []
                 for l_key, l_pos in local_active.items():
-                    # Match by prefix OR by raw symbol if it's the current exchange's style (and no prefix exists)
+                    l_sym = l_pos.get('symbol', '')
                     has_any_prefix = l_key.startswith(('BINANCE_', 'BYBIT_'))
-                    is_match = l_key.startswith(prefix) or (not has_any_prefix and ex_name == 'BINANCE')
-                    if not is_match: continue
+                    is_ex_match = l_key.startswith(prefix) or (not has_any_prefix and ex_name_up == 'BINANCE')
                     
-                    status = str(l_pos.get('status', '')).lower()
-                    if status in ['closed', 'cancelled']: continue
-                    
-                    qty = float(l_pos.get('qty') or l_pos.get('amount') or 0)
-                    if qty <= 0: continue
-                    
-                    if status == 'pending':
-                        o_id = l_pos.get('order_id')
-                        # Deduplicate if same order is in both buckets
-                        if o_id and o_id in seen_order_ids: continue
-                        pending_entries.append(l_pos)
-                        if o_id: seen_order_ids.add(o_id)
-                    else:
-                        # Active position
-                        norm_sym = current_trader._normalize_symbol(l_pos.get('symbol'))
-                        if norm_sym not in live_positions:
-                            live_positions[norm_sym] = {
-                                'symbol': l_pos.get('symbol'),
-                                'side': l_pos.get('side'),
-                                'entryPrice': float(l_pos.get('entry_price') or l_pos.get('price') or 0),
-                                'contracts': qty,
-                                'leverage': int(l_pos.get('leverage') or 1),
-                                'unrealizedPnl': 0,
-                                'timeframe': l_pos.get('timeframe', 'N/A'),
-                                'stopLoss': float(l_pos.get('sl') or 0),
-                                'takeProfit': float(l_pos.get('tp') or 0)
-                            }
-
-                # 2. Process pending_orders
-                for l_key, l_ord in local_pending.items():
-                    if l_key.startswith(prefix):
-                        status = str(l_ord.get('status', '')).lower()
-                        if status in ['closed', 'cancelled']: continue
-                        
-                        qty = float(l_ord.get('qty') or l_ord.get('amount') or 0)
-                        price = float(l_ord.get('price') or 0)
-                        # Filter out garbage
-                        if qty <= 0 or (status == 'pending' and price <= 0): continue
-                        
-                        o_id = l_ord.get('order_id')
-                        if not o_id or o_id not in seen_order_ids:
-                            pending_entries.append(l_ord)
-                            if o_id: seen_order_ids.add(o_id)
-            else:
-                # --- LIVE MODE: Authoritative Exchange Fetch ---
-                # 1. Fetch Positions
-                try:
-                    raw_list = await adapter.fetch_positions()
-                    # Robust filter: check contracts, amount, and size in info
-                    live_positions = {}
-                    for p in raw_list:
-                        qty = float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('positionAmt', p.get('info', {}).get('size', 0)) or 0)
-                        if abs(qty) > 0:
-                            norm_sym = current_trader._normalize_symbol(p['symbol'])
-                            live_positions[norm_sym] = p
-                except Exception as e:
-                    logging.warning(f"Failed to fetch live positions for {ex_name}: {e}")
+                    if is_ex_match and (current_trader._normalize_symbol(l_sym) == norm_sym or l_sym == sym):
+                        potential_matches.append(l_pos)
                 
-                # 2. Fetch Pending ENTRY Orders (Hide SL/TP duplicates)
-                try:
-                    raw_orders = await adapter.fetch_open_orders()
-                    # Only show entry orders: reduceOnly=False and not a standard SL/TP type
-                    pending_entries = [o for o in raw_orders if not o.get('reduceOnly') and o.get('side') and o.get('amount', 0) > 0]
-                except Exception as e:
-                    logging.warning(f"Failed to fetch open orders for {ex_name}: {e}")
+                if potential_matches:
+                    best_match = next((m for m in potential_matches if str(m.get('status')).lower() in ['filled', 'active']), potential_matches[0])
+                    if lev <= 1: lev = int(best_match.get('leverage') or lev)
+                    if sl == 0: sl = float(best_match.get('sl') or best_match.get('stop_loss') or 0)
+                    if tp == 0: tp = float(best_match.get('tp') or best_match.get('take_profit') or 0)
             
-            # --- ACTIVE POSITIONS ---
-            lines.append("🟢 *ACTIVE POSITIONS*")
-            lines.append("─" * 15)
-            
-            if live_positions:
-                for norm_sym, ex_p in live_positions.items():
-                    symbol = ex_p.get('symbol')
-                    side = ex_p.get('side', 'N/A').upper()
-                    if side == 'LONG': side = 'BUY'
-                    elif side == 'SHORT': side = 'SELL'
-                    entry = float(ex_p.get('entryPrice') or 0)
-                    contracts = float(ex_p.get('contracts', ex_p.get('amount', 0)) or 0)
-                    lev = int(ex_p.get('leverage') or 1)
-                    
-                    timeframe = ex_p.get('timeframe', "N/A")
-                    sl = float(ex_p.get('stopLoss') or 0)
-                    tp = float(ex_p.get('takeProfit') or 0)
-                    
-                    # Merge with local metadata if exists (for timeframe/manual SL/TP fallback)
-                    prefix = f"{ex_name}_"
-                    potential_matches = []
-                    for l_key, l_pos in local_active.items():
-                        l_sym = l_pos.get('symbol', '')
-                        has_any_prefix = l_key.startswith(('BINANCE_', 'BYBIT_'))
-                        is_ex_match = l_key.startswith(prefix) or (not has_any_prefix and ex_name == 'BINANCE')
-                        
-                        if is_ex_match and (current_trader._normalize_symbol(l_sym) == norm_sym or l_sym == symbol):
-                            potential_matches.append(l_pos)
-                    
-                    if potential_matches:
-                        # Prioritize 'active' status over 'pending'
-                        best_match = next((m for m in potential_matches if m.get('status') == 'active'), potential_matches[0])
-                        timeframe = best_match.get('timeframe', timeframe)
-                        if lev <= 1: 
-                            lev = int(best_match.get('leverage') or lev)
-                        if sl == 0: sl = float(best_match.get('sl') or best_match.get('stop_loss') or 0)
-                        if tp == 0: tp = float(best_match.get('tp') or best_match.get('take_profit') or 0)
-                        found_local = True
-                    
-                    # Try to pull leverage and unRealizedPnl from info if unify field is missing
-                    raw_unrealized_pnl = None
-                    if 'info' in ex_p:
-                        try:
-                            info = ex_p['info']
-                            if lev <= 1:
-                                lev = int(info.get('leverage', info.get('marginLeverage', lev)))
-                                # Fallback: calculate leverage if Binance omits it
-                                if lev <= 1 and 'notional' in info and 'positionInitialMargin' in info:
-                                    notional = abs(float(info['notional']))
-                                    im = float(info['positionInitialMargin'])
-                                    if im > 0:
-                                        lev = int(round(notional / im))
-                            if entry <= 0 and 'entryPrice' in info:
-                                entry = float(info['entryPrice'])
-                            
-                            if 'unRealizedProfit' in info:
-                                raw_unrealized_pnl = float(info['unRealizedProfit'])
-                        except: pass
-                    
-                    # Calculate P&L % using live ticker or raw unRealizedPnl
-                    ticker = await data_manager.fetch_ticker(symbol, exchange=ex_name)
-                    current = float(ticker['last']) if ticker else entry
-                    
-                    if entry > 0:
-                        if raw_unrealized_pnl is not None and contracts > 0:
-                            # Use Binance's raw unRealizedPnl to get true ROE: PNL / Margin
-                            # Margin = (Contracts * Entry Price) / Lev
-                            margin = (contracts * entry) / lev
-                            roe = (raw_unrealized_pnl / margin) * 100 if margin > 0 else 0
-                        else:
-                            # Fallback generic calculation
-                            pnl_pct = ((current - entry) / entry) * 100 * (1 if side == 'BUY' else -1)
-                            roe = pnl_pct * lev
-                    else:
-                        roe = 0
-                        
-                    side_emoji = "📈" if side == 'BUY' else "📉"
-                    pnl_emoji = "🟢" if roe >= 0 else "🔴"
-                    
-                    manual_label = " (MANUAL)" if ex_p.get('adopted') or timeframe == 'sync' else ""
-                    
-                    lines.append(f"{side_emoji} *{symbol}* [{timeframe}]{manual_label} ({lev}x) | {pnl_emoji}*{roe:+.2f}%*")
-                    lines.append(f"   `{entry:.6f}` → `{current:.6f}`")
-                    if sl > 0 or tp > 0:
-                         lines.append(f"   🎯 TP: {tp:.6f} | 🛡 SL: {sl:.6f}")
-            else:
-                lines.append("   _None active_")
+            exchanges_payload[ex_name_up]['active'].append({
+                'symbol': sym, 'side': side, 'leverage': lev,
+                'entry_price': entry, 'current_price': cur,
+                'roe': roe, 'pnl_usd': pnl_usd, 'tp': tp, 'sl': sl
+            })
+            total_active += 1
 
-            # --- PENDING ENTRIES ---
-            lines.append("")
-            lines.append("⏳ *PENDING ENTRIES*")
-            lines.append("─" * 15)
+        # Format and append PENDING
+        for o in pending_list:
+            sym = o.get('symbol')
+            side = o.get('side', 'BUY').upper()
+            price = float(o.get('price') or o.get('stopPrice') or 0)
+            # Need current price for pending format too
+            ticker = await data_manager.fetch_ticker(sym, exchange=ex_name_up)
+            cur = float(ticker['last']) if ticker else price
             
-            if pending_entries:
-                for o in pending_entries:
-                    sym = o.get('symbol')
-                    side = o.get('side', 'N/A').upper()
-                    o_type = str(o.get('type', 'LIMIT')).upper()
-                    price = float(o.get('price') or o.get('stopPrice') or 0)
-                    qty = float(o.get('qty') or o.get('amount') or 0)
-                    
-                    lines.append(f"   {side} {sym} ({o_type}) @ `{price:.6f}` (Qty: {qty})")
-            else:
-                lines.append("   _None pending_")
-                
-        except Exception as e:
-            lines.append(f"❌ Error fetching {ex_name}: {str(e)[:100]}")
-            
+            # Leverage/SL/TP enrichment from local
+            pk = current_trader._get_pos_key(sym, o.get('timeframe'))
+            l_ord = local_pending.get(pk) or local_active.get(pk)
+            lev = 1
+            sl = 0
+            tp = 0
+            if l_ord:
+                lev = int(l_ord.get('leverage') or 1)
+                sl = float(l_ord.get('sl') or 0)
+                tp = float(l_ord.get('tp') or 0)
+
+            exchanges_payload[ex_name_up]['pending'].append({
+                'symbol': sym, 'side': side, 'leverage': lev,
+                'entry_price': price, 'current_price': cur,
+                'roe': 0, 'pnl_usd': 0, 'tp': tp, 'sl': sl
+            })
+            total_pending += 1
+
+    # 3. Final String Generation
+    if is_portfolio:
+        return format_portfolio_update_v2(
+            total_balance=total_balance,
+            daily_pnl_pct=daily_pnl_pct,
+            active_count=total_active,
+            pending_count=total_pending,
+            exchanges_data=exchanges_payload
+        )
+    
+    # Status message v2 (Manual grouping if not calling Portfolio formatter directly)
+    now_str = datetime.now().strftime('%d/%m %H:%M')
+    cache_tag = " (CACHED)" if use_cache else ""
+    lines = [f"📊 *BOT STATUS v2*{cache_tag} - {now_str}", ""]
+    
+    for ex_name, data in exchanges_payload.items():
+        lines.append(f"🏦 {ex_name}")
+        
+        # Active Section
+        active_list = data.get('active', [])
+        lines.append(f"🟢 ACTIVE ({len(active_list)})")
+        lines.append("────────────────────")
+        if not active_list:
+            lines.append("   _None_")
+        else:
+            for p in active_list:
+                lines.append(format_position_v2(**p))
+                lines.append("")
+        
+        # Pending Section  
+        pending_list = data.get('pending', [])
+        lines.append(f"🟡 PENDING ({len(pending_list)})")
+        lines.append("────────────────────")
+        if not pending_list:
+            lines.append("   _None_")
+        else:
+            for p in pending_list:
+                lines.append(format_position_v2(**p, is_pending=True))
+                lines.append("")
+        
         lines.append("")
-
+        
     return "\n".join(lines)
 
 async def get_summary_message(period: str) -> str:
@@ -427,11 +422,11 @@ async def periodic_report_loop(application: Application):
         await asyncio.sleep(7200) # 2 hours
         try:
             if CHAT_ID:
-                # 1. Send Active Status (Hybrid Reality)
-                status_msg = await get_status_message()
+                # 1. Send Portfolio Update v2
+                status_msg = await get_status_message(is_portfolio=True)
                 await application.bot.send_message(chat_id=CHAT_ID, text=status_msg, parse_mode='Markdown')
                 
-                # 2. Send Performance Summary
+                # 2. Send Performance Summary (Realized Trades)
                 summary_msg = await get_summary_message('month')
                 await application.bot.send_message(chat_id=CHAT_ID, text=summary_msg, parse_mode='Markdown')
         except Exception as e:

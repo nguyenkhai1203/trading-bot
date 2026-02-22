@@ -421,3 +421,80 @@ def format_status_update(
     telegram = "\n".join(telegram_parts)
     
     return (terminal, telegram)
+
+
+def format_position_v2(
+    symbol: str,
+    side: str,
+    leverage: int,
+    entry_price: float,
+    current_price: float,
+    roe: float,
+    pnl_usd: float,
+    tp: float,
+    sl: float,
+    is_pending: bool = False
+) -> str:
+    """Format a single position in BOT STATUS v2 style."""
+    side_label = "BUY" if side.upper() in ['BUY', 'LONG'] else "SELL"
+    side_emoji = "📈" if side_label == "BUY" else "📉"
+    
+    from notification import format_price # ensure available if called externally
+    
+    if is_pending:
+        lines = [
+            f"{side_emoji} {symbol} {side_label} {leverage}x",
+            f"   Entry: {format_price(entry_price)} | Now: {format_price(current_price)}",
+            f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
+        ]
+    else:
+        pnl_emoji = "🟢" if roe >= 0 else "🔴"
+        lines = [
+            f"{side_emoji} {symbol} {side_label} {leverage}x",
+            f"   Entry: {format_price(entry_price)} → Now: {format_price(current_price)}",
+            f"   {pnl_emoji} {roe:+.2f}% (${pnl_usd:+.2f})",
+            f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
+        ]
+    return "\n".join(lines)
+
+
+def format_portfolio_update_v2(
+    total_balance: float,
+    daily_pnl_pct: float,
+    active_count: int,
+    pending_count: int,
+    exchanges_data: dict
+) -> str:
+    """Format Portfolio Update in BOT STATUS v2 style."""
+    now = datetime.now().strftime('%d/%m %H:%M')
+    lines = [
+        f"📊 *PORTFOLIO UPDATE* - {now}",
+        f"💰 Total Equity: ${total_balance:.2f}",
+        f"📈 Daily Performance: {daily_pnl_pct:+.2f}%",
+        f"🔄 Positions: {active_count} Active | {pending_count} Pending",
+        ""
+    ]
+    
+    for ex_name, data in exchanges_data.items():
+        if not data.get('active') and not data.get('pending'):
+            continue
+            
+        lines.append(f"🏦 {ex_name.upper()}")
+        
+        if data.get('active'):
+            lines.append(f"🟢 ACTIVE ({len(data['active'])})")
+            lines.append("─" * 20)
+            for p in data['active']:
+                lines.append(format_position_v2(**p))
+                lines.append("")
+        
+        if data.get('pending'):
+            lines.append(f"🟡 PENDING ({len(data['pending'])})")
+            lines.append("─" * 20)
+            for p in data['pending']:
+                lines.append(format_position_v2(**p, is_pending=True))
+                lines.append("")
+        
+        lines.append("")
+        
+    return "\n".join(lines)
