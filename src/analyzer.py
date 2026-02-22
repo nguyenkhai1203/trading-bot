@@ -30,9 +30,10 @@ from train_brain import run_nn_training
 
 class StrategyAnalyzer:
     def __init__(self, data_dir=None):
-        # Default to src/data (absolute, regardless of CWD)
+        # Default to data/ at project root
         if data_dir is None:
-            data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            data_dir = os.path.join(project_root, 'data')
         self.data_dir = data_dir
         self.feature_engineer = FeatureEngineer()
         # OPTIMIZATION 1: Cache for loaded data and calculated features

@@ -21,6 +21,14 @@ Bản đồ nhanh để navigate và debug dự án.
 
 ## 🚀 Major Updates
 
+### Đợt 3 — Airtight Stability & Data Standardization (Feb 22, 2026)
+
+**Đảm bảo sự ổn định tuyệt đối và chuẩn hóa dữ liệu:**
+- **Airtight Phantom Win Logic**: Ngăn chặn hoàn toàn việc ghi nhận WIN sai khi vị thế biến mất. Bot bắt buộc fetch lịch sử khớp lệnh 3 lần để xác thực.
+- **Mandatory Prefixing**: Chuẩn hóa toàn bộ Key trong `positions.json` và `signal_performance.json` sang dạng `EXCHANGE_SYMBOL` (VD: `BYBIT_NEAR_USDT`), loại bỏ dấu `/` gây lỗi.
+- **Unified Data Path**: Hợp nhất thư mục dữ liệu nến OHLCV về gốc `/data/`, giải quyết triệt để lỗi Path Mismatch giữa Bot và Analyzer.
+- **Incremental Fetching**: Nâng cấp `download_data.py` để chỉ tải nến mới kể từ timestamp cuối cùng trong CSV, tối ưu hiệu suất và bandwidth.
+
 ### Đợt 2 — Bug Fixes & Unified Data Store (Feb 19, 2026)
 
 **11 fixes hoàn chỉnh:**

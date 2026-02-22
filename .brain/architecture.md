@@ -7,7 +7,9 @@ The system is decoupled into three distinct layers to ensure scalability and mai
 
 1.  **Data Layer (`MarketDataManager`)**: 
     - Handles centralized fetching and normalization.
-    - **Exchange Namespacing**: Data is isolated as `{EXCHANGE}_{SYMBOL}_{TF}.csv` to prevent collisions.
+    - **Exchange Namespacing**: Data is isolated as `{EXCHANGE}_{SYMBOL}_{TF}.csv`.
+    - **Unified Path**: All OHLCV data is stored in the root `/data/` directory (shared between Bot and Analyzer) to prevent path mismatches.
+    - **Incremental Fetching**: `download_data.py` uses existing CSV timestamps to only fetch new candles, optimizing API usage.
     - **Time Sync**: Implements manual offset with a -5000ms safety buffer to resolve Binance -1021 timestamp errors.
 2.  **Logic Layer (`Strategy` / `Analyzer`)**: 
     - **Strategy Engine**: 40+ technical indicators weighted by performance.
@@ -40,8 +42,9 @@ Transitioned to Bybit's **Parent-Child mechanism**:
 ### Binance Futures Implementation
 Handles the complexity of "Algo Orders":
 - **Algo Cancellation**: Uses specialized `fapiPrivateDeleteAlgoOrder` for TP/SL.
-- **Failover Logic**: Implements automatic fallback in `cancel_order`. If a standard cancellation fails with "Order not found," it automatically attempts the Algo endpoint (and vice versa). This ensures robust cleanup during position closing or signal reversals.
-- **Symbol Normalization**: Maps unified symbols to Binance internal formats (e.g., `BTC/USDT:USDT` -> `BTCUSDT`).
+- **Failover Logic**: Implements automatic fallback in `cancel_order`. If a standard cancellation fails with "Order not found," it automatically attempts the Algo endpoint (and vice versa).
+- **Symbol Normalization**: Maps unified symbols to Binance internal formats.
+- **Mandatory Prefixing**: All trade and position identifiers now use the `BINANCE_` prefix (e.g., `BINANCE_BTC_USDT`) for 100% disambiguation.
 
 ### 4. Dynamic Order Updates & Market Adaptation
 The system employs a dual-logic approach to manage active positions based on both strategy confidence and technical market structure.
@@ -65,8 +68,12 @@ Philosophy: **The Exchange is the Source of Truth.**
 
 ### Deep Sync Loop
 - **Authoritative Reality**: Telegram `/status` fetches live data from exchanges.
+- **Airtight Phantom Win Protection (NEW)**: 
+    - When a position is missing from the exchange but the bot didn't log a close, it **force-verifies** by calling `fetch_my_trades` (3x retries).
+    - If no closing trade is found, the position enters a **'waiting_sync'** or **'unverified'** state.
+    - It will NEVER log a 'WIN' based on current market price if the position is MIA.
 - **Ghost Removal**: Proactively purges local positions if exchange data shows no contracts.
-- **Order Adoption (NEW)**: Scans for stray entry orders on the exchange and adopts them into the local state if unidentified.
+- **Order Adoption**: Scans for stray entry orders on the exchange and adopts them using standardized `EXCHANGE_SYMBOL_TF_adopted` keys.
 - **Wait-and-Patience**: Polling mechanism for limit fills (2s intervals) with automatic timeout cancellation.
 
 ---

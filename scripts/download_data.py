@@ -26,13 +26,28 @@ async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', l
     safe_symbol = symbol.split(':')[0].replace('/', '').upper()
     filename = f"data/{exchange_name}_{safe_symbol}_{timeframe}.csv"
     
-    # [v2.3] Freshness check: Skip if file < 1 hour old
+    existing_df = None
+    since_ts = None
+    
+    # [v2.5] Incremental Fetch Logic & Freshness check
     if os.path.exists(filename):
         mtime = os.path.getmtime(filename)
         age_seconds = time.time() - mtime
         if age_seconds < 3600:  # 1 hour
             print(f"  [SKIP] {exchange_name} {symbol} {timeframe} is fresh ({age_seconds/60:.1f}m old)")
             return 1  # Skipped (fresh)
+            
+        try:
+            existing_df = pd.read_csv(filename)
+            if not existing_df.empty:
+                existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
+                # Get the last timestamp in ms to fetch from
+                last_ts = existing_df['timestamp'].iloc[-1].timestamp() * 1000
+                since_ts = int(last_ts)
+                print(f"  [INCREMENTAL] {exchange_name} {symbol} {timeframe} has {len(existing_df)} candles. Fetching from {existing_df['timestamp'].iloc[-1]}")
+        except Exception as e:
+            print(f"  [WARN] Could not read existing {filename}: {e}. Will re-download full history.")
+            existing_df = None
 
     try:
         # Bybit-specific timeframe mapping
@@ -70,34 +85,56 @@ async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', l
         
         # Fetch historical data in batches (1000 per request max)
         all_ohlcv = []
-        since = exchange.milliseconds() - (300 * 24 * 60 * 60 * 1000)  # 300 days back
+        # If incremental, fetch from `since_ts`. Else fetch 300 days back.
+        since = since_ts if since_ts else (exchange.milliseconds() - (300 * 24 * 60 * 60 * 1000))
         
-        while len(all_ohlcv) < limit:
+        # For incremental updates, we just need to catch up, not necessarily fetch 5000 candles from `since_ts`.
+        target_limit = limit if not since_ts else 5000 
+        
+        while len(all_ohlcv) < target_limit:
             try:
                 ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
                 if not ohlcv:
                     break
                 all_ohlcv.extend(ohlcv)
+                # Next batch from the last candle's timestamp + 1ms to avoid dupes
                 since = ohlcv[-1][0] + 1
-                print(f"    {len(all_ohlcv)} candles fetched...", end='\r')
-                # Increased delay for Bybit rate limits
-                # Bybit allows ~10 req/s typically, but with multiple symbols in parallel we need to go slower
+                if since_ts:
+                    print(f"    {len(all_ohlcv)} new candles fetched...", end='\r')
+                else:
+                    print(f"    {len(all_ohlcv)} candles fetched...", end='\r')
+                    
+                # Break early if we only got a partial page (meaning we've hit the present)
+                if len(ohlcv) < 1000:
+                    break
+                    
                 delay = 1.0 if exchange_name.upper() == 'BYBIT' else 0.2
                 await asyncio.sleep(delay)
             except Exception as e:
                 print(f"    Error: {e}")
                 break
         
-        # Keep only latest 'limit' candles
-        all_ohlcv = all_ohlcv[-limit:]
-        
-        # Convert to DataFrame
         if not all_ohlcv:
-            print(f"  [WARN] {exchange_name} {symbol:12s} {timeframe:3s} -> NO DATA fetched")
-            return False
+            if existing_df is not None:
+                print(f"  [INFO] {exchange_name} {symbol:12s} {timeframe:3s} -> No new data, keeping existing.")
+                return 1 # Skipped/Fresh
+            else:
+                print(f"  [WARN] {exchange_name} {symbol:12s} {timeframe:3s} -> NO DATA fetched")
+                return False
 
-        df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        new_df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
+        
+        if existing_df is not None:
+            # Merge and deduplicate based on timestamp
+            df = pd.concat([existing_df, new_df])
+            df = df.drop_duplicates(subset=['timestamp'], keep='last')
+            df = df.sort_values('timestamp')
+        else:
+            df = new_df
+            
+        # Enforce maximum historical limit
+        df = df.tail(limit)
         
         # Save to CSV
         os.makedirs('data', exist_ok=True)

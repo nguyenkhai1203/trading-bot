@@ -88,7 +88,8 @@ The **Optimization Cycle** is a multi-step workflow orchestrated by `src/analyze
 ### Phase 0: Data Harvesting (`scripts/download_data.py`)
 *   **Goal**: Ensure a deep historical dataset for training.
 *   **Action**: Fetches up to 1000-2000 candles per symbol/timeframe from `ACTIVE_EXCHANGES`.
-*   **Output**: Compressed CSV files in `src/data/` (e.g., `BINANCE_BTCUSDT_1h.csv`).
+*   **Incremental Fetch**: Only downloads new candles since the last CSV timestamp.
+*   **Output**: Compressed CSV files in root `/data/` (e.g., `BINANCE_BTCUSDT_1h.csv`).
 
 ### Phase 1: Signal Analysis & Grid Search
 *   **Layer 1 (Trend Validation)**: Signals are tested against the 200 EMA. Only signals with >52% win rate in the trend direction are kept.
@@ -162,6 +163,10 @@ Allows remote interaction with the bot instance.
 ### 7. Global Exchange Sync
 *   **Discovery**: The `/sync` command only reconciled the primary exchange, missing orphaned positions on secondary accounts.
 *   **Lesson**: Implement **Parallel Multi-Exchange Reconciliation**. Loop through all active `traders` to ensure total synchronization across the entire portfolio.
+
+### 8. The "Phantom Win" False Positive
+*   **Discovery**: If a position disappears from the exchange (unplanned closure), the bot previously logged it as a 'WIN' based on the last known market price.
+*   **Lesson**: **Explicit Verification is Mandatory.** When a position vanishes, the bot now must verify against the actual trade history (`fetch_my_trades`) up to 3 times. If no trade is found, it enters a `waiting_sync` state and **never** logs a phantom win.
 
 ---
 

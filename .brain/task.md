@@ -40,10 +40,15 @@
 
 ## 🔴 In Progress / Next
 
-### Runtime Fixes (Đợt 2 - Feb 19, 2026)
-- [ ] **Fix 12**: `reconcile_positions` — bỏ `params={'type': 'future'}` khi gọi `fetch_positions` để Adapter tự delegate params đúng cho từng sàn
-- [ ] **Fix 13**: `data_manager.py` — xóa duplicate `close()` (L320-321) đang đè lên logic chuẩn (L113)
-- [ ] **Fix 14**: Kiểm tra lại các nơi gọi raw `self.exchange.fetch_xxx` trong `execution.py` nên gọi qua Adapter thay vì CCXT object trực tiếp
+### Đợt 3 — Runtime Stability & Data Recovery (Feb 22, 2026)
+- [x] Fix 12: `reconcile_positions` — bỏ redundant params, dùng adapter delegation.
+- [x] Fix 13: `data_manager.py` — xóa duplicate `close()` call.
+- [x] Fix 14: Ensure all `execution.py` API calls use Adapter instead of raw CCXT.
+- [x] **New**: Implementation of "Airtight Phantom Win" protection logic.
+- [x] **New**: Mandatory standard prefixes (`EXCHANGE_SYMBOL`) for all position/trade keys.
+- [x] **New**: Unified root `/data/` path architecture.
+- [x] **New**: Incremental OHLCV fetching logic in `download_data.py`.
+- [x] **Recovery**: Restored standardized trade history in `signal_performance.json`.
 
 ### Future Improvements
 - [ ] Add `/optimize` manual trigger via Telegram command

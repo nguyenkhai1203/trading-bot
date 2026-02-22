@@ -192,16 +192,36 @@ class Trader:
                     filtered_pending = {}
                     
                     for k, v in raw_active.items():
+                        original_k = k
+                        # Auto-heal corrupted keys (e.g. NEAR/USDT_adopted)
+                        if '/' in k or k.startswith(f"{v.get('symbol', '').split('/')[0]}"):
+                            k = self._get_pos_key(v.get('symbol', k), v.get('timeframe', 'adopted'))
+                        
                         if k.startswith(prefix):
-                            filtered_active[k] = v
+                            # Deduplicate: keep filled over pending
+                            if k in filtered_active:
+                                if v.get('status') == 'filled' and filtered_active[k].get('status') != 'filled':
+                                    filtered_active[k] = v
+                            else:
+                                filtered_active[k] = v
+                                
+                            if k != original_k:
+                                self.logger.info(f"Migrating corrupted active key: {original_k} -> {k}")
                         else:
-                            self._other_exchange_positions[k] = v
+                            self._other_exchange_positions[original_k] = v
                             
                     for k, v in raw_pending.items():
+                        original_k = k
+                        if '/' in k or k.startswith(f"{v.get('symbol', '').split('/')[0]}"):
+                            k = self._get_pos_key(v.get('symbol', k), v.get('timeframe', 'adopted'))
+                            
                         if k.startswith(prefix):
-                            filtered_pending[k] = v
+                            if k not in filtered_pending:
+                                filtered_pending[k] = v
+                            if k != original_k:
+                                self.logger.info(f"Migrating corrupted pending key: {original_k} -> {k}")
                         else:
-                            self._other_pending_orders[k] = v
+                            self._other_pending_orders[original_k] = v
                     
                     self.pending_orders = filtered_pending
                     if self.pending_orders:
@@ -1327,9 +1347,16 @@ class Trader:
         if not pos:
             return
 
-        _, symbol, _ = self._parse_pos_key(pos_key)
-        if not symbol:
-            symbol = pos.get('symbol', 'UNKNOWN')
+        exchange, raw_symbol, _ = self._parse_pos_key(pos_key)
+        if not raw_symbol:
+            raw_symbol = pos.get('symbol', 'UNKNOWN')
+        
+        # Format for signal_performance.json (e.g., BYBIT_NEAR_USDT instead of NEAR/USDT)
+        base_quote = raw_symbol.split(':')[0].replace('/', '_').upper()
+        if exchange:
+            symbol = f"{exchange}_{base_quote}"
+        else:
+            symbol = base_quote
         entry_price = pos.get('entry_price')
         side = pos.get('side')
         qty = pos.get('qty')
@@ -2113,8 +2140,8 @@ class Trader:
                 
                 if not found:
                     # Bot found a position it didn't know about - Adopt it!
-                    # Initialize prefix for adopted key
-                    pos_key = f"{self.exchange_name}_{unified_sym}_adopted"
+                    # Initialize prefix for adopted key with standardized generator
+                    pos_key = self._get_pos_key(original_sym, "adopted")
                     self.logger.info(f"[ADOPT] Found unknown position for {original_sym} ({unified_sym}) on exchange. Adopting as {pos_key}")
                     
                     # Fetch ACTUAL leverage setting from exchange
@@ -2298,16 +2325,37 @@ class Trader:
                     self.active_positions[pos_key] = pos
                     symbol = ex_match['symbol'] # update for subsequent logic
 
+                # Handle newly recovered status from unverified
+                if status == 'unverified' and ex_match:
+                    self.logger.info(f"[SYNC] Position {pos_key} recovered from unverified state.")
+                    pos['status'] = 'filled'
+                    pos['missing_cycles'] = 0
+                    if 'unverified_since' in pos:
+                        del pos['unverified_since']
+                    self.active_positions[pos_key] = pos
+                    self._save_positions()
+                    status = 'filled'
+
                 # Skip removal if fetch failed!
-                if status == 'filled' and not ex_match:
+                if status in ['filled', 'unverified'] and not ex_match:
                     if fetch_success:
-                        self.logger.info(f"[SYNC] Position {pos_key} no longer on exchange. Logging and removing.")
+                        # NEW AIRTIGHT LOGIC: Wait 3 cycles before checking history
+                        missing_cycles = pos.get('missing_cycles', 0) + 1
+                        pos['missing_cycles'] = missing_cycles
+                        
+                        if missing_cycles <= 3:
+                            self.logger.info(f"[SYNC WAIT] Position {pos_key} missing from exchange (cycle {missing_cycles}/3). Waiting for history sync...")
+                            pos['status'] = 'unverified'
+                            self.active_positions[pos_key] = pos
+                            self._save_positions()
+                            continue
+                            
+                        self.logger.info(f"[SYNC] Position {pos_key} missing for {missing_cycles} cycles. Checking trade history...")
+                        
                         # Determine exit price: prioritize actual fill from exchange (Issue 3)
                         exit_price = 0
                         side = pos.get('side')
                         try:
-                            # 1. Try to fetch recent trades for this symbol
-                            # Give the exchange a tiny grace period to index the trade if it just closed
                             import asyncio
                             await asyncio.sleep(0.5)
                             
@@ -2333,16 +2381,29 @@ class Trader:
                                             pos['_exit_fees'] = actual_fees
                                         self.logger.info(f"[SYNC] Actual fill {symbol}: {exit_price} (fees: ${actual_fees:.4f})")
 
-                            # 2. Fallback to last close if no trades found or confirmed
+                            # 2. NO FALLBACK TO MARKET PRICE. Mark unverified if trade history not found.
                             if exit_price == 0:
-                                df = self.data_manager.get_data(symbol, pos.get('timeframe', '1h'), exchange=self.exchange_name)
-                                if df is not None and not df.empty:
-                                    exit_price = df.iloc[-1]['close']
-                                    self.logger.info(f"[SYNC] No recent trades found for {symbol}. Using fallback close price: {exit_price}")
+                                import time
+                                unverified_since = pos.get('unverified_since', time.time())
+                                pos['unverified_since'] = unverified_since
+                                
+                                if time.time() - unverified_since > 72 * 3600:
+                                    self.logger.warning(f"[ORPHAN CHECK] Position {pos_key} unverified for > 72h. Logging as orphaned.")
+                                    await self.log_trade(pos_key, pos.get('entry_price', 0), exit_reason="Closed - Orphaned")
+                                    del self.active_positions[pos_key]
+                                else:
+                                    self.logger.warning(f"[SYNC] No recent trades found for missing pos {symbol}. Keeping as unverified.")
+                                    pos['status'] = 'unverified'
+                                    self.active_positions[pos_key] = pos
+                                self._save_positions()
+                                continue
+                                
                         except Exception as e:
                             self.logger.warning(f"[SYNC] Failed to fetch actual fill for {symbol}: {e}")
-                            # Final fallback
-                            exit_price = pos.get('entry_price', 0)
+                            pos['status'] = 'unverified'
+                            self.active_positions[pos_key] = pos
+                            self._save_positions()
+                            continue
                         
                         # Apply SL Cooldown if this was a loss
                         if exit_price > 0 and pos.get('entry_price', 0) > 0:
@@ -2357,7 +2418,7 @@ class Trader:
                                 print(f"🛡️ [{self.exchange_name}] [{symbol}] Applying SL Cooldown after external closure.")
                                 self.set_sl_cooldown(symbol)
                         
-                        await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Closed outside bot)")
+                        await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Verified Closure)")
                         del self.active_positions[pos_key]
                         self._save_positions()
                         continue
