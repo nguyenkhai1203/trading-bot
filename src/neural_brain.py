@@ -2,23 +2,28 @@ import numpy as np
 import os
 import json
 import time
+import threading
 
 class NeuralBrain:
     """
     Lightweight Neural Network (MLP) for Trading Decisions.
-    
-    Architecture:
-    - Input Layer: Matches feature count (e.g., RSI, MACD, Vol, State) ~ 15-20 nodes
-    - Hidden Layer: 8-12 nodes (ReLU activation)
-    - Output Layer: 1 node (Sigmoid activation -> 0.0 to 1.0 confidence)
-    
-    Why Numpy?
-    - Zero dependency (no PyTorch/TensorFlow needed for inference)
-    - Extreme speed (<1ms inference)
-    - Easy to serialize (JSON weights)
+    Implemented as a Singleton to prevent redundant disk I/O when loading weights.
     """
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(NeuralBrain, cls).__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
     
     def __init__(self, input_size, hidden_size=12, output_size=1, learning_rate=0.01):
+        if self._initialized:
+            return
+            
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
@@ -35,6 +40,8 @@ class NeuralBrain:
         self.model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'brain_weights.json')
         self.is_trained = False
         self.load_model()
+        
+        self._initialized = True
 
     def relu(self, z):
         return np.maximum(0, z)
@@ -87,8 +94,10 @@ class NeuralBrain:
             loaded_W1 = np.array(data['W1'])
             
             if loaded_W1.shape != (self.input_size, self.hidden_size):
-                print(f"⚠️ Shape mismatch: Loaded {loaded_W1.shape} != Expected {(self.input_size, self.hidden_size)}")
-                raise ValueError("Shape mismatch - Re-initializing")
+                print(f"⚠️ NeuralBrain Shape mismatch: Loaded {loaded_W1.shape} != Expected {(self.input_size, self.hidden_size)}")
+                print("⚠️ Re-initializing and saving new random weights to fix mismatch.")
+                self.save_model() # Save the random initialized weights over the old bad ones
+                return
                 
             self.weights['W1'] = loaded_W1
             self.weights['b1'] = np.array(data['b1'])

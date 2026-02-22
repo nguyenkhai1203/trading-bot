@@ -704,6 +704,13 @@ class Trader:
 
     async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None):
         """Places an order and updates persistent storage. For limit orders, monitors fill in background."""
+        
+        # Determine if TP/SL are attached (for scope safety)
+        tpsl_attached = (
+            getattr(self, 'exchange_name', '').upper() == 'BYBIT'
+            and bool(sl) and bool(tp)
+        )
+        
         # Validate qty - reject invalid orders
         if qty is None or qty <= 0:
             self.logger.warning(f"Rejected order: invalid qty={qty} for {symbol}")
@@ -801,12 +808,7 @@ class Trader:
         if sl: params['stopLoss'] = sl
         if tp: params['takeProfit'] = tp
 
-        # tpsl_attached: True if exchange embeds SL/TP directly in the order (Bybit V5)
-        # so we skip creating separate reduce-only SL/TP orders afterward
-        tpsl_attached = (
-            self.exchange_name.upper() == 'BYBIT'
-            and bool(sl) and bool(tp)
-        )
+
 
         # Determine and clamp leverage to allowed range
         use_leverage = self._clamp_leverage(leverage)
@@ -2074,7 +2076,8 @@ class Trader:
 
         try:
             # Fix 12: Let each Adapter (Bybit/Binance) handle its own params.
-            # Do NOT pass exchange-specific params here (e.g. {'type': 'future'} is Binance-only and breaks Bybit).\n            ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
+            # Do NOT pass exchange-specific params here (e.g. {'type': 'future'} is Binance-only and breaks Bybit).
+            ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
             # Normalize keys for reliable lookups
             # Robust filter: check contracts, amount, and size in info (include absolute value for SHORTs)
             active_ex_pos = {}
@@ -2387,18 +2390,24 @@ class Trader:
                             self._save_positions()
                             continue
                         
-                        # Apply SL Cooldown if this was a loss
+                        # Improved SL Cooldown detection: triggers on ANY loss or if exit price is near SL level
+                        is_sl_hit = False
                         if exit_price > 0 and pos.get('entry_price', 0) > 0:
-                            is_loss = False
                             if side == 'BUY' and exit_price < pos.get('entry_price'):
-                                is_loss = True
+                                is_sl_hit = True
                             elif side == 'SELL' and exit_price > pos.get('entry_price'):
-                                is_loss = True
-                                
-                            if is_loss:
-                                self.logger.info(f"[{symbol}] Sync detected loss closure. Applying SL Cooldown.")
-                                print(f"🛡️ [{self.exchange_name}] [{symbol}] Applying SL Cooldown after external closure.")
-                                self.set_sl_cooldown(symbol)
+                                is_sl_hit = True
+                            
+                            # Check if exit price is near the SL level (within 0.5% tolerance)
+                            if not is_sl_hit and pos.get('sl'):
+                                sl_price = float(pos.get('sl'))
+                                if abs(exit_price - sl_price) / sl_price < 0.005: 
+                                    is_sl_hit = True
+                            
+                        if is_sl_hit:
+                            self.logger.info(f"[{symbol}] Sync detected loss or SL closure. Applying SL Cooldown.")
+                            print(f"🛡️ [{self.exchange_name}] [{symbol}] Applying SL Cooldown after external closure.")
+                            self.set_sl_cooldown(symbol)
                         
                         await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Verified Closure)")
                         del self.active_positions[pos_key]

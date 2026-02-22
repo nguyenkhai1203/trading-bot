@@ -15,7 +15,7 @@
 ## 3. DEFINITION OF DONE (D.O.D.)
 A task is considered complete ONLY when:
 1. **Functional Code:** The fix/feature is implemented and verified.
-2. **Mandatory Self-Test:** The Agent **MUST** perform a self-verification of the logic. If possible, run the specific function with test data or verify via unit tests. Provide a brief summary of the test result (e.g., "Verified: RSI calculation matches expected output for X candles").
+2. **Mandatory Verification (Self + Unit)**: The Agent **MUST** (1) update unit tests in `tests/` for logic changes and (2) run `py src/self_test.py` for system health. Completion requires `run_tests.py` to pass (100% mocked). Provide summary: "Verified by: [pytest + self_test]".
 3. **Knowledge Sync:** Any new logic or "Lessons Learned" from bug fixes are documented in `knowledge.md`.
 4. **Architecture Update:** Technical changes are reflected in `architecture.md`.
 5. **State Tracking:** The relevant item in `task.md` is marked `[x]`.

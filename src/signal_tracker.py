@@ -11,6 +11,7 @@ NEW in v2.0:
 
 import json
 import os
+import time
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -27,6 +28,10 @@ WEIGHT_BOOST = 1.2  # Multiply weight by this when boosting
 # Adaptive trigger parameters
 LOSS_TRIGGER_COUNT = 2  # Trigger analysis after N consecutive losses
 MARKET_CRASH_THRESHOLD = 0.03  # ±3% BTC change = crash/pump
+
+# Global rate limit tracker
+LAST_ADAPTIVE_LOG_TIME = 0
+
 
 class SignalTracker:
     def __init__(self):
@@ -289,9 +294,13 @@ class SignalTracker:
             if multiplier != 1.0:
                 changes.append(f"{signal}: {weight:.2f} -> {adjusted[signal]:.2f}")
         
-        # Silent - only log if many changes
+        # Silent - only log if many changes, and rate-limit to once per hour to prevent spam
         if len(changes) > 5:
-            print(f"[ADAPTIVE] Adjusted {len(changes)} signal weights")
+            global LAST_ADAPTIVE_LOG_TIME
+            current_time = time.time()
+            if (current_time - LAST_ADAPTIVE_LOG_TIME) > 3600:
+                print(f"[ADAPTIVE] Adjusted {len(changes)} signal weights")
+                LAST_ADAPTIVE_LOG_TIME = current_time
         
         return adjusted
     

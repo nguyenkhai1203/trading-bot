@@ -168,6 +168,12 @@ Allows remote interaction with the bot instance.
 *   **Discovery**: If a position disappears from the exchange (unplanned closure), the bot previously logged it as a 'WIN' based on the last known market price.
 *   **Lesson**: **Explicit Verification is Mandatory.** When a position vanishes, the bot now must verify against the actual trade history (`fetch_my_trades`) up to 3 times. If no trade is found, it enters a `waiting_sync` state and **never** logs a phantom win.
 
+### 9. Exchange-Native SL/TP Safety & Post-Verification Cooldown
+*   **Discovery**: Relying on internal price checks to instantly trigger Stop-Loss cooldowns (e.g. inside the main loop) is unsafe during flash crashes or severe API lag, because the exchange's Stop order might fail or be delayed.
+*   **Solution**: **Delegation to Exchange & Post-Verification.** The bot delegates SL/TP execution entirely to the exchange's matching engine. It *only* activates an SL Cooldown after the background `reconcile_positions` task verifies the position has actually vanished from the exchange due to a loss or an exit near the SL threshold.
+*   **Lesson**: Never assume a position is closed just because the local price hit a threshold. Always rely on authoritative exchange reconciliation, and ensure critical fallback logic (like cooldown activation) is robustly tested and completely free of dead code.
+
+
 ---
 
 ## 🏛 Strategic Architectural Decisions

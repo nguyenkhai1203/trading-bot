@@ -1,5 +1,13 @@
 import pandas as pd
+import numpy as np
+import logging
+import json
+import os
+import time
+
 from neural_brain import NeuralBrain
+from signal_tracker import tracker
+
 
 class Strategy:
     def __init__(self, name="BaseStrategy"):
@@ -12,8 +20,25 @@ class Strategy:
         """
         raise NotImplementedError
 
-import json
-import os
+        raise NotImplementedError
+
+# Constants for signal categorization to avoid string parsing in loops
+LONG_KEYWORDS = {
+    '_cross_21_up', '_gt_200', 'MACD_cross_up', 'MACD_gt_signal',
+    'MACD_Bullish', 'RSI_Bullish', 'Bullish', 'oversold',
+    'TK_Cross_Up', 'Vol_Spike', 'Price_Above_VWAP', 'Price_lt_BB_Low',
+    'bounce_from_support', 'breakout_above_resistance',
+    'Stoch_Oversold', 'Stoch_K_Cross_Up', '_gt_50',
+}
+
+SHORT_KEYWORDS = {
+    '_cross_21_down', '_lt_200', 'MACD_cross_down', 'MACD_lt_signal',
+    'MACD_Bearish', 'RSI_Bearish', 'Bearish', 'overbought',
+    'TK_Cross_Down', 'Price_Below_VWAP', 'Price_gt_BB_Up',
+    'bounce_from_resistance', 'breakout_below_support',
+    'Stoch_Overbought', 'Stoch_K_Cross_Down', '_lt_50',
+}
+
 
 class WeightedScoringStrategy(Strategy):
     def __init__(self, symbol="default", timeframe="1h", exchange=None):
@@ -34,6 +59,22 @@ class WeightedScoringStrategy(Strategy):
         except Exception as e:
             print(f"⚠️ Failed to init NeuralBrain: {e}")
             self.use_brain = False
+            
+        # Optimization: Pre-categorized signals
+        self.long_signals_cache = set()
+        self.short_signals_cache = set()
+        self._precalculate_signal_categories()
+        
+    def _precalculate_signal_categories(self):
+        """Pre-sort signals into LONG and SHORT sets to avoid string parsing in get_signal loop."""
+        self.long_signals_cache.clear()
+        self.short_signals_cache.clear()
+        for signal_name in self.weights.keys():
+            if any(kw in signal_name for kw in LONG_KEYWORDS):
+                self.long_signals_cache.add(signal_name)
+            elif any(kw in signal_name for kw in SHORT_KEYWORDS):
+                self.short_signals_cache.add(signal_name)
+
         
     def load_weights(self, symbol, timeframe, exchange=None):
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
@@ -41,8 +82,15 @@ class WeightedScoringStrategy(Strategy):
             print("Config not found, using defaults")
             return self.get_default_weights()
             
-        with open(config_path, 'r') as f:
-            data = json.load(f)
+        try:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+        except (PermissionError, IOError, json.JSONDecodeError) as e:
+            self.logger.warning(f"Could not read strategy_config.json: {e}. Keeping existing weights.")
+            if hasattr(self, 'config_data'):
+                return self.config_data.get('weights', self.get_default_weights())
+            else:
+                return self.get_default_weights()
         
         # Track file modification time and increment version on reload
         import os.path as osp
@@ -89,7 +137,9 @@ class WeightedScoringStrategy(Strategy):
         # Check if config file was modified
         if current_mtime != self.config_mtime:
             print(f"[CONFIG RELOAD] {self.symbol}_{self.timeframe} - Config file changed, reloading...")
-            self.load_weights(self.symbol, self.timeframe, self.exchange)
+            self.weights = self.load_weights(self.symbol, self.timeframe, self.exchange)
+            self._precalculate_signal_categories()
+
     
     def is_enabled(self):
         """Check if this strategy config is enabled.
@@ -191,7 +241,7 @@ class WeightedScoringStrategy(Strategy):
             "breakout_below_support":1.1,   # signal_breakout_below_support
         }
 
-    def get_signal(self, row, use_adaptive=True):
+    def get_signal(self, row, use_adaptive=True, use_brain=True):
         """
         Calculates LONG/SHORT score based on DYNAMIC signals from config.
         Checks if 'signal_{key}' exists in row and is True.
@@ -199,6 +249,7 @@ class WeightedScoringStrategy(Strategy):
         Args:
             row: Single row of features (pandas Series or dict)
             use_adaptive: If True, apply adaptive weight adjustments from signal tracker
+            use_brain: If True, include Neural Brain scores
         """
         # Skip if explicitly disabled in config
         if not self.config_data.get('enabled', True):
@@ -214,7 +265,6 @@ class WeightedScoringStrategy(Strategy):
         
         if use_adaptive:
             try:
-                from signal_tracker import tracker
                 w = tracker.adjust_weights(w)
             except Exception:
                 pass  # Fallback to base weights if tracker unavailable
@@ -228,27 +278,11 @@ class WeightedScoringStrategy(Strategy):
             
             # Check if this signal is active in the current row
             if col_name in row and row[col_name]:
-                # Explicit LONG signal keywords (match FeatureEngineer naming)
-                is_long = any(x in signal_name for x in [
-                    '_cross_21_up', '_gt_200', 'MACD_cross_up', 'MACD_gt_signal',
-                    'MACD_Bullish', 'RSI_Bullish', 'Bullish', 'oversold',
-                    'TK_Cross_Up', 'Vol_Spike', 'Price_Above_VWAP', 'Price_lt_BB_Low',
-                    'bounce_from_support', 'breakout_above_resistance',
-                    'Stoch_Oversold', 'Stoch_K_Cross_Up', '_gt_50',
-                ])
-                # Explicit SHORT signal keywords (match FeatureEngineer naming)
-                is_short = any(x in signal_name for x in [
-                    '_cross_21_down', '_lt_200', 'MACD_cross_down', 'MACD_lt_signal',
-                    'MACD_Bearish', 'RSI_Bearish', 'Bearish', 'overbought',
-                    'TK_Cross_Down', 'Price_Below_VWAP', 'Price_gt_BB_Up',
-                    'bounce_from_resistance', 'breakout_below_support',
-                    'Stoch_Overbought', 'Stoch_K_Cross_Down', '_lt_50',
-                ])
-                
-                if is_long:
+                # Use pre-calculated sets for extreme speed (O(1) member check)
+                if signal_name in self.long_signals_cache:
                     score_long += weight
                     reasons_long.append(signal_name)
-                elif is_short:
+                elif signal_name in self.short_signals_cache:
                     score_short += weight
                     reasons_short.append(signal_name)
                     
@@ -260,7 +294,15 @@ class WeightedScoringStrategy(Strategy):
         signal = {'side': 'SKIP', 'confidence': 0.0, 'comment': 'Wait', 'snapshot': None}
         
         # === NEURAL BRAIN INTEGRATION ===
-        # Extract features for brain (must match NeuralBrain input size = 12)
+        # Skip brain inference during backtests for maximum speed
+        if not use_brain:
+            if score_long >= entry_thresh:
+                signal = {'side': 'BUY', 'confidence': score_long, 'comment': f'Score {score_long:.1f}', 'snapshot': None}
+            elif score_short >= entry_thresh:
+                signal = {'side': 'SELL', 'confidence': score_short, 'comment': f'Score {score_short:.1f}', 'snapshot': None}
+            return signal
+
+        # Extract features for brain (must match NeuralBrain input size = 17)
         # Handle missing keys safely with defaults
         snapshot = {
             'norm_RSI_7': row.get('norm_RSI_7', 0.5),
@@ -281,7 +323,7 @@ class WeightedScoringStrategy(Strategy):
         feature_vector = list(snapshot.values())
         
         # Add 5 dynamic context placeholders for v4.0 (Defaults for NEW trades)
-        import numpy as np
+
         # Case: New trade - SL original = current target SL, moves = 0, pnl = 0
         sl_orig = row.get('sl', row.get('close', 0))
         entry = row.get('close', 1)
@@ -290,7 +332,8 @@ class WeightedScoringStrategy(Strategy):
         feature_vector.extend([0.5, 0.5, 0.0, 0.0, 0.0]) # [dist_orig, dist_final, moves, tightened, max_pnl]
         
         neural_score = 0.5
-        if self.use_brain:
+        if self.use_brain and use_brain:
+
             try:
                 # Replace NaNs with defaults just in case
                 clean_vector = [0.5 if (pd.isna(x) if hasattr(pd, 'isna') else x is None) else x for x in feature_vector]

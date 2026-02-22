@@ -23,7 +23,7 @@
 - [x] Telegram notifications + rate limiting
 - [x] Per-exchange optimization reports
 
-### Bug Fixes (Đợt 1 - Feb 2026)
+### Bug Fixes (Iteration 1 - Feb 2026)
 - [x] Fix 1: `tighten_sl` missing `timeframe` param
 - [x] Fix 2: `log_trade` prioritize actual fees from `_exit_fees`
 - [x] Fix 3: `reconcile_positions` extract actual fees to `_exit_fees`
@@ -40,9 +40,9 @@
 
 ## 🔴 In Progress / Next
 
-### Đợt 3 — Runtime Stability & Data Recovery (Feb 22, 2026)
-- [x] Fix 12: `reconcile_positions` — bỏ redundant params, dùng adapter delegation.
-- [x] Fix 13: `data_manager.py` — xóa duplicate `close()` call.
+### Iteration 3 — Runtime Stability & Data Recovery (Feb 22, 2026)
+- [x] Fix 12: `reconcile_positions` — removed redundant params, using adapter delegation.
+- [x] Fix 13: `data_manager.py` — removed duplicate `close()` call.
 - [x] Fix 14: Ensure all `execution.py` API calls use Adapter instead of raw CCXT.
 - [x] **New**: Implementation of "Airtight Phantom Win" protection logic.
 - [x] **New**: Mandatory standard prefixes (`EXCHANGE_SYMBOL`) for all position/trade keys.
@@ -50,7 +50,7 @@
 - [x] **New**: Incremental OHLCV fetching logic in `download_data.py`.
 - [x] **Recovery**: Restored standardized trade history in `signal_performance.json`.
 
-### Đợt 4 — Core Sync & Adoption Bug Fixes (Feb 22, 2026)
+### Iteration 4 — Core Sync & Adoption Bug Fixes (Feb 22, 2026)
 - [x] **Bugfix**: Resolved "Zombie Position" bug by removing aggressive prefix stripping logic in `execution.py`.
 - [x] **Bugfix**: Fixed Binance SHORT position adoption (`reconcile_positions` now uses `abs(qty) > 0`).
 - [x] **Bugfix**: Standardized position extraction in `telegram_bot.py` to match internal state reliably.

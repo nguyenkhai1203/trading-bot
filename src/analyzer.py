@@ -274,7 +274,10 @@ class StrategyAnalyzer:
         signals = []
         for i in range(20, len(df)):
             row = df.iloc[i]
-            sig = strat.get_signal(row)
+            # CRITICAL PERFORMANCE OPTIMIZATION: Do not use adaptive weights during backtest grid search
+            # adjust_weights aggregates 1000s of past trades on EVERY ROW, taking ~20ms per row * 4000 rows = 80s per threshold!
+            # use_brain=False skips neural network inference for 10x speedup in backtesting.
+            sig = strat.get_signal(row, use_adaptive=False, use_brain=False)
             signals.append(sig['side'] if sig['side'] in ['BUY', 'SELL'] else None)
         return signals
 
@@ -404,13 +407,32 @@ class StrategyAnalyzer:
             }
 
         import tempfile
+        import random
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(config_path), text=True)
         try:
             with os.fdopen(temp_fd, 'w') as f:
                 json.dump(data, f, indent=4)
-            os.replace(temp_path, config_path)
+                
+            # Windows file locking protection: Retry loop for replace
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    os.replace(temp_path, config_path)
+                    break # Success
+                except PermissionError as e:
+                    if attempt < max_retries - 1:
+                        sleep_time = random.uniform(0.1, 0.5)
+                        print(f"⚠️ [ANALYZER] Config file locked. Retrying in {sleep_time:.2f}s... (Attempt {attempt+1}/{max_retries})")
+                        time.sleep(sleep_time)
+                    else:
+                        print(f"❌ [ANALYZER] Failed to update config after {max_retries} attempts due to file lock.")
+                        raise e
         except Exception as e:
-            os.unlink(temp_path)
+            if os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
             raise e
 
     def clear_cache(self):
@@ -674,8 +696,21 @@ async def run_global_optimization():
         test_wr = result.get('test_wr', 0)
         consistency = result.get('consistency', 0)
         
-        # Check cross-TF support using cached results
-        cross_tf_support = analyzer.get_cross_tf_support(symbol, TRADING_TIMEFRAMES, exchange=exchange)
+        # Build local lookup dictionary of successful validations
+        if not hasattr(analyzer, '_local_validation_results'):
+            analyzer._local_validation_results = {}
+            for vr in validation_results:
+                key = f"{vr['exchange']}_{vr['symbol']}_{vr['tf']}"
+                analyzer._local_validation_results[key] = vr['result']
+                
+        # Check cross-TF support using local results without triggering heavy computation
+        cross_tf_support = 0
+        for support_tf in TRADING_TIMEFRAMES:
+            support_key = f"{exchange}_{symbol}_{support_tf}"
+            if support_key in analyzer._local_validation_results:
+                support_res = analyzer._local_validation_results[support_key]
+                if support_res and (support_res['pnl'] > 0 or support_res['win_rate'] >= 0.50):
+                    cross_tf_support += 1
         
         # Use configurable thresholds from config
         from config import MIN_WIN_RATE_TRAIN, MIN_WIN_RATE_TEST, MAX_CONSISTENCY, MIN_CROSS_TF_SUPPORT

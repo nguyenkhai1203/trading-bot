@@ -10,13 +10,14 @@ A multi-exchange, automated trading bot designed for high-frequency signal execu
 - **Neural Brain Integration**: Uses a lightweight RL-based scoring system to filter high-probability entries.
 - **Authoritative Sync**: Periodically reconciles local state with the exchange to ensure 100% accuracy.
 - **Telegram Command Center**: Fully remote control and status reporting via Telegram bot.
-- **isolated Margin Safety**: Forces isolated margin per position to prevent account-wide drawdown.
+- **Isolated Margin Safety**: Forces isolated margin per position to prevent account-wide drawdown.
 
 ## 📋 Quick Start
 
 ### 1. Environment Setup
 ```bash
 python3 -m venv .venv
+.venv\Scripts\activate
 source .venv/bin/activate
 python3 src/self_test.py
 ```
@@ -30,8 +31,16 @@ python3 src/analyzer.py
 ### 3. Launch the Bot
 ```bash
 python3 launcher.py
+py -m pytest tests/ -v -s
 ```
 *Note: Launcher starts both the trading loop and the Telegram command bot.*
+
+### 5. 🧪 Running Tests
+The bot includes a comprehensive test suite (Unit, Integration, and Hardcore Anomalies).
+```bash
+python3 run_tests.py --ci
+```
+*This command executes all tests and checks for 100% stability.*
 
 ### 4. 🧠 Train the Neural Brain (Optional)
 The bot includes a Neural Network that learns from trade performance. To activate it:

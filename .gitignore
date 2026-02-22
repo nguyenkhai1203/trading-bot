@@ -37,6 +37,9 @@ reports/
 .DS_Store
 Thumbs.db
 
-/tests
+
 src/positions.json
 src/signal_performance.json
+test/__pycache__/
+*/__pycache__/
+*/__pycache__/*
