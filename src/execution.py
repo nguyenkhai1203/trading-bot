@@ -73,54 +73,9 @@ class Trader:
         # self.is_public_binance = ... (Removed, use self.exchange.is_public_only)
         
         # ...
-        legacy_keys = [k for k in self.active_positions.keys() if '_sync' in k or '_adopted' in k]
-        if legacy_keys:
-            self.logger.info(f"[CLEANUP] Found {len(legacy_keys)} legacy position keys. Migrating...")
-            for old_key in legacy_keys:
-                pos = self.active_positions.pop(old_key)
-                symbol = pos.get('symbol')
-                if symbol:
-                    # Rename to standard _adopted for consistency
-                    new_key = f"{symbol}_adopted"
-                    self.active_positions[new_key] = pos
-            self._save_positions()
 
-        # MIGRATION: Prefix legacy keys with current exchange name if not present
-        migrated = False
-        keys_to_migrate = list(self.active_positions.keys())
-        current_exchange = self.exchange_name if self.exchange_name else 'BINANCE'
-        
-        for k in keys_to_migrate:
-            val = self.active_positions.pop(k)
-            
-            # 1. Ensure exchange prefix exists
-            prefix = ""
-            rest_of_key = k
-            if k.startswith(('BINANCE_', 'BYBIT_')):
-                prefix = k.split('_')[0]
-                rest_of_key = "_".join(k.split('_')[1:])
-            else:
-                prefix = current_exchange
-                
-            # 2. Re-standardize rest_of_key to BASE_QUOTE_TF format
-            # If it contains slashes, replace them with underscores
-            new_suffix = rest_of_key.replace('/', '_')
-            
-            # 3. Reconstruct new_key
-            new_key = f"{prefix}_{new_suffix}"
-            
-            # 4. Ensure val has 'symbol'
-            if 'symbol' not in val:
-                # Try to recover symbol from original key (e.g. BTC/USDT_1h)
-                symbol_part = rest_of_key.split('_')[0]
-                val['symbol'] = symbol_part
-                
-            self.active_positions[new_key] = val
-            if new_key != k:
-                migrated = True
-                self.logger.info(f"[MIGRATION] Position Key: {k} -> {new_key}")
-        if migrated:
-            self._save_positions()
+        # Removed buggy legacy migration block that was stripping prefixes and causing infinite zombie loops
+
 
     def _get_lock(self, symbol):
         """Get or create a lock for a given symbol (for entry operations)."""
@@ -193,9 +148,18 @@ class Trader:
                     
                     for k, v in raw_active.items():
                         original_k = k
-                        # Auto-heal corrupted keys (e.g. NEAR/USDT_adopted)
-                        if '/' in k or k.startswith(f"{v.get('symbol', '').split('/')[0]}"):
-                            k = self._get_pos_key(v.get('symbol', k), v.get('timeframe', 'adopted'))
+                        # Fix 1: Properly ensure exchange prefix logic for "zombie" recovery
+                        if not k.startswith(('BINANCE_', 'BYBIT_')):
+                            # If no prefix, it's a zombie. Attribute to current exchange.
+                            k = f"{self.exchange_name}_{k}"
+                            
+                        # Fix 2: Auto-heal corrupted keys with slashes or colons
+                        if '/' in k or ':' in k:
+                            # Let _get_pos_key construct the definitive secure key
+                            sym = v.get('symbol', k.replace(f"{self.exchange_name}_", ""))
+                            # Remove trailing _adopted or _sync from the raw symbol name
+                            sym = sym.replace('_adopted', '').replace('_sync', '')
+                            k = self._get_pos_key(sym, v.get('timeframe', 'adopted'))
                         
                         if k.startswith(prefix):
                             # Deduplicate: keep filled over pending
@@ -212,8 +176,17 @@ class Trader:
                             
                     for k, v in raw_pending.items():
                         original_k = k
-                        if '/' in k or k.startswith(f"{v.get('symbol', '').split('/')[0]}"):
-                            k = self._get_pos_key(v.get('symbol', k), v.get('timeframe', 'adopted'))
+                        if not k.startswith(('BINANCE_', 'BYBIT_')):
+                            k = f"{self.exchange_name}_{k}"
+                            
+                        if '/' in k or ':' in k:
+                            sym = v.get('symbol', k.replace(f"{self.exchange_name}_", ""))
+                            sym = sym.replace('_adopted', '').replace('_sync', '')
+                            # Add _order to clearly distinguish from positions if it's an adopted order
+                            tf = v.get('timeframe', 'adopted')
+                            if tf == 'sync' and '_order' not in sym:
+                                tf = 'order_adopted'
+                            k = self._get_pos_key(sym, tf)
                             
                         if k.startswith(prefix):
                             if k not in filtered_pending:
@@ -442,7 +415,7 @@ class Trader:
         """Standardized position key: EXCHANGE_SYMBOL_QUOTE_TIMEFRAME"""
         exchange_name = self.exchange_name
         # Extract base/quote and replace slashes with underscores (e.g., BTC/USDT -> BTC_USDT)
-        # Handle settlement info if present (e.g. BTC/USDT:USDT)
+        # Handle settlement info if present (e.g. BTC/USDT:USDT -> discard the :USDT part)
         clean_symbol = symbol.split(':')[0].replace('/', '_').upper()
         if timeframe:
             return f"{exchange_name}_{clean_symbol}_{timeframe}"
@@ -2103,7 +2076,12 @@ class Trader:
             # Fix 12: Let each Adapter (Bybit/Binance) handle its own params.
             # Do NOT pass exchange-specific params here (e.g. {'type': 'future'} is Binance-only and breaks Bybit).\n            ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
             # Normalize keys for reliable lookups
-            active_ex_pos = {p['symbol']: p for p in ex_positions if self._safe_float(p.get('contracts'), 0) > 0}
+            # Robust filter: check contracts, amount, and size in info (include absolute value for SHORTs)
+            active_ex_pos = {}
+            for p in ex_positions:
+                qty = abs(self._safe_float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('positionAmt'), 0))
+                if qty > 0:
+                    active_ex_pos[p['symbol']] = p
             
             # 1. Fetch TOTAL Open Orders (Standard + Algo via Adapter)
             try:
@@ -2360,7 +2338,11 @@ class Trader:
                             await asyncio.sleep(0.5)
                             
                             # Only look for trades since the position's entry timestamp (reduced window)
+                            # Or if missing (None/0), fallback to 24 hours ago to ensure we catch fast adopted trades.
                             since = pos.get('timestamp')
+                            if not since:
+                                import time
+                                since = int((time.time() - 86400) * 1000)
                             recent_trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
                             
                             if recent_trades:
@@ -2487,6 +2469,9 @@ class Trader:
                                         # Use a small grace period and fetch trades
                                         await asyncio.sleep(0.5)
                                         since = pos.get('timestamp')
+                                        if not since:
+                                            import time
+                                            since = int((time.time() - 86400) * 1000)
                                         recent_trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
                                         
                                         if recent_trades:

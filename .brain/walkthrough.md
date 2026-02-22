@@ -21,6 +21,14 @@ Bản đồ nhanh để navigate và debug dự án.
 
 ## 🚀 Major Updates
 
+### Đợt 4 — Core Sync & Adoption Bug Fixes (Feb 22, 2026)
+
+**Sửa lỗi đồng bộ và nhận diện vị thế cốt lõi:**
+- **Zero-Zombie Position Tracking**: Xóa bỏ logic stripped prefix cũ gây ra vòng lặp vô tận "Zombie Position" dư thừa không có prefix trên file `.json`, ngăn chặn lỗi báo thiếu lịch sử cắt lỗ (missed stoplosses cho NEAR, FIL).
+- **Short Position Adoption Fix**: Sửa lỗi `reconcile_positions` và Telegram status bỏ qua vị thế SHORT (như TAO, SEI). Chuyển luồng lọc `qty > 0` thành `abs(qty) > 0` và hỗ trợ fallback `amount`/`positionAmt` xử lý triệt để format trả về không nhất quán của CCXT trên Binance.
+- **Robust SL/TP Status Matching**: Telegram bot giờ map đúng vị thế trên sàn với metadata nội bộ (timeframe), không còn hiển thị "N/A" khi trade do bot vào lệnh.
+
+
 ### Đợt 3 — Airtight Stability & Data Standardization (Feb 22, 2026)
 
 **Đảm bảo sự ổn định tuyệt đối và chuẩn hóa dữ liệu:**

@@ -176,8 +176,8 @@ async def get_status_message(force_live: bool = False) -> str:
                     # Robust filter: check contracts, amount, and size in info
                     live_positions = {}
                     for p in raw_list:
-                        qty = float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('size') or 0)
-                        if qty > 0:
+                        qty = float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('positionAmt', p.get('info', {}).get('size', 0)) or 0)
+                        if abs(qty) > 0:
                             norm_sym = current_trader._normalize_symbol(p['symbol'])
                             live_positions[norm_sym] = p
                 except Exception as e:
@@ -199,6 +199,8 @@ async def get_status_message(force_live: bool = False) -> str:
                 for norm_sym, ex_p in live_positions.items():
                     symbol = ex_p.get('symbol')
                     side = ex_p.get('side', 'N/A').upper()
+                    if side == 'LONG': side = 'BUY'
+                    elif side == 'SHORT': side = 'SELL'
                     entry = float(ex_p.get('entryPrice') or 0)
                     contracts = float(ex_p.get('contracts', ex_p.get('amount', 0)) or 0)
                     lev = int(ex_p.get('leverage') or 1)
@@ -228,20 +230,40 @@ async def get_status_message(force_live: bool = False) -> str:
                         if tp == 0: tp = float(best_match.get('tp') or best_match.get('take_profit') or 0)
                         found_local = True
                     
-                    # Try to pull leverage from info if unify field is 1/missing
-                    if lev <= 1 and 'info' in ex_p:
+                    # Try to pull leverage and unRealizedPnl from info if unify field is missing
+                    raw_unrealized_pnl = None
+                    if 'info' in ex_p:
                         try:
                             info = ex_p['info']
-                            lev = int(info.get('leverage', info.get('marginLeverage', lev)))
+                            if lev <= 1:
+                                lev = int(info.get('leverage', info.get('marginLeverage', lev)))
+                                # Fallback: calculate leverage if Binance omits it
+                                if lev <= 1 and 'notional' in info and 'positionInitialMargin' in info:
+                                    notional = abs(float(info['notional']))
+                                    im = float(info['positionInitialMargin'])
+                                    if im > 0:
+                                        lev = int(round(notional / im))
+                            if entry <= 0 and 'entryPrice' in info:
+                                entry = float(info['entryPrice'])
+                            
+                            if 'unRealizedProfit' in info:
+                                raw_unrealized_pnl = float(info['unRealizedProfit'])
                         except: pass
                     
-                    # Calculate P&L % using live ticker
+                    # Calculate P&L % using live ticker or raw unRealizedPnl
                     ticker = await data_manager.fetch_ticker(symbol, exchange=ex_name)
                     current = float(ticker['last']) if ticker else entry
                     
                     if entry > 0:
-                        pnl_pct = ((current - entry) / entry) * 100 * (1 if side == 'BUY' else -1)
-                        roe = pnl_pct * lev
+                        if raw_unrealized_pnl is not None and contracts > 0:
+                            # Use Binance's raw unRealizedPnl to get true ROE: PNL / Margin
+                            # Margin = (Contracts * Entry Price) / Lev
+                            margin = (contracts * entry) / lev
+                            roe = (raw_unrealized_pnl / margin) * 100 if margin > 0 else 0
+                        else:
+                            # Fallback generic calculation
+                            pnl_pct = ((current - entry) / entry) * 100 * (1 if side == 'BUY' else -1)
+                            roe = pnl_pct * lev
                     else:
                         roe = 0
                         

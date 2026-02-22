@@ -50,6 +50,11 @@
 - [x] **New**: Incremental OHLCV fetching logic in `download_data.py`.
 - [x] **Recovery**: Restored standardized trade history in `signal_performance.json`.
 
+### Đợt 4 — Core Sync & Adoption Bug Fixes (Feb 22, 2026)
+- [x] **Bugfix**: Resolved "Zombie Position" bug by removing aggressive prefix stripping logic in `execution.py`.
+- [x] **Bugfix**: Fixed Binance SHORT position adoption (`reconcile_positions` now uses `abs(qty) > 0`).
+- [x] **Bugfix**: Standardized position extraction in `telegram_bot.py` to match internal state reliably.
+
 ### Future Improvements
 - [ ] Add `/optimize` manual trigger via Telegram command
 - [ ] Improve monthly/all-time summary reports
