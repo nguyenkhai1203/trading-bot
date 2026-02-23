@@ -64,28 +64,35 @@ async def close():
 # ============== STATUS MESSAGE ==============
 async def get_total_equity() -> float:
     """Calculate total equity across all exchanges+local history."""
-    total = 1000 # initial seed from bot.py logic
+    total = 0.0
     
-    # 1. Closed trades PnL
-    perf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_performance.json')
-    if os.path.exists(perf_file):
-        try:
-            with open(perf_file, 'r') as f:
-                data = json.load(f)
-            trades = data.get('trades', [])
-            total += sum(float(t.get('pnl_usdt', 0) or 0) for t in trades)
-        except: pass
+    # 1. Check if we need dry-run base
+    has_dry_run = any(t.dry_run for t in traders.values())
+    dry_run_base = 0.0
+    
+    if has_dry_run:
+        dry_run_base = 1000 # initial seed from bot.py logic
+        perf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_performance.json')
+        if os.path.exists(perf_file):
+            try:
+                with open(perf_file, 'r') as f:
+                    data = json.load(f)
+                trades = data.get('trades', [])
+                dry_run_base += sum(float(t.get('pnl_usdt', 0) or 0) for t in trades)
+            except: pass
     
     # 2. Unrealized PnL and account balances if possible
+    dry_run_count = len([t for t in traders.values() if t.dry_run])
+    
     for ex_name, t in traders.items():
         # Account balance (USDT)
         try:
             bal = await t.exchange.fetch_balance()
             total_usdt = float(bal.get('total', {}).get('USDT', 0) or bal.get('free', {}).get('USDT', 0) or 0)
-            # If we are in dry run, we use the initial balance + realized, but what about active positions?
-            # get_current_balance in bot.py adds unrealized to dry-run balance.
+            
             if t.dry_run:
-                # In dry run, we already added realized to 'total' above. 
+                # Share the base among dry run traders
+                ex_total = dry_run_base / max(1, dry_run_count)
                 # Now add unrealized from memory.
                 for pos in t.active_positions.values():
                     if pos.get('status') == 'filled':
@@ -98,7 +105,8 @@ async def get_total_equity() -> float:
                             qty = float(pos.get('qty', 0))
                             side = pos.get('side', 'BUY').upper()
                             unrealized = (cur - entry) * qty if side in ['BUY', 'LONG'] else (entry - cur) * qty
-                            total += unrealized
+                            ex_total += unrealized
+                total += ex_total
             else:
                 # Live mode: fetch_balance 'total' usually includes unrealized pnl on most exchanges (e.g. Bybit Unified)
                 total += total_usdt
@@ -306,27 +314,38 @@ async def get_status_message(force_live: bool = False, is_portfolio: bool = Fals
     
     for ex_name, data in exchanges_payload.items():
         lines.append(f"🏦 {ex_name}")
+        lines.append("")
         
         # Active Section
         active_list = data.get('active', [])
         lines.append(f"🟢 ACTIVE ({len(active_list)})")
+        lines.append("")
         lines.append("────────────────────")
+        lines.append("")
         if not active_list:
             lines.append("   _None_")
+            lines.append("")
         else:
             for p in active_list:
                 lines.append(format_position_v2(**p))
+                lines.append("")
+                lines.append("")
                 lines.append("")
         
         # Pending Section  
         pending_list = data.get('pending', [])
         lines.append(f"🟡 PENDING ({len(pending_list)})")
+        lines.append("")
         lines.append("────────────────────")
+        lines.append("")
         if not pending_list:
             lines.append("   _None_")
+            lines.append("")
         else:
             for p in pending_list:
                 lines.append(format_position_v2(**p, is_pending=True))
+                lines.append("")
+                lines.append("")
                 lines.append("")
         
         lines.append("")

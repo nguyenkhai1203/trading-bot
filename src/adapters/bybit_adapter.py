@@ -465,6 +465,11 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         if market and market.get('spot'): return True
         return False
 
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Standardize symbol names for matching (e.g. BTC/USDT:USDT -> BTC/USDT)."""
+        if not symbol: return ""
+        return symbol.split(':')[0]
+
     async def close(self):
         """Close exchange connection."""
         await self.exchange.close()

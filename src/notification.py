@@ -132,8 +132,8 @@ def get_direction_label(side: str) -> str:
 
 # Format helpers
 def format_symbol(symbol: str) -> str:
-    """Format symbol for display (replace / with -)."""
-    return symbol.replace('/', '-')
+    """Format symbol for display (ensure it uses /)."""
+    return symbol.replace('-', '/').replace('_', '/')
 
 def format_price(price: float) -> str:
     """
@@ -442,15 +442,20 @@ def format_position_v2(
     if is_pending:
         lines = [
             f"{side_emoji} {format_symbol(symbol)} {side_label} {leverage}x",
+            "",
             f"   Entry: {format_price(entry_price)} | Now: {format_price(current_price)}",
+            "",
             f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
         ]
     else:
         pnl_emoji = "🟢" if roe >= 0 else "🔴"
         lines = [
             f"{side_emoji} {format_symbol(symbol)} {side_label} {leverage}x",
+            "",
             f"   Entry: {format_price(entry_price)} → Now: {format_price(current_price)}",
+            "",
             f"   {pnl_emoji} {roe:+.2f}% (${pnl_usd:+.2f})",
+            "",
             f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
         ]
     return "\n".join(lines)
@@ -468,9 +473,13 @@ def format_portfolio_update_v2(
     first_ex = list(exchanges_data.keys())[0] if exchanges_data else "GLOBAL"
     lines = [
         f"📊 *{first_ex} PORTFOLIO UPDATE* - {now}",
+        "",
         f"💰 Total Equity: ${total_balance:.2f}",
+        "",
         f"📈 Daily Performance: {daily_pnl_pct:+.2f}%",
+        "",
         f"🔄 Positions: {active_count} Active | {pending_count} Pending",
+        "",
         ""
     ]
     
@@ -479,21 +488,37 @@ def format_portfolio_update_v2(
             continue
             
         lines.append(f"🏦 {ex_name.upper()}")
-        
-        if data.get('active'):
-            lines.append(f"🟢 ACTIVE ({len(data['active'])})")
-            lines.append("─" * 20)
-            for p in data['active']:
-                lines.append(format_position_v2(**p))
-                lines.append("")
-        
-        if data.get('pending'):
-            lines.append(f"🟡 PENDING ({len(data['pending'])})")
-            lines.append("─" * 20)
-            for p in data['pending']:
-                lines.append(format_position_v2(**p, is_pending=True))
-                lines.append("")
-        
         lines.append("")
         
+        if data.get('active') is not None:
+            active_list = data.get('active', [])
+            lines.append(f"🟢 ACTIVE ({len(active_list)})")
+            lines.append("")
+            lines.append("────────────────────")
+            lines.append("")
+            if not active_list:
+                lines.append("   _None_")
+                lines.append("")
+            else:
+                for p in active_list:
+                    lines.append(format_position_v2(**p))
+                    lines.append("")
+                    lines.append("")
+                    lines.append("")
+        
+        if data.get('pending') is not None:
+            pending_list = data.get('pending', [])
+            lines.append(f"🟡 PENDING ({len(pending_list)})")
+            lines.append("")
+            lines.append("────────────────────")
+            lines.append("")
+            if not pending_list:
+                lines.append("   _None_")
+                lines.append("")
+            else:
+                for p in pending_list:
+                    lines.append(format_position_v2(**p, is_pending=True))
+                    lines.append("")
+                    lines.append("")
+                    lines.append("")        
     return "\n".join(lines)

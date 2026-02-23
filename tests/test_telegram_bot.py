@@ -84,7 +84,7 @@ class TestTelegramBot:
         # 3. Assert correct formatting
         assert "BOT STATUS" in msg
         assert "BINANCE" in msg
-        assert "BTC-USDT" in msg
+        assert "BTC/USDT" in msg
         # assert "[1h]" in msg # Removed in v2 standard
         assert "40000.00" in msg # Entry price
         assert "50000.00" in msg # Current price (from mocked ticker)
@@ -120,7 +120,7 @@ class TestTelegramBot:
             
         # Assert format
         assert "PENDING" in msg
-        assert "ETH-USDT" in msg
+        assert "ETH/USDT" in msg
         # assert "LIMIT" in msg
         assert "2000.00" in msg
 
