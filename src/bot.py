@@ -829,14 +829,17 @@ async def send_periodic_status_report(trader, data_manager):
     pending_lines = []
     total_pnl_usd = 0
     
+    from notification import format_symbol, format_price, format_pnl
+    
     for key, pos in positions.items():
         # Filter out closed/cancelled
         status = str(pos.get('status', '')).lower()
-        if status in ['closed', 'cancelled']:
+        if status in ['closed', 'cancelled'] or pos.get('qty', 0) == 0:
             continue
             
         parts = key.split('_')
-        symbol = pos.get('symbol', parts[1] if len(parts) >= 3 else parts[0])
+        raw_symbol = pos.get('symbol', parts[1] if len(parts) >= 3 else parts[0])
+        symbol = format_symbol(raw_symbol)
         tf = pos.get('timeframe', parts[-1] if len(parts) >= 3 else '1h')
         side = pos.get('side', 'N/A').upper()
         entry = float(pos.get('entry_price') or pos.get('price') or 0)
@@ -846,11 +849,11 @@ async def send_periodic_status_report(trader, data_manager):
         
         if status == 'filled':
             # Get current price from data store
-            df = data_manager.get_data(symbol, tf, exchange=trader.exchange_name)
+            df = data_manager.get_data(raw_symbol, tf, exchange=trader.exchange_name)
             current_price = df.iloc[-1]['close'] if df is not None and not df.empty else entry
             
             # Calculate PnL
-            if side == 'BUY':
+            if side == 'BUY' or side == 'LONG':
                 pnl_pct = ((current_price - entry) / entry) * 100 if entry > 0 else 0
             else:
                 pnl_pct = ((entry - current_price) / entry) * 100 if entry > 0 else 0
@@ -861,13 +864,20 @@ async def send_periodic_status_report(trader, data_manager):
             
             active_lines.append(
                 f"{pnl_icon} **{symbol}** ({side})\n"
-                f"   Entry: {entry:.4f} | Now: {current_price:.4f}\n"
+                f"   Entry: {format_price(entry)} | Now: {format_price(current_price)}\n"
                 f"   PnL: {pnl_pct:+.2f}% | ${pnl_usd:+.2f}\n"
-                f"   SL: {sl:.4f} | TP: {tp:.4f}"
+                f"   SL: {format_price(sl) if sl else 'N/A'} | TP: {format_price(tp) if tp else 'N/A'}"
             )
         else:
             # Pending Entries
-            pending_lines.append(f"⏳ **{symbol}** ({side}) @ `{entry:.4f}` | Qty: {qty}")
+            # Try to fetch current price for reference
+            df = data_manager.get_data(raw_symbol, tf, exchange=trader.exchange_name)
+            cur_price_str = f" | Now: {format_price(df.iloc[-1]['close'])}" if df is not None and not df.empty else ""
+            
+            pending_lines.append(
+                f"⏳ **{symbol}** ({side}) @ `{format_price(entry)}`{cur_price_str} | Qty: {qty}\n"
+                f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
+            )
 
     if not active_lines and not pending_lines:
         return

@@ -132,17 +132,17 @@ def get_direction_label(side: str) -> str:
 
 # Format helpers
 def format_symbol(symbol: str) -> str:
-    """Format symbol for display (ensure it uses /)."""
-    return symbol.replace('-', '/').replace('_', '/')
+    """Format symbol for display (ensure it uses / and removes :USDT)."""
+    if not symbol: return "UNKNOWN"
+    # Remove Bybit suffix like :USDT
+    fixed = symbol.split(':')[0]
+    # Replace separators with standard /
+    return fixed.replace('-', '/').replace('_', '/')
 
 def format_price(price: float) -> str:
-    """
-    Format price with appropriate decimal places based on magnitude.
-    - >= $1000: 2 decimals (e.g., BTC $50000.00)
-    - >= $10: 3 decimals (e.g., ETH $3000.123)
-    - >= $1: 4 decimals (e.g., SOL $100.1234)
-    - < $1: 5 decimals (e.g., JUP $0.12345)
-    """
+    """Format price with appropriate decimal places or return 'MARKET' if 0."""
+    if not price or price == 0:
+        return "MARKET"
     if price >= 1000:
         return f"{price:.2f}"
     elif price >= 10:
@@ -440,10 +440,15 @@ def format_position_v2(
     from notification import format_price # ensure available if called externally
     
     if is_pending:
+        p_str = format_price(entry_price)
+        price_line = f"   Price: {p_str}" if p_str != "MARKET" else "   Type: MARKET"
+        if p_str != "MARKET" and current_price:
+            price_line += f" | Now: {format_price(current_price)}"
+            
         lines = [
             f"{side_emoji} {format_symbol(symbol)} {side_label} {leverage}x",
             "",
-            f"   Entry: {format_price(entry_price)} | Now: {format_price(current_price)}",
+            price_line,
             "",
             f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
         ]

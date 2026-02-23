@@ -2247,8 +2247,20 @@ class Trader:
                     
                     side = o.get('side').upper()
                     qty = self._safe_float(o.get('amount') or o.get('info', {}).get('origQty'))
-                    price = self._safe_float(o.get('price'))
+                    # Robust price extraction: check price, stopPrice (trigger), or avgPrice
+                    price = self._safe_float(o.get('stopPrice') or o.get('price') or o.get('avgPrice') or o.get('info', {}).get('price', 0))
                     
+                    # Auto-calculate default SL/TP based on entry price
+                    auto_sl = 0
+                    auto_tp = 0
+                    if price > 0:
+                        if side == 'BUY':
+                            auto_sl = round(price * 0.97, 5)
+                            auto_tp = round(price * 1.03, 5)
+                        else:
+                            auto_sl = round(price * 1.03, 5)
+                            auto_tp = round(price * 0.97, 5)
+
                     # Add to both trackers
                     order_data = {
                         'order_id': o_id,
@@ -2258,7 +2270,9 @@ class Trader:
                         'qty': qty,
                         'timeframe': 'sync',
                         'status': 'pending',
-                        'timestamp': o.get('timestamp') or self.exchange.milliseconds()
+                        'timestamp': o.get('timestamp') or self.exchange.milliseconds(),
+                        'sl': auto_sl,
+                        'tp': auto_tp
                     }
                     self.pending_orders[pos_key] = order_data
                     self.active_positions[pos_key] = order_data
@@ -2287,12 +2301,29 @@ class Trader:
                         ex_match = ex_p
                         break
 
-                # Self-healing: if symbols mismatch (e.g. legacy local format vs exchange format), update local symbol
-                if ex_match and status == 'filled' and symbol != ex_match['symbol']:
-                    self.logger.info(f"[SYNC] Self-healing: Updating symbol suffix for {pos_key}: {symbol} -> {ex_match['symbol']}")
-                    pos['symbol'] = ex_match['symbol']
+                # Self-healing: Update missing price if it was previously 0
+                if pos.get('status') == 'pending' and pos.get('price', 0) == 0:
+                    matching_order = None
+                    if all_exchange_orders:
+                        matching_order = next((o for o in all_exchange_orders if str(o.get('id')) == str(pos.get('order_id'))), None)
+                    
+                    if matching_order:
+                        new_price = self._safe_float(matching_order.get('stopPrice') or matching_order.get('price') or matching_order.get('avgPrice') or 0)
+                        if new_price > 0:
+                            self.logger.info(f"[SYNC] Healing price for {pos_key}: {pos.get('price')} -> {new_price}")
+                            pos['price'] = new_price
+                            self.active_positions[pos_key] = pos
+
+                # Self-healing: if SL/TP missing locally, add placeholders/defaults
+                if (not pos.get('sl') or not pos.get('tp')) and (pos.get('entry_price', 0) > 0 or pos.get('price', 0) > 0):
+                    ref_price = pos.get('entry_price') or pos.get('price')
+                    side = pos.get('side', 'BUY').upper()
+                    if not pos.get('sl'):
+                        pos['sl'] = round(ref_price * 0.97, 5) if side == 'BUY' else round(ref_price * 1.03, 5)
+                    if not pos.get('tp'):
+                        pos['tp'] = round(ref_price * 1.03, 5) if side == 'BUY' else round(ref_price * 0.97, 5)
                     self.active_positions[pos_key] = pos
-                    symbol = ex_match['symbol'] # update for subsequent logic
+                    self.logger.info(f"[SYNC] Healing SL/TP for {pos_key}: SL={pos['sl']} TP={pos['tp']}")
 
                 # Handle newly recovered status from unverified
                 if status == 'unverified' and ex_match:

@@ -360,9 +360,11 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         result = {'sl_set': False, 'tp_set': False}
         try:
             # Direct Bybit V5 private endpoint: /v5/position/trading-stop
-            normalized = self._normalize_symbol(symbol)
-            pos_side = 'None'  # one-way mode
-            body = {'category': 'linear', 'symbol': normalized, 'positionIdx': 0}
+            # CRITICAL: API expects the raw exchange symbol ID (e.g. SOLUSDT), not CCXT or normalized.
+            market_info = self.exchange.market(symbol)
+            api_symbol = market_info.get('id') or symbol.replace('/', '').split(':')[0]
+            
+            body = {'category': 'linear', 'symbol': api_symbol, 'positionIdx': 0}
             if sl is not None:
                 body['stopLoss'] = str(sl)
                 body['slTriggerBy'] = 'MarkPrice'
