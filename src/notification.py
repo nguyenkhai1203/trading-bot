@@ -24,9 +24,7 @@ async def send_telegram_message(message, exchange_name=None):
     token = os.getenv('TELEGRAM_TOKEN')
     chat_id = os.getenv('TELEGRAM_CHAT_ID')
     
-    # Prepend exchange prefix if provided
-    if exchange_name:
-        message = f"[{exchange_name}] {message}"
+    # Prepend exchange prefix handled by specific formatters
     
     
     if not token or not chat_id:
@@ -443,14 +441,14 @@ def format_position_v2(
     
     if is_pending:
         lines = [
-            f"{side_emoji} {symbol} {side_label} {leverage}x",
+            f"{side_emoji} {format_symbol(symbol)} {side_label} {leverage}x",
             f"   Entry: {format_price(entry_price)} | Now: {format_price(current_price)}",
             f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
         ]
     else:
         pnl_emoji = "🟢" if roe >= 0 else "🔴"
         lines = [
-            f"{side_emoji} {symbol} {side_label} {leverage}x",
+            f"{side_emoji} {format_symbol(symbol)} {side_label} {leverage}x",
             f"   Entry: {format_price(entry_price)} → Now: {format_price(current_price)}",
             f"   {pnl_emoji} {roe:+.2f}% (${pnl_usd:+.2f})",
             f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
@@ -467,8 +465,9 @@ def format_portfolio_update_v2(
 ) -> str:
     """Format Portfolio Update in BOT STATUS v2 style."""
     now = datetime.now().strftime('%d/%m %H:%M')
+    first_ex = list(exchanges_data.keys())[0] if exchanges_data else "GLOBAL"
     lines = [
-        f"📊 *PORTFOLIO UPDATE* - {now}",
+        f"📊 *{first_ex} PORTFOLIO UPDATE* - {now}",
         f"💰 Total Equity: ${total_balance:.2f}",
         f"📈 Daily Performance: {daily_pnl_pct:+.2f}%",
         f"🔄 Positions: {active_count} Active | {pending_count} Pending",

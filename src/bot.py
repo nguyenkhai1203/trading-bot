@@ -795,7 +795,7 @@ class TradingBot:
                             # Escape symbol for Telegram (replace / with -)
                             safe_symbol = self.symbol.replace('/', '-')
                             msg = (
-                                f"{mode_label} | {self.trader.exchange_name} | {status_label}\n"
+                                f"{mode_label} | {status_label}\n"
                                 f"{safe_symbol} | {self.timeframe} | {side} x{target_lev}\n"
                                 f"Entry: {entry_price:.3f}\n"
                                 f"SL: {sl:.3f} | TP: {tp:.3f}\n"
@@ -1037,7 +1037,7 @@ async def main():
     # ========== END ADAPTIVE LEARNING SETUP ==========
 
     # Per-Exchange RiskManager for circuit breaker
-    risk_managers = {name: RiskManager(risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE) for name in traders}
+    risk_managers = {name: RiskManager(exchange_name=name, risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE) for name in traders}
     initial_balance = 1000
 
     def get_current_balance():

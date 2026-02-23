@@ -3,7 +3,8 @@ import os
 from datetime import datetime
 
 class RiskManager:
-    def __init__(self, risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.03):
+    def __init__(self, exchange_name='BINANCE', risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.03):
+        self.exchange_name = exchange_name.upper()
         self.risk_per_trade = risk_per_trade
         self.leverage = leverage
         self.max_drawdown_pct = max_drawdown_pct
@@ -20,7 +21,13 @@ class RiskManager:
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r') as f:
-                    data = json.load(f)
+                    full_data = json.load(f)
+                    # Support legacy flat format for Binance
+                    if self.exchange_name == 'BINANCE' and 'starting_balance_day' in full_data:
+                        data = full_data
+                    else:
+                        data = full_data.get(self.exchange_name, {})
+                        
                     self.starting_balance_day = data.get('starting_balance_day')
                     self._last_reset_date = data.get('last_reset_date')
                     if self._last_reset_date:
@@ -32,13 +39,28 @@ class RiskManager:
     def _save_daily_config(self):
         """Save daily balance and reset date to file."""
         try:
-            data = {
+            full_data = {}
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    full_data = json.load(f)
+            
+            # If flat legacy file, migrate to dict
+            if 'starting_balance_day' in full_data and 'BINANCE' not in full_data:
+                binance_data = {
+                    'starting_balance_day': full_data.get('starting_balance_day'),
+                    'last_reset_date': full_data.get('last_reset_date'),
+                    'peak_balance': full_data.get('peak_balance', 0)
+                }
+                full_data = {'BINANCE': binance_data}
+
+            full_data[self.exchange_name] = {
                 'starting_balance_day': self.starting_balance_day,
                 'last_reset_date': str(self._last_reset_date) if self._last_reset_date else None,
                 'peak_balance': self.peak_balance
             }
+            
             with open(self.config_file, 'w') as f:
-                json.dump(data, f, indent=4)
+                json.dump(full_data, f, indent=4)
         except Exception:
             pass
 

@@ -1,5 +1,12 @@
 {
-    "starting_balance_day": null,
-    "last_reset_date": null,
-    "peak_balance": 0
+    "BINANCE": {
+        "starting_balance_day": 1000,
+        "last_reset_date": "2026-02-23",
+        "peak_balance": 1000.0
+    },
+    "BYBIT": {
+        "starting_balance_day": 94.41414191,
+        "last_reset_date": "2026-02-23",
+        "peak_balance": 97.17414191
+    }
 }

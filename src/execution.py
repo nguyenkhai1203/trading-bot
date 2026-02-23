@@ -219,7 +219,6 @@ class Trader:
 
     def _save_positions(self):
         """Saves current active positions AND pending orders to the JSON file, preserving other exchanges."""
-        import time
         
         # ATOMIC RELOAD & MERGE: Always read latest from disk before saving to prevent overwriting 
         # changes made by other processes or Trader instances (e.g. Bybit overwriting Binance adoptions)
@@ -472,7 +471,6 @@ class Trader:
         cooldown_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cooldowns.json')
         if os.path.exists(cooldown_file):
             try:
-                import time
                 with open(cooldown_file, 'r') as f:
                     cooldowns = json.load(f)
                 # Filter out expired cooldowns
@@ -493,7 +491,6 @@ class Trader:
 
     def set_sl_cooldown(self, symbol):
         """Set cooldown after a stop loss hit for this symbol."""
-        import time
         expiry = time.time() + SL_COOLDOWN_SECONDS
         self._sl_cooldowns[symbol] = expiry
         self._save_cooldowns()  # Persist to file
@@ -503,7 +500,6 @@ class Trader:
 
     def is_in_cooldown(self, symbol):
         """Check if symbol is in cooldown period after SL."""
-        import time
         if symbol not in self._sl_cooldowns:
             return False
         
@@ -517,7 +513,6 @@ class Trader:
 
     def get_cooldown_remaining(self, symbol):
         """Get remaining cooldown time in minutes."""
-        import time
         if symbol not in self._sl_cooldowns:
             return 0
         remaining = self._sl_cooldowns[symbol] - time.time()
@@ -825,7 +820,6 @@ class Trader:
         try:
             if order_type == 'market':
                 # Generate Client Order ID for recovery
-                import time
                 api_symbol = self._normalize_symbol(symbol)
                 client_id = f"bot_{api_symbol}_{side}_{int(time.time()*1000)}"
                 params['newClientOrderId'] = client_id
@@ -866,7 +860,6 @@ class Trader:
                     print(f"⚠️ Order request failed/timed out. verifying {client_id}...")
                     
                     # Wait briefly before verifying
-                    import asyncio
                     await asyncio.sleep(1)
                     
                     try:
@@ -962,7 +955,6 @@ class Trader:
                 # Limit order - place and track as pending
                 
                 # Generate Client Order ID for recovery
-                import time
                 api_symbol = self._normalize_symbol(symbol)
                 client_id = f"bot_{api_symbol}_{side}_{int(time.time()*1000)}"
                 params['newClientOrderId'] = client_id
@@ -982,7 +974,6 @@ class Trader:
                     self.logger.warning(f"Limit Order creation failed/timed out for {client_id}. Attempting recovery... Error: {e}")
                     print(f"⚠️ Limit Order request failed/timed out. Verifying {client_id}...")
                     
-                    import asyncio
                     await asyncio.sleep(1)
                     
                     try:
@@ -1058,7 +1049,6 @@ class Trader:
                 self.logger.info(f"Limit order {order_id} placed, monitoring for fill")
 
                 # Start background task to monitor fill
-                import asyncio
                 asyncio.create_task(self._monitor_limit_order_fill(pos_key, order_id, symbol))
                 
                 # Create SL/TP for pending order (with proper ID tracking)
@@ -1084,7 +1074,6 @@ class Trader:
 
     async def _monitor_limit_order_fill(self, pos_key, order_id, symbol):
         """Background task to monitor a limit order fill; can resume using persisted order_id."""
-        import asyncio
         fill_check_interval = 3  # seconds
         local_order_id = order_id
 
@@ -1415,7 +1404,6 @@ class Trader:
                 )
                 print(f"🔄 {terminal_msg}")
                 # Ensure we don't block execution thread
-                import asyncio
                 asyncio.create_task(send_telegram_message(telegram_msg, exchange_name=self.exchange_name))
 
         except Exception as e:
@@ -2114,8 +2102,8 @@ class Trader:
                 unified_sym = self._get_unified_symbol(original_sym)
                 found = False
                 for k, local_p in self.active_positions.items():
-                    # STRICT PREFIX CHECK: local_p is already filtered to this exchange's prefix
-                    if self._normalize_symbol(local_p.get('symbol')) == norm_sym and local_p.get('status') == 'filled':
+                    # Prefix check happened at load time, here we check normalized symbol
+                    if self._normalize_symbol(local_p.get('symbol')) == norm_sym:
                         found = True
                         break
                 
@@ -2337,14 +2325,12 @@ class Trader:
                         exit_price = 0
                         side = pos.get('side')
                         try:
-                            import asyncio
                             await asyncio.sleep(0.5)
                             
                             # Only look for trades since the position's entry timestamp (reduced window)
                             # Or if missing (None/0), fallback to 24 hours ago to ensure we catch fast adopted trades.
                             since = pos.get('timestamp')
                             if not since:
-                                import time
                                 since = int((time.time() - 86400) * 1000)
                             recent_trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
                             
@@ -2368,7 +2354,6 @@ class Trader:
 
                             # 2. NO FALLBACK TO MARKET PRICE. Mark unverified if trade history not found.
                             if exit_price == 0:
-                                import time
                                 unverified_since = pos.get('unverified_since', time.time())
                                 pos['unverified_since'] = unverified_since
                                 
@@ -2473,13 +2458,13 @@ class Trader:
                                     # Check if it was FILLED and then IMMEDIATELY CLOSED or SL'd
                                     self.logger.info(f"[SYNC] Pending order {order_id} gone from open. Checking trade history for fill...")
                                     
+                                    side = pos.get('side', '').upper()
                                     found_fill = False
                                     try:
                                         # Use a small grace period and fetch trades
                                         await asyncio.sleep(0.5)
                                         since = pos.get('timestamp')
                                         if not since:
-                                            import time
                                             since = int((time.time() - 86400) * 1000)
                                         recent_trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
                                         
@@ -2765,7 +2750,6 @@ class Trader:
                     
                     if is_conditional and o_id not in managed_ids:
                         # Throttle terminal output to avoid spam
-                        import time
                         current_sec = time.time()
                         if not hasattr(self, '_last_reaper_log') or current_sec - getattr(self, '_last_reaper_log', 0) > 60:
                             print(f"🧹 [{self.exchange_name}] [REAPER] Cleaning orphaned conditional orders...")

@@ -89,6 +89,8 @@ class MarketDataManager:
                 # Use Adapter method
                 await target_adapter.set_margin_mode(symbol, 'ISOLATED')
                 print(f"✅ [{target_adapter.name}] {symbol} set to ISOLATED margin")
+                # Fix: Add delay to avoid Rate Limit 10006 (Too many visits)
+                await asyncio.sleep(0.5)
             except Exception as e:
                 err_str = str(e).lower()
                 # Check for critical API errors that imply symbol is invalid for this key

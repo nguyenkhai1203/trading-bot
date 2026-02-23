@@ -249,24 +249,20 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         except:
             native_symbol = symbol.replace('/', '').replace(':USDT', '')
 
-        # Try both lowercase and uppercase as Bybit V5 can be picky based on account type
-        modes_to_try = [mode.lower(), mode.upper()]
-        last_err = None
-        
-        for m in modes_to_try:
-            try:
-                extra = {'category': 'linear'}
-                extra.update(params)
-                # Bybit V5 set_margin_mode(margin_mode, symbol, params)
-                self.logger.debug(f"[Bybit] Calling CCXT set_margin_mode({m}, {native_symbol}, {extra})")
-                await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, m, native_symbol, params=extra)
-                return # Success
-            except Exception as e:
-                last_err = e
-                err_str = str(e).lower()
-                if "not modified" in err_str or "already" in err_str:
-                    return # Already set
-                continue # Try next casing
+        # Try lowercase as required by CCXT and Bybit V5
+        m = mode.lower()
+        try:
+            extra = {'category': 'linear'}
+            extra.update(params)
+            # Bybit V5 set_margin_mode(margin_mode, symbol, params)
+            self.logger.debug(f"[Bybit] Calling CCXT set_margin_mode({m}, {native_symbol}, {extra})")
+            await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, m, native_symbol, params=extra)
+            return # Success
+        except Exception as e:
+            last_err = e
+            err_str = str(e).lower()
+            if "not modified" in err_str or "already" in err_str:
+                return # Already set
         
         self.logger.warning(f"[Bybit] Set margin mode failed for {symbol}: {last_err}")
 

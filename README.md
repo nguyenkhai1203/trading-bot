@@ -22,16 +22,16 @@ source .venv/bin/activate
 python3 src/self_test.py
 ```
 
-### 2. Prepare Data & Strategy
+### 2. Prepare Data & Maintenace
 ```bash
 python3 scripts/download_data.py
 python3 src/analyzer.py
+python3 scripts/clean_positions.py  # Fix corrupted positions (NaN values)
 ```
 
 ### 3. Launch the Bot
 ```bash
 python3 launcher.py
-py -m pytest tests/ -v -s
 ```
 *Note: Launcher starts both the trading loop and the Telegram command bot.*
 

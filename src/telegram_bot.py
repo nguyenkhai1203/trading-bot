@@ -131,15 +131,26 @@ async def get_status_message(force_live: bool = False, is_portfolio: bool = Fals
     
     # Get daily start from RiskManager's persistent file
     daily_config_file = os.path.join(script_dir, 'daily_config.json')
-    starting_balance = total_balance
+    daily_pnl_pct = 0
+    # Calculate daily PnL based on starting balance for each exchange
     if os.path.exists(daily_config_file):
         try:
             with open(daily_config_file, 'r') as f:
-                d_data = json.load(f)
-                starting_balance = d_data.get('starting_balance_day', total_balance)
+                d_full = json.load(f)
+                
+            total_start = 0
+            for ex_name in traders.keys():
+                d_data = d_full.get(ex_name, {})
+                # Fallback to flat format for Binance
+                if ex_name == 'BINANCE' and 'starting_balance_day' in d_full:
+                    start_ex = d_full.get('starting_balance_day', total_balance / len(traders))
+                else:
+                    start_ex = d_data.get('starting_balance_day', total_balance / len(traders))
+                total_start += start_ex
+            
+            if total_start > 0:
+                daily_pnl_pct = ((total_balance - total_start) / total_start * 100)
         except: pass
-    
-    daily_pnl_pct = ((total_balance - starting_balance) / starting_balance * 100) if starting_balance > 0 else 0
     
     # 2. Gather Position Data grouped by Exchange
     exchanges_payload = {}
@@ -187,7 +198,12 @@ async def get_status_message(force_live: bool = False, is_portfolio: bool = Fals
             cur = float(ticker['last']) if ticker else float(p.get('entryPrice') or 0)
             entry = float(p.get('entryPrice') or p.get('entry_price') or 0)
             qty = float(p.get('contracts') or p.get('qty') or p.get('amount') or 0)
-            lev = int(p.get('leverage') or 1)
+            # Leverage extraction
+            lev_raw = p.get('leverage')
+            if lev_raw is None and 'info' in p:
+                lev_raw = p['info'].get('leverage') or p['info'].get('leverage_x')
+            lev = int(float(lev_raw)) if lev_raw is not None else 1
+            
             side = p.get('side', 'BUY').upper()
             
             # PnL calc
@@ -199,9 +215,16 @@ async def get_status_message(force_live: bool = False, is_portfolio: bool = Fals
                 roe = ((cur - entry) / entry * 100 * lev) if entry > 0 else 0
                 if side in ['SELL', 'SHORT']: roe = -roe
             
-            # SL/TP fallback to local
-            sl = float(p.get('stopLoss') or p.get('sl') or 0)
-            tp = float(p.get('takeProfit') or p.get('tp') or 0)
+            # SL/TP extraction: CCXT unified stopLoss/takeProfit
+            sl = float(p.get('stopLoss') or 0)
+            tp = float(p.get('takeProfit') or 0)
+            
+            # Fallback to info dict for exchange-specific keys
+            if (sl == 0 or tp == 0) and 'info' in p:
+                info = p['info']
+                if sl == 0: sl = float(info.get('stopLoss') or info.get('stop_loss') or 0)
+                if tp == 0: tp = float(info.get('takeProfit') or info.get('take_profit') or 0)
+
             if sl == 0 or tp == 0 or lev <= 1:
                 norm_sym = current_trader._normalize_symbol(sym)
                 prefix = f"{ex_name_up}_"
@@ -239,6 +262,18 @@ async def get_status_message(force_live: bool = False, is_portfolio: bool = Fals
             # Leverage/SL/TP enrichment from local
             pk = current_trader._get_pos_key(sym, o.get('timeframe'))
             l_ord = local_pending.get(pk) or local_active.get(pk)
+            
+            # Robust fallback search if strict key fails
+            if not l_ord:
+                norm_sym = current_trader._normalize_symbol(sym)
+                prefix = f"{ex_name_up}_"
+                for l_key, l_val in {**local_pending, **local_active}.items():
+                    has_any_prefix = l_key.startswith(('BINANCE_', 'BYBIT_'))
+                    is_match = l_key.startswith(prefix) or (not has_any_prefix and ex_name_up == 'BINANCE')
+                    if is_match and current_trader._normalize_symbol(l_val.get('symbol')) == norm_sym:
+                        l_ord = l_val
+                        break
+
             lev = 1
             sl = 0
             tp = 0
@@ -392,7 +427,7 @@ async def reset_peak_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except:
                 current_bal = 1000 # fallback
                 
-            rm = RiskManager(risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE)
+            rm = RiskManager(exchange_name=name, risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE)
             msg = rm.reset_peak(current_bal)
             results.append(f"🏦 {name}: {msg}")
             

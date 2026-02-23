@@ -339,6 +339,10 @@ class FeatureEngineer:
         # Convert dict to DataFrame
         features_df = pd.DataFrame(new_features, index=df.index)
         
+        # Safe-guard: Fill NaNs in normalized features to avoid NaN in JSON
+        norm_cols = [c for c in features_df.columns if c.startswith('norm_')]
+        features_df[norm_cols] = features_df[norm_cols].fillna(0.5)
+        
         # Merge with original df
         result_df = pd.concat([df, features_df], axis=1)
 
