@@ -123,12 +123,12 @@ def get_mode_label(dry_run: bool) -> str:
 
 # Direction emojis
 def get_direction_emoji(side: str) -> str:
-    """Get direction emoji for trade side."""
-    return "📈" if side.upper() in ['BUY', 'LONG'] else "📉"
+    """Get direction emoji for trade side (Removed per User request)."""
+    return ""
 
 def get_direction_label(side: str) -> str:
-    """Get direction label for trade side."""
-    return "LONG" if side.upper() in ['BUY', 'LONG'] else "SHORT"
+    """Get direction label for trade side (BUY/SELL per User request)."""
+    return "BUY" if side.upper() in ['BUY', 'LONG'] else "SELL"
 
 # Format helpers
 def format_symbol(symbol: str) -> str:
@@ -210,12 +210,13 @@ def format_pending_order(
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}"
     )
     
+    ex_tag = f" | {exchange_name.upper()}" if exchange_name else ""
     telegram = (
-        f"{mode} | ⚪ PENDING\n"
-        f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}\n"
+        f"{mode}{ex_tag} | ⚪ PENDING\n"
+        f"{safe_symbol} | {timeframe} | {dir_label} x{leverage}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}\n"
-        f"Score: {score:.1f} | Leverage: {leverage}x ({int(score*10):d}%)"
+        f"Score: {score:.1f} ({int(score*10):d}%)"
     )
     
     return (terminal, telegram)
@@ -252,9 +253,10 @@ def format_position_filled(
         f"Size: {format_size(size, symbol)} {base_currency}"
     )
     
+    ex_tag = f" | {exchange_name.upper()}" if exchange_name else ""
     telegram = (
-        f"{mode} | ⚪ FILLED\n"
-        f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label} ({int(score*100) if score else 0}%)\n"
+        f"{mode}{ex_tag} | ⚪ FILLED\n"
+        f"{safe_symbol} | {timeframe} | {dir_label} ({int(score*100) if score else 0}%)\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Size: {format_size(size, symbol)} {base_currency} (${notional:.0f})\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}"
@@ -307,9 +309,10 @@ def format_position_closed(
         f"PnL: {format_pnl(pnl, pnl_pct)}"
     )
     
+    ex_tag = f" | {exchange_name.upper()}" if exchange_name else ""
     telegram_parts = [
-        f"{mode} | {status_emoji} {reason_label}",
-        f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}",
+        f"{mode}{ex_tag} | {status_emoji} {reason_label}",
+        f"{safe_symbol} | {timeframe} | {dir_label}",
         f"Entry: {format_price(entry_price)} → Exit: {format_price(exit_price)}",
         f"PnL: {format_pnl(pnl, pnl_pct)}"
     ]
@@ -346,9 +349,10 @@ def format_order_cancelled(
     ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     terminal = f"{ex_prefix}❌ [{symbol} {timeframe}] CANCELLED | Reason: {reason}"
     
+    ex_tag = f" | {exchange_name.upper()}" if exchange_name else ""
     telegram = (
-        f"{mode} | ❌ CANCELLED\n"
-        f"{safe_symbol} | {timeframe} | {dir_emoji} {dir_label}\n"
+        f"{mode}{ex_tag} | ❌ CANCELLED\n"
+        f"{safe_symbol} | {timeframe} | {dir_label}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Reason: {reason}"
     )
@@ -453,7 +457,7 @@ def format_position_v2(
     else:
         pnl_emoji = "🟢" if roe >= 0 else "🔴"
         lines = [
-            f"{side_emoji} {format_symbol(symbol)} {side_label} {leverage}x",
+            f"{format_symbol(symbol)} {side_label} {leverage}x",
             f"   Entry: {format_price(entry_price)} → Now: {format_price(current_price)}",
             f"   {pnl_emoji} {roe:+.2f}% (${pnl_usd:+.2f})",
             f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"

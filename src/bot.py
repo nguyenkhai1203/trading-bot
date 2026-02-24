@@ -418,9 +418,13 @@ class TradingBot:
                         await self.trader.remove_position(self.symbol, timeframe=self.timeframe, exit_price=current_price, exit_reason=exit_reason)
                         return
                     else:
-                        # LIVE MODE: Rely on exchange state!
-                        # The exchange handles SL/TP via real orders. Wait for reconcile_positions to detect the closure.
-                        print(f"⏳ [{self.trader.exchange_name}] [{self.symbol}] Price crossed SL/TP internally. Waiting for exchange sync to confirm closure.")
+                        print(f"⏳ [{self.trader.exchange_name}] [{self.symbol}] Price crossed SL/TP internally. Triggering proactive sync...")
+                        # Trigger forced reconciliation to confirm closure immediately
+                        try:
+                            await self.trader.reconcile_positions(auto_fix=True, force_verify=True)
+                        except Exception as sync_err:
+                            print(f"⚠️ Proactive sync failed for {self.symbol}: {sync_err}")
+                            
                         # Return to prevent further logic (like trailing SL updates) from running on a potentially closed position.
                         return 
 
@@ -778,31 +782,42 @@ class TradingBot:
                                 self.balance_tracker.release(self.trader.exchange_name, estimated_margin_cost)
 
                         if res:
-                            mode_label = "🟢 LIVE" if not self.trader.dry_run else "🧪 TEST"
-                            # Status Mapping: Map CCXT variations to user-friendly labels
-                            raw_status = (res.get('status') or '').lower()
-                            if raw_status in ['open', 'pending']:
-                                status = 'PENDING'
-                            elif raw_status in ['closed', 'filled']:
-                                status = 'FILLED'
-                            elif order_type == 'limit':
-                                status = 'PENDING' # Default for limit
-                            else:
-                                status = 'FILLED' # Default for market
-                                
-                            status_label = f"📌 {status}" if status == 'PENDING' else f"✅ {status}"
+                            from notification import format_pending_order, format_position_filled, format_symbol
                             
-                            # Escape symbol for Telegram (replace / with -)
-                            safe_symbol = self.symbol.replace('/', '-')
-                            msg = (
-                                f"{mode_label} | {status_label}\n"
-                                f"{safe_symbol} | {self.timeframe} | {side} x{target_lev}\n"
-                                f"Entry: {entry_price:.3f}\n"
-                                f"SL: {sl:.3f} | TP: {tp:.3f}\n"
-                                f"PnL: 0.00%"
-                            )
-                            print(msg)
-                            await send_telegram_message(msg, exchange_name=self.trader.exchange.name)
+                            # Determine which formatter to use
+                            raw_status = (res.get('status') or '').lower()
+                            if raw_status in ['open', 'pending'] or order_type == 'limit':
+                                terminal_msg, telegram_msg = format_pending_order(
+                                    symbol=self.symbol,
+                                    timeframe=self.timeframe,
+                                    side=side,
+                                    entry_price=entry_price,
+                                    sl_price=sl,
+                                    tp_price=tp,
+                                    score=conf,
+                                    leverage=target_lev,
+                                    dry_run=self.trader.dry_run,
+                                    exchange_name=self.trader.exchange_name
+                                )
+                            else:
+                                # Market order filled immediately
+                                terminal_msg, telegram_msg = format_position_filled(
+                                    symbol=self.symbol,
+                                    timeframe=self.timeframe,
+                                    side=side,
+                                    entry_price=entry_price,
+                                    size=qty,
+                                    notional=estimated_margin_cost * target_lev,
+                                    sl_price=sl,
+                                    tp_price=tp,
+                                    score=conf,
+                                    leverage=target_lev,
+                                    dry_run=self.trader.dry_run,
+                                    exchange_name=self.trader.exchange_name
+                                )
+                            
+                            print(terminal_msg)
+                            await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange_name)
                         else:
                             print(f"❌ [{self.symbol}] Order placement failed (See warning logs).")
                         
@@ -909,15 +924,9 @@ async def main():
     parser.add_argument('--live', action='store_true', help='Run in live trading mode')
     args, unknown = parser.parse_known_args()
 
-    # Override config DRY_RUN if argument provided
-    global DRY_RUN
+    # DRY_RUN is strictly sourced from config (.env)
     import config
-    if args.dry_run:
-        config.DRY_RUN = True
-        print("🚩 Command-line override: Simulation Mode (--dry-run)")
-    elif args.live:
-        config.DRY_RUN = False
-        print("🚩 Command-line override: Live Mode (--live)")
+    print(f"🚩 Mode: {'Simulation (Dry Run)' if config.DRY_RUN else 'Live Trading'}")
 
     # Initialize Global Manager and Balance Tracker
 
@@ -972,6 +981,9 @@ async def main():
             await trader.enforce_isolated_on_startup(active_symbols)
             print(f"🔄 [{ex_name}] Synchronizing positions...")
             await trader.reconcile_positions()
+            
+            # Start monitoring tasks for any existing pending orders
+            await trader.resume_pending_monitors()
 
         for symbol in active_symbols:
             for tf in TRADING_TIMEFRAMES:
@@ -1048,21 +1060,29 @@ async def main():
 
     # Per-Exchange RiskManager for circuit breaker
     risk_managers = {name: RiskManager(exchange_name=name, risk_per_trade=RISK_PER_TRADE, leverage=LEVERAGE) for name in traders}
-    initial_balance = 1000
 
-    def get_current_balance():
-        current_bal = initial_balance
-        # Fix 10 (Unified Store): Read from signal_performance.json instead of deprecated trade_history.json
-        perf_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_performance.json')
-        if os.path.exists(perf_file):
-            try:
-                with open(perf_file, 'r') as f:
-                    data = json.load(f)
-                trades = data.get('trades', [])
-                current_bal += sum(float(t.get('pnl_usdt', 0) or 0) for t in trades)
-            except: pass
+    def get_current_balance(ex_name=None):
+        """
+        Calculates meaningful equity for the bot.
+        If live: returns actual exchange equity (fetched earlier).
+        If dry: returns simulation balance plus unrealized PNL.
+        """
+        from config import SIMULATION_BALANCE
+        
+        # Default behavior (legacy/global):
+        if not ex_name:
+            return SIMULATION_BALANCE # Fallback for absolute safety
             
-        for ex_name, trader in traders.items():
+        # 1. Start with the "base" liquidity
+        if config.DRY_RUN:
+            current_bal = SIMULATION_BALANCE
+        else:
+            # For live trading, we strictly use what was just updated in the tracker
+            current_bal = balance_tracker.get_available(ex_name)
+            
+        # 2. Factor in unrealized PNL for active positions
+        trader = traders.get(ex_name)
+        if trader:
             for pos_key, pos in trader.active_positions.items():
                 if pos.get('status') == 'filled':
                     symbol = pos.get('symbol')
@@ -1170,7 +1190,7 @@ async def main():
             for ex_name, trader in traders.items():
                 current_bal = 0.0
                 if trader.dry_run:
-                    current_bal = get_current_balance()
+                    current_bal = get_current_balance(ex_name)
                 elif not trader.exchange.is_authenticated:
                     print(f"⚠️ [{ex_name}] Not Authenticated - Defaulting balance to 0.0")
                     current_bal = 0.0

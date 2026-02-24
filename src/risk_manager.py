@@ -84,11 +84,11 @@ class RiskManager:
             self._save_daily_config()
         
         # Init peak tracker if needed
-        if self.peak_balance == 0:
+        if self.peak_balance == 0 and current_balance > 0:
             self.peak_balance = current_balance
             self._save_daily_config()
             
-        # Update Peak
+        # Update Peak (Only if balance is positive to prevent reset on errors)
         if current_balance > self.peak_balance:
             self.peak_balance = current_balance
             self._save_daily_config()

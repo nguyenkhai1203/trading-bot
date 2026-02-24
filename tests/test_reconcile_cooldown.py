@@ -99,7 +99,7 @@ class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
         print(f"Pre-Reconcile Active pos keys: {list(self.trader.active_positions.keys())}")
         print(f"Self Exchange Name: {self.trader.exchange_name}")
 
-        await self.trader.reconcile_positions(symbol)
+        await self.trader.reconcile_positions(auto_fix=True, force_verify=True)
         
         print(f"Post-Reconcile Active pos keys: {list(self.trader.active_positions.keys())}")
 

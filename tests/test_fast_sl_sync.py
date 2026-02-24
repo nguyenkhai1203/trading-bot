@@ -83,7 +83,7 @@ class TestFastSLSync(unittest.IsolatedAsyncioTestCase):
         self.trader._execute_with_timestamp_retry.side_effect = mock_execute
 
         # 3. Run reconciliation
-        await self.trader.reconcile_positions()
+        await self.trader.reconcile_positions(force_verify=True)
         
         # 4. Verifications
         # log_trade should be called with detected exit_price (49000.0)

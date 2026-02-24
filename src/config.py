@@ -24,6 +24,7 @@ ACTIVE_EXCHANGE = ACTIVE_EXCHANGES[0] if ACTIVE_EXCHANGES else 'BINANCE'
 # Bot will now ALWAYS use LIVE exchange (set dry_run=True in bot.py for simulation)
 USE_TESTNET = False  # Deprecated - keep False for Live trading
 DRY_RUN = os.getenv('DRY_RUN', 'False').lower() == 'true'  # Set to True for paper trading
+SIMULATION_BALANCE = 100.0  # Starting balance for Paper Trading
 
 # Trading Settings
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)

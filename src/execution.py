@@ -1169,13 +1169,9 @@ class Trader:
 
                 # If cancelled externally
                 if order_status.get('status') in ('canceled', 'cancelled'):
-                    if pos_key in self.pending_orders:
-                        del self.pending_orders[pos_key]
-                    # Mark as cancelled in active_positions (or remove)
-                    if pos_key in self.active_positions:
-                        self.active_positions[pos_key]['status'] = 'cancelled'
-                        self._save_positions()
-                    self.logger.info(f"Limit order {local_order_id} was cancelled")
+                    self.logger.info(f"Limit order {local_order_id} for {symbol} was cancelled on exchange. Purging state.")
+                    # Trigger full cleanup including SL/TP and notifications
+                    await self.cancel_pending_order(pos_key, reason="Cancelled on Exchange")
                     break
 
         except Exception as e:
@@ -1354,36 +1350,28 @@ class Trader:
         }
 
         # Fix 9 (Unified Store): Write all data to signal_performance.json via tracker.
-        # trade_history.json is now deprecated — signal_performance.json is single source of truth.
+        # 1. Fetch fees from exchange if not already stored during sync
+        fees = pos.get('_exit_fees', 0)
+        
+        # 2. Record to signal_performance.json
+        from signal_tracker import record_trade
         try:
-            from signal_tracker import tracker
-            result = "WIN" if pnl > 0 else "LOSS"
-            exit_ts = self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
-            tracker.record_trade(
+            pnl, pnl_pct = record_trade(
                 symbol=symbol,
-                timeframe=pos.get('timeframe', '1h'),
                 side=side,
-                signals_used=pos.get('signals_used', ['manual_sync']),
-                result=result,
-                pnl_pct=round(pnl_pct, 4),
+                entry_price=entry_price,
+                exit_price=exit_price,
+                qty=qty,
+                reason=exit_reason,
+                fee=fees,
+                signals=pos.get('signals_used', []),
+                confidence=pos.get('entry_confidence', 0.5),
                 snapshot=pos.get('snapshot'),
-                pnl_usdt=round(pnl, 3),
-                entry_price=round(entry_price, 5) if isinstance(entry_price, (int, float)) else entry_price,
-                exit_price=round(exit_price, 5),
-                qty=round(qty, 5),
-                exit_reason=exit_reason,
-                entry_time=pos.get('timestamp'),
-                exit_time=exit_ts,
-                # Dynamic Context (v4.0)
-                sl_original=pos.get('sl_original'),
-                sl_final=pos.get('sl'),
-                sl_move_count=pos.get('sl_move_count', 0),
-                sl_tightened=pos.get('sl_tightened', False),
-                max_pnl_pct=pos.get('max_pnl_pct', 0),
+                timeframe=pos.get('timeframe', '1h'),
+                timestamp=pos.get('timestamp')
             )
+
             # Notify Telegram if closed outside bot (Sync)
-            # We only notify here if `exit_reason` contains "Sync" to avoid duplicate notifications 
-            # for bot-initiated closes which already notify in bot.py
             if exit_reason and "Sync" in exit_reason:
                 from notification import send_telegram_message, format_position_closed
                 
@@ -1398,13 +1386,11 @@ class Trader:
                     pnl_pct=pnl_pct,
                     reason="EXCHANGE SYNC (CLOSED)",
                     entry_time=pos.get('timestamp'),
-                    exit_time=exit_ts,
-                    dry_run=self.dry_run,
-                    exchange_name=self.exchange_name
                 )
-                print(f"🔄 {terminal_msg}")
-                # Ensure we don't block execution thread
-                asyncio.create_task(send_telegram_message(telegram_msg, exchange_name=self.exchange_name))
+                print(terminal_msg)
+                await send_telegram_message(telegram_msg, exchange_name=self.exchange_name)
+            
+            self.logger.info(f"Trade logged: {symbol} {side} | PnL: {pnl:.2f} ({pnl_pct:.2f}%) | Reason: {exit_reason}")
 
         except Exception as e:
             self.logger.warning(f"Failed to record trade in signal_tracker: {e}")
@@ -2031,8 +2017,15 @@ class Trader:
             # If verify fails, assume something exists to be safe (fail-safe)
             return None
 
-    async def reconcile_positions(self, auto_fix=True):
-        """Attempt to synchronize local `active_positions` with exchange state."""
+    async def reconcile_positions(self, auto_fix=True, force_verify=False):
+        """
+        Synchronizes local state with exchange reality.
+        force_verify: If True, bypasses 3-cycle sync wait for missing positions.
+        
+        Args:
+            auto_fix: If True, attempt to adopt orphan positions and orders.
+            force_verify: If True, bypass the missing_cycles wait and check history immediately.
+        """
         self._debug_log('reconcile_positions:start')
         if self.dry_run or self.exchange.is_public_only:
             return
@@ -2236,8 +2229,8 @@ class Trader:
                             break
                     if known: continue
                     
-                    # Stray entry order found! Adopt it.
-                    pos_key = f"{self.exchange_name}_{unified_sym}_order_adopted"
+                    # Stray entry order found! Adopt it. Standardize key to avoid slashes.
+                    pos_key = self._get_pos_key(unified_sym, 'order_adopted')
                     
                     # Avoid collision if we already 'own' this symbol path
                     if pos_key in self.pending_orders or pos_key in self.active_positions:
@@ -2293,13 +2286,40 @@ class Trader:
                 status = pos.get('status')
                 qty = pos.get('qty')
 
-                # Find if symbol exists on exchange (use normalized comparison for robust matching)
-                ex_match = None
                 norm_symbol = self._normalize_symbol(symbol)
+                ex_match = None
+                # Find if symbol exists on exchange (use normalized comparison for robust matching)
                 for ex_sym, ex_p in active_ex_pos.items():
                     if self._normalize_symbol(ex_sym) == norm_symbol:
                         ex_match = ex_p
                         break
+
+                # 3.1 Handle PENDING -> FILLED synchronization
+                if status == 'pending' and ex_match:
+                    self.logger.info(f"📈 [SYNC] Pending order {pos_key} found as active position. Transitioning to FILLED.")
+                    pos['status'] = 'filled'
+                    
+                    # Robust key extraction for different exchanges
+                    new_entry = self._safe_float(ex_match.get('entry_price') or ex_match.get('entryPrice') or ex_match.get('avgPrice'))
+                    if new_entry > 0:
+                        pos['entry_price'] = new_entry
+                        
+                    new_qty = self._safe_float(ex_match.get('contracts') or ex_match.get('amount') or ex_match.get('qty'))
+                    if new_qty > 0:
+                        pos['qty'] = new_qty
+                        
+                    pos['timestamp'] = ex_match.get('timestamp') or pos.get('timestamp')
+                    pos['missing_cycles'] = 0
+                    self.active_positions[pos_key] = pos
+                    self._save_positions()
+                    
+                    # After marking filled, ensure SL/TP orders are placed (if not already there)
+                    try:
+                        await self._create_sl_tp_orders_for_position(pos_key)
+                    except:
+                        pass
+                    
+                    status = 'filled'
 
                 # Self-healing: Update missing price if it was previously 0
                 if pos.get('status') == 'pending' and pos.get('price', 0) == 0:
@@ -2339,11 +2359,12 @@ class Trader:
                 # Skip removal if fetch failed!
                 if status in ['filled', 'unverified'] and not ex_match:
                     if fetch_success:
-                        # NEW AIRTIGHT LOGIC: Wait 3 cycles before checking history
+                        # NEW AIRTIGHT LOGIC: Wait 3 cycles before checking history (unless forced)
                         missing_cycles = pos.get('missing_cycles', 0) + 1
                         pos['missing_cycles'] = missing_cycles
                         
-                        if missing_cycles <= 3:
+                        # Skip wait if force_verify is True (Immediate results for tests/proactive sync)
+                        if not force_verify and missing_cycles <= 3:
                             self.logger.info(f"[SYNC WAIT] Position {pos_key} missing from exchange (cycle {missing_cycles}/3). Waiting for history sync...")
                             pos['status'] = 'unverified'
                             self.active_positions[pos_key] = pos
@@ -2877,6 +2898,23 @@ class Trader:
         except Exception as e:
             self.logger.warning(f"ATR Calc failed for {symbol}: {e}")
             return None, None
+
+    async def resume_pending_monitors(self):
+        """Iterates through all pending positions and restarts background monitors."""
+        monitored_count = 0
+        for pos_key, pos in list(self.active_positions.items()):
+            # EXTRA GUARD: Skip if key does not match current exchange
+            if self.exchange_name and not pos_key.startswith(self.exchange_name):
+                continue
+                
+            if pos.get('status') == 'pending' and pos.get('order_id'):
+                order_id = pos['order_id']
+                symbol = pos.get('symbol')
+                if symbol:
+                    self.logger.info(f"🚀 [STARTUP] Resuming monitor for pending order {order_id} ({symbol})")
+                    asyncio.create_task(self._monitor_limit_order_fill(pos_key, order_id, symbol))
+                    monitored_count += 1
+        return monitored_count
 
     async def recreate_missing_sl_tp(self, pos_key, recreate_sl=True, recreate_tp=True, recreate_sl_force=False, recreate_tp_force=False):
         """Recreate missing SL/TP orders for a given position."""

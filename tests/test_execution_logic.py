@@ -182,7 +182,7 @@ class TestTraderExecutionLogic:
         mock_exchange.fetch_open_orders.return_value = []
         
         with patch('execution.AUTO_CREATE_SL_TP', True):
-            await trader.reconcile_positions(auto_fix=True)
+            await trader.reconcile_positions(auto_fix=True, force_verify=True)
         
         trader.recreate_missing_sl_tp.assert_called_once()
 
