@@ -447,20 +447,15 @@ def format_position_v2(
             
         lines = [
             f"{side_emoji} {format_symbol(symbol)} {side_label} {leverage}x",
-            "",
             price_line,
-            "",
             f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
         ]
     else:
         pnl_emoji = "🟢" if roe >= 0 else "🔴"
         lines = [
             f"{side_emoji} {format_symbol(symbol)} {side_label} {leverage}x",
-            "",
             f"   Entry: {format_price(entry_price)} → Now: {format_price(current_price)}",
-            "",
             f"   {pnl_emoji} {roe:+.2f}% (${pnl_usd:+.2f})",
-            "",
             f"   🎯 TP: {format_price(tp) if tp else 'N/A'} | 🛡 SL: {format_price(sl) if sl else 'N/A'}"
         ]
     return "\n".join(lines)
@@ -478,13 +473,8 @@ def format_portfolio_update_v2(
     first_ex = list(exchanges_data.keys())[0] if exchanges_data else "GLOBAL"
     lines = [
         f"📊 *{first_ex} PORTFOLIO UPDATE* - {now}",
-        "",
-        f"💰 Total Equity: ${total_balance:.2f}",
-        "",
-        f"📈 Daily Performance: {daily_pnl_pct:+.2f}%",
-        "",
+        f"💰 Total Equity: ${total_balance:.2f} | 📈 Daily: {daily_pnl_pct:+.2f}%",
         f"🔄 Positions: {active_count} Active | {pending_count} Pending",
-        "",
         ""
     ]
     
@@ -495,35 +485,25 @@ def format_portfolio_update_v2(
         lines.append(f"🏦 {ex_name.upper()}")
         lines.append("")
         
-        if data.get('active') is not None:
+        if data.get('active'):
             active_list = data.get('active', [])
             lines.append(f"🟢 ACTIVE ({len(active_list)})")
-            lines.append("")
             lines.append("────────────────────")
-            lines.append("")
             if not active_list:
                 lines.append("   _None_")
-                lines.append("")
             else:
                 for p in active_list:
                     lines.append(format_position_v2(**p))
                     lines.append("")
-                    lines.append("")
-                    lines.append("")
         
-        if data.get('pending') is not None:
+        if data.get('pending'):
             pending_list = data.get('pending', [])
             lines.append(f"🟡 PENDING ({len(pending_list)})")
-            lines.append("")
             lines.append("────────────────────")
-            lines.append("")
             if not pending_list:
-                lines.append("   _None_")
-                lines.append("")
+                lines.append("   _None_\n")
             else:
                 for p in pending_list:
                     lines.append(format_position_v2(**p, is_pending=True))
                     lines.append("")
-                    lines.append("")
-                    lines.append("")        
     return "\n".join(lines)

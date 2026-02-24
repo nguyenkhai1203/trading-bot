@@ -314,41 +314,28 @@ async def get_status_message(force_live: bool = False, is_portfolio: bool = Fals
     
     for ex_name, data in exchanges_payload.items():
         lines.append(f"🏦 {ex_name}")
-        lines.append("")
         
         # Active Section
         active_list = data.get('active', [])
         lines.append(f"🟢 ACTIVE ({len(active_list)})")
-        lines.append("")
         lines.append("────────────────────")
-        lines.append("")
         if not active_list:
             lines.append("   _None_")
-            lines.append("")
         else:
             for p in active_list:
                 lines.append(format_position_v2(**p))
-                lines.append("")
-                lines.append("")
                 lines.append("")
         
         # Pending Section  
         pending_list = data.get('pending', [])
         lines.append(f"🟡 PENDING ({len(pending_list)})")
-        lines.append("")
         lines.append("────────────────────")
-        lines.append("")
         if not pending_list:
             lines.append("   _None_")
-            lines.append("")
         else:
             for p in pending_list:
                 lines.append(format_position_v2(**p, is_pending=True))
                 lines.append("")
-                lines.append("")
-                lines.append("")
-        
-        lines.append("")
         
     return "\n".join(lines)
 

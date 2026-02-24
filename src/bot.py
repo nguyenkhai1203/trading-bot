@@ -887,17 +887,17 @@ async def send_periodic_status_report(trader, data_manager):
     msg_sections.append(f"📊 **PORTFOLIO UPDATE** - {now}")
     
     if active_lines:
-        msg_sections.append("\n🟢 **ACTIVE POSITIONS**")
+        msg_sections.append("🟢 **ACTIVE POSITIONS**")
         msg_sections.append("-" * 15)
-        msg_sections.extend(active_lines)
+        msg_sections.append("\n\n".join(active_lines))
         
         total_icon = "🟢" if total_pnl_usd >= 0 else "🔴"
         msg_sections.append(f"\n{total_icon} **Total PnL: ${total_pnl_usd:+.2f}**")
     
     if pending_lines:
-        msg_sections.append("\n⏳ **PENDING ENTRIES**")
+        msg_sections.append("\n🟡 **PENDING ENTRIES**")
         msg_sections.append("-" * 15)
-        msg_sections.extend(pending_lines)
+        msg_sections.append("\n\n".join(pending_lines))
     
     final_msg = "\n".join(msg_sections)
     await send_telegram_chunked(final_msg, exchange_name=trader.exchange_name)

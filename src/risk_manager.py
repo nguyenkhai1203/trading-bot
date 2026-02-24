@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 class RiskManager:
-    def __init__(self, exchange_name='BINANCE', risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.03):
+    def __init__(self, exchange_name='BINANCE', risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.05):
         self.exchange_name = exchange_name.upper()
         self.risk_per_trade = risk_per_trade
         self.leverage = leverage
@@ -23,7 +23,8 @@ class RiskManager:
                 with open(self.config_file, 'r') as f:
                     full_data = json.load(f)
                     # Support legacy flat format for Binance
-                    if self.exchange_name == 'BINANCE' and 'starting_balance_day' in full_data:
+                    # (Only if it's NOT a nested dictionary structure containing the exchange name as a key)
+                    if self.exchange_name == 'BINANCE' and 'starting_balance_day' in full_data and 'BINANCE' not in full_data:
                         data = full_data
                     else:
                         data = full_data.get(self.exchange_name, {})
@@ -178,9 +179,9 @@ class RiskManager:
 # Test
 if __name__ == "__main__":
     rm = RiskManager(risk_per_trade=0.02, leverage=5)
-    balance = 1000
-    entry = 50000
-    sl = 49000
+    balance = 100
+    entry = 5000
+    sl = 4900
     
     qty = rm.calculate_position_size(balance, entry, sl)
     print(f"Balance: ${balance}, Risk: 2%, Leverage: 5x")
