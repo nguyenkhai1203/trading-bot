@@ -17,19 +17,21 @@ class TestSignalTracker:
             st = SignalTracker()
             return st
 
-    def test_record_trade_win_resets_loss_counter(self, tracker):
+    @pytest.mark.asyncio
+    async def test_record_trade_win_resets_loss_counter(self, tracker):
         """Verify that a winning trade resets the consecutive loss counter."""
         tracker.consecutive_losses = 2
         # record_trade expects result in ('WIN', 'LOSS')
-        tracker.record_trade('BTC/USDT', '1h', 'BUY', ['sig1'], 'WIN', 10.0)
+        await tracker.record_trade('BTC/USDT', '1h', 'BUY', ['sig1'], 'WIN', 10.0)
         
         assert tracker.consecutive_losses == 0
 
-    def test_record_trade_loss_increments_counter(self, tracker):
+    @pytest.mark.asyncio
+    async def test_record_trade_loss_increments_counter(self, tracker):
         """Verify that a losing trade increments the consecutive loss counter."""
         tracker.consecutive_losses = 0
         # Use capitalized 'LOSS'
-        tracker.record_trade('BTC/USDT', '1h', 'BUY', ['sig1'], 'LOSS', -10.0)
+        await tracker.record_trade('BTC/USDT', '1h', 'BUY', ['sig1'], 'LOSS', -10.0)
         
         # Verify it incremented from 0 to 1 (below LOSS_TRIGGER_COUNT=2)
         assert tracker.consecutive_losses == 1

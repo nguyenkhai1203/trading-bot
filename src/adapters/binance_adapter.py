@@ -24,6 +24,10 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         # Initialize BaseAdapter for standard interface
         BaseAdapter.__init__(self, exchange_client)
         
+        # Store API keys in instance for robust signing and easier testing
+        self.api_key = BINANCE_API_KEY
+        self.api_secret = BINANCE_API_SECRET
+
         # Explicitly suppress FetchOpenOrders warning for Binance
         if hasattr(self.exchange, 'options'):
             self.exchange.options['warnOnFetchOpenOrdersWithoutSymbol'] = False
@@ -286,8 +290,8 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         # Helper for batch post (different content type)
         def do_post_batch(u, data):
             query = urlencode(data)
-            signature = hmac.new(BINANCE_API_SECRET.encode('utf-8'), query.encode('utf-8'), hashlib.sha256).hexdigest()
-            headers = {'X-MBX-APIKEY': BINANCE_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded'}
+            signature = hmac.new(self.api_secret.encode('utf-8'), query.encode('utf-8'), hashlib.sha256).hexdigest()
+            headers = {'X-MBX-APIKEY': self.api_key, 'Content-Type': 'application/x-www-form-urlencoded'}
             full = f"{u}?{query}&signature={signature}"
             r = requests.post(full, headers=headers, timeout=15)
             if r.status_code >= 400:
@@ -298,17 +302,17 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
 
     async def _binance_signed_post(self, url, params):
         """Perform signed POST to Binance Futures API."""
-        if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-             # Should probably raise or log error, but for now rely on caller check or config
-             pass
+        if not self.api_key or not self.api_secret:
+            # Should probably raise or log error, but for now rely on caller check or config
+            pass
 
         if 'timestamp' not in params:
             params['timestamp'] = self.get_synced_timestamp()
             
         def do_request(u, p):
             query = urlencode(p)
-            signature = hmac.new(BINANCE_API_SECRET.encode('utf-8'), query.encode('utf-8'), hashlib.sha256).hexdigest()
-            headers = {'X-MBX-APIKEY': BINANCE_API_KEY}
+            signature = hmac.new(self.api_secret.encode('utf-8'), query.encode('utf-8'), hashlib.sha256).hexdigest()
+            headers = {'X-MBX-APIKEY': self.api_key}
             full = f"{u}?{query}&signature={signature}"
             r = requests.post(full, headers=headers, timeout=10)
             if r.status_code >= 400:

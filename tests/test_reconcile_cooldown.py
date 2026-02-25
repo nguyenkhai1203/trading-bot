@@ -130,7 +130,7 @@ class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
         """Test that cooldown expires correctly."""
         # Setup: Cooldown set at t=0, SL_COOLDOWN_SECONDS is 7200
         mock_time.return_value = 0
-        self.trader._sl_cooldowns = {'BTC/USDT': 7200}
+        self.trader._sl_cooldowns = {'BYBIT:BTC/USDT': 7200}
         
         # At t=0, it's in cooldown
         self.assertTrue(self.trader.is_in_cooldown('BTC/USDT'))
@@ -143,7 +143,7 @@ class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
         mock_time.return_value = 7200
         self.trader._save_cooldowns = MagicMock()
         self.assertFalse(self.trader.is_in_cooldown('BTC/USDT'))
-        self.assertNotIn('BTC/USDT', self.trader._sl_cooldowns)
+        self.assertNotIn('BYBIT:BTC/USDT', self.trader._sl_cooldowns)
         self.trader._save_cooldowns.assert_called()
 
     @patch('time.time')
@@ -155,16 +155,16 @@ class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
         import json
         from unittest.mock import mock_open
         mock_file_data = {
-            'BTC/USDT': 15000, # Active
-            'ETH/USDT': 5000   # Expired
+            'BYBIT:BTC/USDT': 15000, # Active
+            'BYBIT:ETH/USDT': 5000   # Expired
         }
         
         with patch('builtins.open', mock_open(read_data=json.dumps(mock_file_data))):
             loaded = Trader._load_cooldowns(self.trader)
             
-        self.assertIn('BTC/USDT', loaded)
-        self.assertNotIn('ETH/USDT', loaded)
-        self.assertEqual(loaded['BTC/USDT'], 15000)
+        self.assertIn('BYBIT:BTC/USDT', loaded)
+        self.assertNotIn('BYBIT:ETH/USDT', loaded)
+        self.assertEqual(loaded['BYBIT:BTC/USDT'], 15000)
 
 if __name__ == '__main__':
     unittest.main()

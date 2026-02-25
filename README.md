@@ -5,6 +5,7 @@ A multi-exchange, automated trading bot designed for high-frequency signal execu
 ## 🤖 Features & Capabilities
 
 - **Multi-Exchange Execution**: Native support for **Binance Futures** and **Bybit V5 API**.
+- **Signal Coordination**: Prevents multiple positions for the same symbol. Automatically picks the highest-confidence timeframe and replaces pending orders if a significantly better signal emerges.
 - **Wait-and-Patience Entry**: Uses smart limit orders to capture better entry prices (1-2% improvement) based on technical levels.
 - **Dynamic Risk Scaling**: Automatically adjusts position size and leverage (8x-12x) based on signal confidence.
 - **Neural Brain Integration**: Uses a lightweight RL-based scoring system to filter high-probability entries.

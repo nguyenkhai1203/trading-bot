@@ -3,7 +3,11 @@ import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 import pandas as pd
 import numpy as np
+import tempfile
+import os
+import json
 from bot import TradingBot, BalanceTracker
+from risk_manager import RiskManager
 
 class TestTradingBotIntegration:
     @pytest.fixture
@@ -32,10 +36,17 @@ class TestTradingBotIntegration:
         balance_tracker = BalanceTracker()
         balance_tracker.update_balance('BINANCE', 1000.0)
         
+        # Create a temporary daily_config.json for tests
+        fd, temp_path = tempfile.mkstemp(suffix='.json')
+        os.close(fd)
+        with open(temp_path, 'w') as f:
+            json.dump({"BINANCE": {"starting_balance_day": 1000, "peak_balance": 1000}}, f)
+        
         return {
             'data_manager': data_manager,
             'trader': trader,
-            'balance_tracker': balance_tracker
+            'balance_tracker': balance_tracker,
+            'temp_config': temp_path
         }
 
     @pytest.mark.asyncio
@@ -50,6 +61,7 @@ class TestTradingBotIntegration:
             mock_strat = mock_strat_cls.return_value
             mock_strat.is_enabled.return_value = True
             mock_strat.get_sizing_tier.return_value = {'leverage': 10, 'cost_usdt': 50}
+            mock_strat.get_dynamic_risk_params.return_value = (0.02, 0.04)
             mock_strat.sl_pct = 0.02
             mock_strat.tp_pct = 0.04
             
@@ -60,8 +72,12 @@ class TestTradingBotIntegration:
                 'side': 'BUY', 
                 'confidence': 0.8, 
                 'comment': 'Strong Bullish (RSI_oversold)',
+                'signals': 'RSI_oversold',
                 'snapshot': {}
             })
+            
+            # Inject isolated RiskManager
+            bot.risk_manager = RiskManager(config_path=mock_components['temp_config'])
             
             # Mock data manager to return data
             df = pd.DataFrame({'close': [50000.0], 'high': [50100.0], 'low': [49900.0]})
@@ -71,13 +87,19 @@ class TestTradingBotIntegration:
             # Mock risk manager calculation
             bot.risk_manager.calculate_sl_tp = MagicMock(return_value=(49000.0, 52000.0))
             bot.risk_manager.calculate_size_by_cost = MagicMock(return_value=0.01)
-
+            
             # Mock exchange market for min cost
             trader.exchange.market.return_value = {'limits': {'cost': {'min': 5.0}}}
 
             # Execute step
-            with patch('bot.send_telegram_message', AsyncMock()):
-                await bot.run_step()
+            try:
+                with patch('bot.send_telegram_message', AsyncMock()), \
+                     patch('bot.signal_tracker.should_skip_symbol', return_value=(False, "")), \
+                     patch('bot.signal_tracker.get_last_trade_side', return_value=None):
+                    await bot.run_step()
+            finally:
+                if os.path.exists(mock_components['temp_config']):
+                    os.remove(mock_components['temp_config'])
                 
             # Assertions
             trader.place_order.assert_called_once()

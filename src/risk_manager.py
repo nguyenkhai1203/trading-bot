@@ -1,16 +1,31 @@
 import json
 import os
+import sys
 from datetime import datetime
 
 class RiskManager:
-    def __init__(self, exchange_name='BINANCE', risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.05):
+    def __init__(self, exchange_name='BINANCE', risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.05, config_path=None):
         self.exchange_name = exchange_name.upper()
         self.risk_per_trade = risk_per_trade
         self.leverage = leverage
         self.max_drawdown_pct = max_drawdown_pct
         self.daily_loss_limit_pct = daily_loss_limit_pct
         
-        self.config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'daily_config.json')
+        # Detection: if running under pytest and no config_path provided, use a temp file
+        is_testing = "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TRADING_BOT_TEST_MODE") == 'True'
+        
+        if config_path:
+            self.config_file = config_path
+        elif is_testing:
+            import tempfile
+            # Create a per-instance temp file to avoid cross-test interference
+            temp_dir = tempfile.gettempdir()
+            self.config_file = os.path.join(temp_dir, f"test_daily_config_{os.getpid()}_{id(self)}.json")
+        else:
+            from config import DRY_RUN
+            suffix = "_test.json" if DRY_RUN else ".json"
+            self.config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"daily_config{suffix}")
+            
         self.starting_balance_day = None
         self.peak_balance = 0
         self._last_reset_date = None  # Track daily reset

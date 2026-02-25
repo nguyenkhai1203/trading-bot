@@ -31,6 +31,7 @@ class TestTraderExecutionLogic:
             t.active_positions = {}
             t._save_positions = MagicMock()
             t._load_positions = MagicMock(return_value={})
+            t._sl_cooldowns = {} # Clear any loaded cooldowns for test isolation
             
             # Mock the expensive/external calls
             t.modify_sl_tp = AsyncMock(return_value=True)
@@ -262,7 +263,8 @@ class TestTraderExecutionLogic:
             remaining = trader.get_cooldown_remaining(symbol)
             assert 59 <= remaining <= 60 # approx 60 mins
             
-        trader._sl_cooldowns[symbol] = 0
+        key = f"BINANCE:{symbol}"
+        trader._sl_cooldowns[key] = 0
         assert trader.is_in_cooldown(symbol) is False
 
     def test_circuit_breaker_logic(self):

@@ -147,6 +147,10 @@ class WeightedScoringStrategy(Strategy):
         """
         return self.config_data.get('enabled', True)
 
+    def get_dynamic_risk_params(self, row=None):
+        """Returns (sl_pct, tp_pct) based on current config."""
+        return self.sl_pct, self.tp_pct
+
     def reload_config(self):
         """Reloads parameters from strategy_config.json"""
         self.weights = self.load_weights(self.symbol, self.timeframe, self.exchange)

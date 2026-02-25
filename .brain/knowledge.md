@@ -171,8 +171,37 @@ Allows remote interaction with the bot instance.
 ### 9. Exchange-Native SL/TP Safety & Post-Verification Cooldown
 *   **Discovery**: Relying on internal price checks to instantly trigger Stop-Loss cooldowns (e.g. inside the main loop) is unsafe during flash crashes or severe API lag, because the exchange's Stop order might fail or be delayed.
 *   **Solution**: **Delegation to Exchange & Post-Verification.** The bot delegates SL/TP execution entirely to the exchange's matching engine. It *only* activates an SL Cooldown after the background `reconcile_positions` task verifies the position has actually vanished from the exchange due to a loss or an exit near the SL threshold.
-*   **Lesson**: Never assume a position is closed just because the local price hit a threshold. Always rely on authoritative exchange reconciliation, and ensure critical fallback logic (like cooldown activation) is robustly tested and completely free of dead code.
+### 10. Dry-Run Leak & Data Pollution
+*   **Discovery**: Simulation mode (Dry-Run) was leaking API calls for SL/TP setup and verification, and mixing test data with live results.
+*   **Lesson**: **Explicit Gating & File Separation.** Every method that interacts with the exchange must be audited for `dry_run` gating. Use `_test.json` suffixes for all state-tracking files (`positions`, `signal_performance`, `daily_config`) to ensure physical data isolation.
 
+### 11. Bybit V5 "Side invalid" (10001) in One-Way Mode
+*   **Discovery**: Standard `positionIdx: 0` for One-Way mode can still fail on Bybit V5 for some accounts or order types.
+*   **Lesson**: **Progressive Retry Pattern.** If `positionIdx: 0` fails with "Side invalid", force-fetch the mode and then retry. If it still fails and the account is confirmed `MergedSingle`, retry by **omitting** `positionIdx` entirely.
+
+
+---
+
+## 🏷️ Naming & Isolation Standards
+
+To ensure strict separation between Live and Dry-Run environments, the following naming conventions are enforced across the codebase:
+
+### 1. Data File Isolation
+State-tracking files in `src/` use a suffix-based isolation strategy:
+- **Live Mode**: `filename.json` (e.g., `positions.json`)
+- **Dry-Run Mode**: `filename_test.json` (e.g., `positions_test.json`)
+- **Applies to**: `positions`, `trade_history`, `cooldowns`, `signal_performance`, `daily_config`.
+
+### 2. Client Order ID (ClOrdID) Prefixes
+Every order placed on an exchange is tagged with a unique Client ID for recovery and mode identification:
+- **Live Prefix**: `bot_` (e.g., `bot_BTCUSDT_BUY_123456789`)
+- **Dry-Run Prefix**: `dry_` (e.g., `dry_BTCUSDT_BUY_123456789`)
+- **Structure**: `{prefix}{symbol}_{side}_{timestamp_ms}`
+
+### 3. Symbol Normalization
+Wait-and-Patience and metadata tracking use a standardized symbol format to avoid discrepancy between Spot and Swap naming:
+- **Internal Key**: `EXCHANGE_BASE_QUOTE_TIMEFRAME` (e.g., `BINANCE_BTC_USDT_1h`)
+- **Exchange API Symbol**: Always normalized via `_normalize_symbol()` to remove extra suffixes (like `:USDT` on Bybit) before logging or state storage.
 
 ---
 
@@ -196,9 +225,13 @@ Allows remote interaction with the bot instance.
 3. **Train Brain**: `python src/train_brain.py` (Focus only on RL model update)
 
 ## 📁 Key Data Files
-| File | Role |
-|------|------|
-| `src/positions.json` | Active and Pending position metadata. |
-| `src/strategy_config.json` | Strategy weights and thresholds. |
-| `src/signal_performance.json` | Audit log for analysis and brain training. |
-| `src/notification.py` | Formatting and delivery for Telegram alerts. |
+
+| File | Content | Dry-Run Counterpart |
+|------|---------|---------------------|
+| `src/positions.json` | Active/Pending positions | `positions_test.json` |
+| `src/trade_history.json` | Completed trades log | `trade_history_test.json` |
+| `src/signal_performance.json` | NN training snapshots | `signal_performance_test.json` |
+| `src/daily_config.json` | Starting balance/Daily PnL | `daily_config_test.json` |
+| `src/cooldowns.json` | Dynamic trade restrictions | `cooldowns_test.json` |
+| `src/strategy_config.json` | Indicator weights (Shared) | N/A |
+| `src/notification.py` | Alert delivery logic | N/A |

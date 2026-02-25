@@ -11,6 +11,7 @@ load_dotenv()
 # Rate limit protection - Telegram allows ~30 msg/sec but safer to throttle
 _last_send_time = 0
 _send_lock = None
+_msg_cache = {}  # {hash(msg): timestamp} to prevent duplicates
 
 def _get_lock():
     global _send_lock
@@ -19,7 +20,7 @@ def _get_lock():
     return _send_lock
 
 async def send_telegram_message(message, exchange_name=None):
-    global _last_send_time
+    global _last_send_time, _msg_cache
     
     token = os.getenv('TELEGRAM_TOKEN')
     chat_id = os.getenv('TELEGRAM_CHAT_ID')
@@ -33,6 +34,24 @@ async def send_telegram_message(message, exchange_name=None):
             return
         # print(f"[TELEGRAM WARN] Token or Chat ID missing")
         return
+
+    # De-duplication check (15-second window)
+    import hashlib
+    msg_hash = hashlib.md5(message.encode('utf-8')).hexdigest()
+    now = time.time()
+    
+    if msg_hash in _msg_cache:
+        if now - _msg_cache[msg_hash] < 15:
+            # Skip duplicate message
+            return
+    
+    # Store in cache
+    _msg_cache[msg_hash] = now
+    
+    # Optional: Periodically clean old cache entries
+    if len(_msg_cache) > 500:
+        # Keep only entries from the last minute
+        _msg_cache = {k: v for k, v in _msg_cache.items() if now - v < 60}
 
     # Rate limit: max 1 message per 0.5 second
     async with _get_lock():
@@ -216,7 +235,7 @@ def format_pending_order(
         f"{safe_symbol} | {timeframe} | {dir_label} x{leverage}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}\n"
-        f"Score: {score:.1f} ({int(score*10):d}%)"
+        f"Score: {score:.1f} ({int(score*100):d}%)"
     )
     
     return (terminal, telegram)

@@ -3,9 +3,19 @@ import sys
 import os
 import pandas as pd
 import numpy as np
+from unittest.mock import MagicMock
+
+# Mock telegram module before it's imported anywhere
+mock_telegram = MagicMock()
+sys.modules['telegram'] = mock_telegram
+sys.modules['telegram.ext'] = MagicMock()
+sys.modules['telegram.error'] = MagicMock()
 
 # Add src to path for all tests
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+# Global flag for isolation
+os.environ['TRADING_BOT_TEST_MODE'] = 'True'
 
 @pytest.fixture
 def sample_ohlcv_data():

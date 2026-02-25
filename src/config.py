@@ -15,6 +15,7 @@ BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 
 # Active Exchanges (list): ['BINANCE', 'BYBIT']
+# ACTIVE_EXCHANGES = os.getenv('ACTIVE_EXCHANGES', 'BYBIT').upper().split(',')
 ACTIVE_EXCHANGES = os.getenv('ACTIVE_EXCHANGES', 'BINANCE,BYBIT').upper().split(',')
 # For backward compatibility
 ACTIVE_EXCHANGE = ACTIVE_EXCHANGES[0] if ACTIVE_EXCHANGES else 'BINANCE'

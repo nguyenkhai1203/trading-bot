@@ -30,7 +30,8 @@ from config import (
     USE_LIMIT_ORDERS,
     PATIENCE_ENTRY_PCT,
     DRY_RUN,
-    ACTIVE_EXCHANGE
+    ACTIVE_EXCHANGE,
+    MIN_CONFIDENCE_TO_TRADE
 )
 from data_manager import MarketDataManager
 from strategy import WeightedScoringStrategy 
@@ -109,350 +110,127 @@ class TradingBot:
         """Get sizing tier based on confidence score."""
         return self.strategy.get_sizing_tier(score)
 
-    async def run_step(self, current_equity=None, circuit_breaker_triggered=False):
-        # Circuit breaker is checked ONCE in main(), passed here as flag
+    async def run_monitoring_cycle(self):
+        """
+        Handles existing positions, pending order invalidation, and SL/TP monitoring.
+        Returns True if a position/order was closed/cancelled, False otherwise.
+        """
         try:
-            if circuit_breaker_triggered:
-                self.running = False
-                return
-
             df = self.data_manager.get_data(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
             if df is None or df.empty:
-                return
+                return False
 
-            # Determine Available Equity from Tracker if possible
-            if self.balance_tracker:
-                 current_equity = self.balance_tracker.get_available(self.trader.exchange_name)
-            elif current_equity is None:
-                 current_equity = 0.0
-
-            # Low Funds Guard: Skip if less than $1 total equity (ONLY if trading is enabled)
-            if self.trader.exchange.can_trade and current_equity < 1.0 and not circuit_breaker_triggered:
-                 print(f"⏹️ [{self.trader.exchange_name}] [{self.symbol}] Insufficient funds for trading (${current_equity:.2f}). Skipping.")
-                 return
-
-            # Ensure current_price is available for all checks
             last_row = df.iloc[-1]
-            current_price = last_row['close']
-            
-            # PRICE VALIDATION: Ensure current_price is valid number to avoid NoneType comparison errors
-            if current_price is None or (isinstance(current_price, (int, float)) and np.isnan(current_price)):
-                self.logger.error(f"Invalid current_price ({current_price}) for {self.symbol}. Skipping cycle.")
-                return
-            
-            current_price = float(current_price)
-
-            # 0. GLOBAL CONFLICT CHECK (Single Position Rule)
-            # Check if this symbol already has an active position/order on exchange or locally
-            # Use namespaced key
-            # Determine namespaced key using unified helper
+            current_price = float(last_row['close'])
             pos_key = self.trader._get_pos_key(self.symbol, self.timeframe)
-            already_in_symbol = await self.trader.has_any_symbol_position(self.symbol)
-            if already_in_symbol:
-                # If we have a position/order for THIS timeframe, we proceed to regular logic
-                # If we DON'T have a record for this timeframe, but has_any_symbol_position is True, 
-                # then it belongs to another timeframe. Block it.
-                if pos_key not in self.trader.active_positions and pos_key not in self.trader.pending_orders:
-                    return
-
-            # pos_key already defined above
             
-            # 1. CHECK PENDING ORDERS FIRST - Cancel if technical invalidation
-            # Live mode: pending orders are in pending_orders dict
-            # Dry run mode: pending orders are in active_positions with status='pending'
-            pending_from_live = self.trader.pending_orders.get(pos_key)
-            pending_from_dryrun = None
-            existing_pos = self.trader.active_positions.get(pos_key)
-            
-            # Check if dry_run pending order exists
-            if not pending_from_live and existing_pos and existing_pos.get('status') == 'pending':
-                pending_from_dryrun = {
-                    'side': existing_pos.get('side'),
-                    'price': existing_pos.get('entry_price'),
-                    'symbol': existing_pos.get('symbol')
-                }
-            
-            pending_order = pending_from_live or pending_from_dryrun
+            # 1. CHECK PENDING ORDERS
+            pending_order = self.trader.pending_orders.get(pos_key)
+            if not pending_order:
+                # Dry run check
+                existing_pos = self.trader.active_positions.get(pos_key)
+                if existing_pos and existing_pos.get('status') == 'pending':
+                    pending_order = {
+                        'side': existing_pos.get('side'),
+                        'price': existing_pos.get('entry_price'),
+                        'symbol': existing_pos.get('symbol')
+                    }
             
             if pending_order:
-                # Analyze current signal to check if still valid
-                # Use cached features from data_manager
                 df_check = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
-                if df_check is None or df_check.empty:
-                    return
-                last_row_check = df_check.iloc[-1]
-                signal_data = self.strategy.get_signal(last_row_check)
-                current_signal_side = signal_data['side']
-                current_conf = signal_data['confidence']
-                
-                pending_side = pending_order['side']
-                
-                # Cancel if signal reversed or confidence dropped below threshold
-                should_cancel = False
-                cancel_reason = ""
-                
-                if current_signal_side == 'SELL' and pending_side == 'BUY':
-                    should_cancel = True
-                    cancel_reason = "Signal reversed to SELL"
-                elif current_signal_side == 'BUY' and pending_side == 'SELL':
-                    should_cancel = True
-                    cancel_reason = "Signal reversed to BUY"
-                elif current_signal_side is None:
-                    should_cancel = True
-                    cancel_reason = "No signal detected"
-                elif current_conf < 0.2:  # Below minimum entry threshold
-                    should_cancel = True
-                    cancel_reason = f"Confidence dropped to {current_conf:.2f}"
-                
-                if should_cancel:
-                    await self.trader.cancel_pending_order(pos_key, reason=cancel_reason)
-                    # Unified notification
-                    pending_entry = pending_order.get('price', 0)
-                    terminal_msg, telegram_msg = format_order_cancelled(
-                        symbol=self.symbol,
-                        timeframe=self.timeframe,
-                        side=pending_side,
-                        entry_price=pending_entry,
-                        reason=cancel_reason,
-                        dry_run=self.trader.dry_run,
-                        exchange_name=self.trader.exchange_name
-                    )
-                    print(terminal_msg)
-                    await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange_name)
-                    return
-                
-                # For LIVE mode: exchange handles fill, just monitor and return
-                if pending_from_live:
-                    print(f"⏳ [{self.trader.exchange_name}] [{self.symbol} {self.timeframe}] Pending {pending_side} order @ {pending_order['price']:.3f} | Current: {current_price:.3f}")
-                    return
-                # For DRY RUN mode: fall through to fill check below
-            
-            # 2. CHECK EXISTING POSITIONS (both pending and filled)
-            existing_pos = self.trader.active_positions.get(pos_key)
-            if existing_pos:
-                pos_status = existing_pos.get('status', 'filled')  # backwards compat
-                order_type = existing_pos.get('order_type', 'market')
-                
-                # For pending limit orders in dry_run mode, check if should be filled
-                if pos_status == 'pending' and self.trader.dry_run:
-                    filled = self.trader.check_pending_limit_fills(self.symbol, self.timeframe, current_price)
-                    if not filled:
-                        # Still pending, just display status and return
-                        limit_price = existing_pos.get('entry_price')
-                        side = existing_pos.get('side')
-                        
-                        print(f"⏳ [{self.trader.exchange_name}] [{self.symbol} {self.timeframe}] PENDING {side} @ {limit_price:.3f} | Now: {current_price:.3f}")
-                        return
-                    # If filled, reload position data and notify
-                    existing_pos = self.trader.active_positions.get(pos_key)
-                    pos_status = existing_pos.get('status', 'filled')
-                    # Unified notification for filled order
-                    side = existing_pos.get('side')
-                    limit_price = existing_pos.get('entry_price')
-                    sl = existing_pos.get('sl')
-                    tp = existing_pos.get('tp')
-                    size = existing_pos.get('quantity', 0)
-                    notional = existing_pos.get('notional', 0)
-                    terminal_msg, telegram_msg = format_position_filled(
-                        symbol=self.symbol,
-                        timeframe=self.timeframe,
-                        side=side,
-                        entry_price=limit_price,
-                        size=size,
-                        notional=notional,
-                        sl_price=sl,
-                        tp_price=tp,
-                        score=existing_pos.get('entry_confidence'),
-                        leverage=existing_pos.get('leverage'),
-                        dry_run=self.trader.dry_run,
-                        exchange_name=self.trader.exchange_name
-                    )
-                    print(terminal_msg)
-                    await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange_name)
-                
-                # Skip SL/TP monitoring for pending orders
-                if pos_status == 'pending':
-                    return
-                
-                sl = existing_pos.get('sl')
-                tp = existing_pos.get('tp')
-                side = existing_pos.get('side')
-                leverage = existing_pos.get('leverage', 10)
-                entry_price = existing_pos.get('entry_price', current_price)
-
-                # --- AUTO CHECK & UPDATE SL/TP FOR FILLED POSITIONS (LIVE) ---
-                if pos_status == 'filled' and not self.trader.dry_run:
-                    # Sync with Symbol Lock to prevent multi-timeframe collisions
-                    async with self.trader._get_lock(self.symbol):
-                        # Calculate expected SL/TP
-                        e_sl, e_tp = self.risk_manager.calculate_sl_tp(
-                            entry_price, side,
-                            sl_pct=self.strategy.sl_pct,
-                            tp_pct=self.strategy.tp_pct
-                        )
-                        # Round for comparison to avoid float drift (0.0001% tolerance)
-                        if e_sl is not None and e_tp is not None:
-                            e_sl, e_tp = round(e_sl, 5), round(e_tp, 5)
-                            curr_sl, curr_tp = round(float(sl or 0), 5), round(float(tp or 0), 5)
-                        else:
-                            # Skip this sync cycle if we can't calculate SL/TP
-                            return
-                        
-                        if abs(curr_sl - e_sl) > 1e-6 or abs(curr_tp - e_tp) > 1e-6:
-                            print(f"🛠️ [{self.symbol} {self.timeframe}] Updating SL/TP: {curr_sl}/{curr_tp} → {e_sl}/{e_tp}")
-                            success = await self.trader.modify_sl_tp(
-                                self.symbol,
-                                timeframe=self.timeframe,
-                                new_sl=e_sl,
-                                new_tp=e_tp
-                            )
-                            if success:
-                                # Update local variables for the rest of this loop iteration
-                                # modify_sl_tp now returns the updated position dict
-                                if isinstance(success, dict):
-                                    existing_pos = success
-                                    sl = existing_pos.get('sl')
-                                    tp = existing_pos.get('tp')
-                                else:
-                                    # Fallback if it returns boolean
-                                    existing_pos = self.trader.active_positions.get(pos_key, existing_pos)
-                                    sl, tp = e_sl, e_tp
-
-                # Calculate unrealized PnL for monitoring (with leverage)
-                if side == 'BUY':
-                    unrealized_pnl_pct = ((current_price - entry_price) / entry_price) * 100 * leverage
-                else:  # SELL
-                    unrealized_pnl_pct = ((entry_price - current_price) / entry_price) * 100 * leverage
-                
-                pnl_color = "🟢" if unrealized_pnl_pct > 0 else "🔴"
-                status_icon = "📍" if pos_status == 'filled' else "⏳"
-                print(f"{status_icon} [{self.trader.exchange_name}] [{self.symbol}] {side} x{leverage} | Entry: {entry_price:.3f} → {current_price:.3f} | {pnl_color} {unrealized_pnl_pct:+.2f}% | SL: {sl:.3f} TP: {tp:.3f}")
-                
-                # 1. Check for Exit Conditions (SL/TP)
-                exit_hit = False
-                exit_reason = ""
-                
-                # Ensure current_price is valid
-                if current_price is None:
-                    return
-
-                if side == 'BUY':
-                    if sl and current_price <= sl:
-                        exit_hit = True
-                        exit_reason = f"STOP LOSS hit at {current_price}"
-                    elif tp and current_price >= tp:
-                        exit_hit = True
-                        exit_reason = f"TAKE PROFIT hit at {current_price}"
-                elif side == 'SELL':
-                    if sl and current_price >= sl:
-                        exit_hit = True
-                        exit_reason = f"STOP LOSS hit at {current_price}"
-                    elif tp and current_price <= tp:
-                        exit_hit = True
-                        exit_reason = f"TAKE PROFIT hit at {current_price}"
-
-                if exit_hit:
-                    if self.trader.dry_run:
-                        # Calculate PnL (with leverage)
-                        entry_price = existing_pos.get('entry_price', current_price)
-                        qty = existing_pos.get('qty', 0)
-                        leverage = existing_pos.get('leverage', 3)
-                        
-                        if side == 'BUY':
-                            pnl_pct = ((current_price - entry_price) / entry_price) * 100 * leverage
-                        else:
-                            pnl_pct = ((entry_price - current_price) / entry_price) * 100 * leverage
-                        
-                        # USD P&L based on actual notional change (not multiplied by leverage again)
-                        notional = qty * entry_price
-                        pnl_usd = (pnl_pct / 100) * notional / leverage
-                        
-                        # Determine exit reason for notification
-                        exit_reason_label = "TP" if "TAKE PROFIT" in exit_reason else "SL" if "STOP LOSS" in exit_reason else exit_reason
-                        
-                        # Unified notification
-                        terminal_msg, telegram_msg = format_position_closed(
-                            symbol=self.symbol,
-                            timeframe=self.timeframe,
-                            side=side,
-                            entry_price=entry_price,
-                            exit_price=current_price,
-                            pnl=pnl_usd,
-                            pnl_pct=pnl_pct,
-                            reason=exit_reason_label,
-                            dry_run=self.trader.dry_run,
-                            exchange_name=self.trader.exchange_name
+                if df_check is not None and not df_check.empty:
+                    last_row_check = df_check.iloc[-1]
+                    signal_data = self.strategy.get_signal(last_row_check)
+                    current_signal_side = signal_data['side']
+                    pending_side = pending_order['side']
+                    
+                    should_cancel = False
+                    cancel_reason = ""
+                    if current_signal_side == 'SELL' and pending_side == 'BUY':
+                        should_cancel = True
+                        cancel_reason = "Signal reversed to SELL"
+                    elif current_signal_side == 'BUY' and pending_side == 'SELL':
+                        should_cancel = True
+                        cancel_reason = "Signal reversed to BUY"
+                    elif current_signal_side is None:
+                        should_cancel = True
+                        cancel_reason = "Signal disappeared"
+                    
+                    if should_cancel:
+                        print(f"❌ [{self.symbol} {self.timeframe}] CANCELING: {cancel_reason}")
+                        await self.trader.cancel_pending_order(pos_key, reason=cancel_reason)
+                        terminal_msg, telegram_msg = format_order_cancelled(
+                            self.symbol, self.timeframe, pending_side, pending_order['price'], 
+                            cancel_reason, self.trader.dry_run, self.trader.exchange_name
                         )
                         print(terminal_msg)
                         await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange_name)
+                        return True
+                return False
+
+            # 2. MONITOR ACTIVE POSITION
+            existing_pos = self.trader.active_positions.get(pos_key)
+            if existing_pos and existing_pos.get('status') == 'filled':
+                side = existing_pos.get('side', 'BUY').upper()
+                entry_price = float(existing_pos.get('entry_price', 0))
+                leverage = int(existing_pos.get('leverage', 1))
+                
+                unrealized_pnl_pct = ((current_price - entry_price) / entry_price * 100 * leverage)
+                if side in ['SELL', 'SHORT']: unrealized_pnl_pct = -unrealized_pnl_pct
+
+                # 2.1 SL/TP Check
+                sl = float(existing_pos.get('sl', 0))
+                tp = float(existing_pos.get('tp', 0))
+                
+                exit_reason = None
+                if side in ['BUY', 'LONG']:
+                    if sl > 0 and current_price <= sl: exit_reason = 'SL'
+                    elif tp > 0 and current_price >= tp: exit_reason = 'TP'
+                else:
+                    if sl > 0 and current_price >= sl: exit_reason = 'SL'
+                    elif tp > 0 and current_price <= tp: exit_reason = 'TP'
+                
+                if exit_reason:
+                    if self.trader.dry_run:
+                        # Simulation mode exit
+                        print(f"🔴 [{self.trader.exchange_name}] [{self.symbol}] {exit_reason} hit internally (Dry Run). Closing...")
+                        result = 'WIN' if exit_reason == 'TP' else 'LOSS'
+                        pnl_pct = (current_price - entry_price) / entry_price
+                        if side in ['SELL', 'SHORT']: pnl_pct = -pnl_pct
                         
-                        # Set cooldown after STOP LOSS to prevent immediate re-entry
-                        if "STOP LOSS" in exit_reason:
-                            self.trader.set_sl_cooldown(self.symbol)
-                        
-                        # ADAPTIVE LEARNING: Record trade outcome
                         signals_used = existing_pos.get('signals_used', [])
-                        snapshot = existing_pos.get('snapshot')
-                        result = 'WIN' if 'TAKE PROFIT' in exit_reason else 'LOSS'
+                        snapshot = existing_pos.get('snapshot', {})
                         
-                        # Get BTC 1h change for market condition check
-                        btc_change = None
+                        btc_change = 0.0
                         try:
                             btc_df = self.data_manager.get_data('BTC/USDT', '1h', exchange=self.trader.exchange_name)
-                            if btc_df is not None and len(btc_df) >= 2:
+                            if btc_df is not None and not btc_df.empty:
                                 btc_change = (btc_df.iloc[-1]['close'] - btc_df.iloc[-2]['close']) / btc_df.iloc[-2]['close']
-                        except Exception:
-                            pass
+                        except: pass
                         
-                        signal_tracker.record_trade(
-                            symbol=self.symbol,
-                            timeframe=self.timeframe,
-                            side=side,
-                            signals_used=signals_used,
-                            result=result,
-                            pnl_pct=pnl_pct,
-                            btc_change=btc_change,
-                            snapshot=snapshot
-                        )
-                        
+                        await signal_tracker.record_trade(self.symbol, self.timeframe, side, signals_used, result, pnl_pct, btc_change, snapshot)
                         await self.trader.remove_position(self.symbol, timeframe=self.timeframe, exit_price=current_price, exit_reason=exit_reason)
-                        return
+                        return True
                     else:
-                        print(f"⏳ [{self.trader.exchange_name}] [{self.symbol}] Price crossed SL/TP internally. Triggering proactive sync...")
-                        # Trigger forced reconciliation to confirm closure immediately
-                        try:
-                            await self.trader.reconcile_positions(auto_fix=True, force_verify=True)
-                        except Exception as sync_err:
-                            print(f"⚠️ Proactive sync failed for {self.symbol}: {sync_err}")
-                            
-                        # Return to prevent further logic (like trailing SL updates) from running on a potentially closed position.
-                        return 
+                        print(f"⏳ [{self.trader.exchange_name}] [{self.symbol}] Price crossed {exit_reason} internally. Triggering proactive sync...")
+                        await self.trader.reconcile_positions(auto_fix=True, force_verify=True)
+                        return True
 
-                # 2.5 Check for Profit Lock-in & Dynamic TP Extension (v3.0)
-                # Proactively adjust SL/TP if profit threshold reached
-                res_val = last_row.get('resistance_level')
-                sup_val = last_row.get('support_level')
-                atr_val = last_row.get('ATR_14')
-                
+                # 2.2 Profit Lock
                 await self.trader.adjust_sl_tp_for_profit_lock(
-                    pos_key, 
-                    current_price, 
-                    resistance=res_val, 
-                    support=sup_val, 
-                    atr=atr_val
+                    pos_key, current_price, 
+                    resistance=last_row.get('resistance_level'), 
+                    support=last_row.get('support_level'), 
+                    atr=last_row.get('ATR_14')
                 )
 
-                # 3. Check for Signal Reversal (Early Exit)
-                # Use cached features
+                # 2.3 Signal Reversal
                 df_rev = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
                 if df_rev is not None and not df_rev.empty:
                     last_row_rev = df_rev.iloc[-1]
                     rev_signal_data = self.strategy.get_signal(last_row_rev)
                     rev_side = rev_signal_data['side']
                     rev_score = rev_signal_data['confidence'] * 10
-                    
-                    # Exit threshold from config (default 2.5)
-                    # We use a slightly lower threshold for EXITING than ENTERING
                     exit_thresh = self.strategy.config_data.get('thresholds', {}).get('exit_score', 2.5)
                     
                     opp_side = 'SELL' if side == 'BUY' else 'BUY'
@@ -460,375 +238,176 @@ class TradingBot:
                         print(f"🔄 [{self.symbol} {self.timeframe}] SIGNAL REVERSED to {rev_side} (Score {rev_score:.1f}). Force closing...")
                         success = await self.trader.force_close_position(pos_key, reason=f"Signal Flip to {rev_side}")
                         if success:
-                            # Approximate PnL for notification
                             qty = existing_pos.get('qty', 0)
                             pnl_usd = (unrealized_pnl_pct / 100) * (qty * entry_price) / leverage
-                            
                             terminal_msg, telegram_msg = format_position_closed(
-                                symbol=self.symbol,
-                                timeframe=self.timeframe,
-                                side=side,
-                                entry_price=entry_price,
-                                exit_price=current_price,
-                                pnl=pnl_usd,
-                                pnl_pct=unrealized_pnl_pct,
-                                reason=f"Signal Flip ({rev_side})",
-                                dry_run=self.trader.dry_run,
-                                exchange_name=self.trader.exchange_name
+                                self.symbol, self.timeframe, side, entry_price, current_price, 
+                                pnl_usd, unrealized_pnl_pct, f"Signal Flip ({rev_side})", 
+                                dry_run=self.trader.dry_run, exchange_name=self.trader.exchange_name
                             )
                             print(terminal_msg)
                             await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange_name)
-                            return
+                            return True
+                return False
+            return False
+        except Exception as e:
+            self.logger.error(f"Error in monitoring cycle for {self.symbol} {self.timeframe}: {e}")
+            return False
 
-                # If position is still open and no exit hit, skip entry analysis
+    async def get_new_entry_signal(self):
+        """
+        Evaluates the strategy and returns signal data if a valid entry signal exists.
+        Returns: signal_data dict or None
+        """
+        try:
+            # 1. GUARDS
+            if self.trader.is_in_cooldown(self.symbol):
+                return None
+            
+            skip, reason = signal_tracker.should_skip_symbol(self.symbol, min_wr=0.3, min_trades=3)
+            if skip:
+                return None
+
+            df = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
+            if df is None or df.empty:
+                return None
+            
+            last_row = df.iloc[-1]
+            signal_data = self.strategy.get_signal(last_row)
+            
+            if signal_data['side'] in ['BUY', 'SELL']:
+                # 3. CONFIDENCE THRESHOLD CHECK
+                if signal_data['confidence'] < MIN_CONFIDENCE_TO_TRADE:
+                    return None
+                    
+                if hasattr(self.strategy, 'is_enabled') and not self.strategy.is_enabled():
+                    return None
+                
+                # Technical confirmation
+                technical_confirm = False
+                confirm_signals = []
+                for k, l in [('signal_at_fibo_key_level', "Fibo"), ('signal_bounce_from_support', "Support"), 
+                            ('signal_bounce_from_resistance', "Resistance"), ('signal_price_at_support', "At Support"), 
+                            ('signal_price_at_resistance', "At Resistance")]:
+                    if last_row.get(k, False):
+                        technical_confirm = True
+                        confirm_signals.append(l)
+                
+                from config import REQUIRE_TECHNICAL_CONFIRMATION
+                if REQUIRE_TECHNICAL_CONFIRMATION and not technical_confirm:
+                    return None
+                
+                signal_data['technical_info'] = f" ({', '.join(confirm_signals)})" if confirm_signals else ""
+                signal_data['last_row'] = last_row
+                return signal_data
+            
+            return None
+        except Exception as e:
+            self.logger.error(f"Error evaluating signal for {self.symbol} {self.timeframe}: {e}")
+            return None
+
+    async def execute_entry(self, signal_data, current_equity):
+        """
+        Calculates position size and executes the trade.
+        """
+        try:
+            side = signal_data['side']
+            conf = signal_data['confidence']
+            last_row = signal_data['last_row']
+            current_price = float(last_row['close'])
+            
+            # PRE-TRADE CHECK (Only for Live)
+            if not self.trader.dry_run:
+                state = await self.trader.verify_symbol_state(self.symbol)
+                if state and (state['active_exists'] or state['order_exists']):
+                    await self.trader.reconcile_positions()
+                    return False
+
+            # REVERSAL REDUCTION
+            last_trade_side = signal_tracker.get_last_trade_side(self.symbol)
+            is_reversal = last_trade_side and last_trade_side != side
+            
+            score = conf * 10
+            tier = self.get_tier_config(score)
+            target_lev = tier.get('leverage', LEVERAGE)
+            
+            if is_reversal:
+                target_lev = max(3, int(target_lev * 0.6))
+            
+            # Risk params
+            sl_pct, tp_pct = self.strategy.get_dynamic_risk_params(last_row)
+            if is_reversal: sl_pct *= 0.8
+            
+            sl_price = current_price * (1 - sl_pct) if side == 'BUY' else current_price * (1 + sl_pct)
+            tp_price = current_price * (1 + tp_pct) if side == 'BUY' else current_price * (1 - tp_pct)
+            
+            # Placement
+            # tier contains cost_usdt and leverage
+            qty = self.risk_manager.calculate_size_by_cost(current_price, tier.get('cost_usdt', 10), target_lev)
+            if qty <= 0: return False
+            
+            print(f"🎯 [{self.symbol} {self.timeframe}] EXECUTING {side} x{target_lev} | Conf: {conf:.2f}")
+
+            # Sanitize snapshot before passing to trader
+            safe_snapshot = {}
+            for k, v in last_row.to_dict().items():
+                if hasattr(v, 'isoformat'): safe_snapshot[k] = v.isoformat()
+                elif isinstance(v, (np.integer, np.floating)): safe_snapshot[k] = v.item()
+                else: safe_snapshot[k] = v
+
+            return await self.trader.place_order(
+                symbol=self.symbol, side=side, qty=qty, timeframe=self.timeframe, 
+                order_type='limit' if USE_LIMIT_ORDERS else 'market',
+                price=current_price * (1 - PATIENCE_ENTRY_PCT) if side == 'BUY' and USE_LIMIT_ORDERS else current_price * (1 + PATIENCE_ENTRY_PCT) if side == 'SELL' and USE_LIMIT_ORDERS else None,
+                sl=sl_price, tp=tp_price, leverage=target_lev, signals_used=signal_data.get('signals',''),
+                entry_confidence=conf, snapshot=safe_snapshot
+            )
+        except Exception as e:
+            self.logger.error(f"Error executing entry for {self.symbol} {self.timeframe}: {e}")
+            return False
+
+    async def run_step(self, current_equity=None, circuit_breaker_triggered=False):
+        """
+        Main execution step for a single (symbol, timeframe) bot.
+        """
+        # Circuit breaker is checked ONCE in main(), passed here as flag
+        if circuit_breaker_triggered:
+            if self.running:
+                self.logger.warning(f"🛑 [CIRCUIT BREAKER] Stopping bot for {self.symbol} {self.timeframe}")
+            self.running = False
+            return
+
+        try:
+            # 1. Monitoring (SL/TP, reversal, pending logic)
+            await self.run_monitoring_cycle()
+            
+            # 2. Evaluation & Execution
+            already_in_this_symbol = await self.trader.has_any_symbol_position(self.symbol)
+            pos_key = self.trader._get_pos_key(self.symbol, self.timeframe)
+            
+            if already_in_this_symbol:
+                if pos_key not in self.trader.active_positions and pos_key not in self.trader.pending_orders:
+                    return
                 return
 
-            # GLOBAL GUARD: Protected by per-symbol lock to prevent race conditions
-            async with self.trader._get_lock(self.symbol):
-                already_in_symbol = await self.trader.has_any_symbol_position(self.symbol)
-                if already_in_symbol:
-                    # Silently skip entry to avoid overlapping positions on same coin
-                    return
+            signal_data = await self.get_new_entry_signal()
+            if signal_data:
+                # Available Equity
+                if self.balance_tracker:
+                     current_equity = self.balance_tracker.get_available(self.trader.exchange_name)
+                elif current_equity is None:
+                     current_equity = 0.0
 
-                # COOLDOWN CHECK: Prevent re-entry after recent SL
-                if self.trader.is_in_cooldown(self.symbol):
-                    remaining = self.trader.get_cooldown_remaining(self.symbol)
-                    # Only print occasionally to avoid spam
-                    if int(remaining) % 30 == 0:  # Print every 30 minutes
-                        print(f"⏸️ [{self.trader.exchange_name}] [{self.symbol}] In cooldown after SL ({remaining:.0f} min remaining)")
-                    return
+                if self.trader.exchange.can_trade and current_equity < 1.0:
+                     return
 
-                # ADAPTIVE LEARNING: Check if symbol has poor recent performance
-                skip, reason = signal_tracker.should_skip_symbol(self.symbol, min_wr=0.3, min_trades=3)
-                if skip:
-                    import random
-                    if random.random() < 0.1:  # Print 10% of time to avoid spam
-                        print(f"📉 [{self.trader.exchange_name}] [{self.symbol}] Skipping due to recent losses: {reason}")
-                    return
-
-                # Use cached features from data_manager (computed once per cycle, shared across bots)
-                df = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
-                if df is None or df.empty:
-                    return
-                last_row = df.iloc[-1]
-                # current_price already defined at top
-
-                signal_data = self.strategy.get_signal(last_row)
-                side = signal_data['side']
-                conf = signal_data['confidence']
-
-                if side in ['BUY', 'SELL']:
-                    # === OPTION 3: Check if config is enabled before opening NEW positions ===
-                    # Existing positions can still close, but NEW entries blocked if disabled
-                    if hasattr(self.strategy, 'is_enabled') and not self.strategy.is_enabled():
-                        self.logger.warning(f"[{self.symbol} {self.timeframe}] Config DISABLED - Skipping new entry")
-                        print(f"⛔ [{self.symbol} {self.timeframe}] Config disabled, blocking new position (existing can close)")
-                        return
-                    
-                    # Check technical confirmation (Fibonacci + S/R)
-                    technical_confirm = False
-                    confirm_signals = []
-                    
-                    if hasattr(last_row, 'signal_at_fibo_key_level') and last_row.get('signal_at_fibo_key_level', False):
-                        technical_confirm = True
-                        confirm_signals.append("Fibo")
-                    
-                    if hasattr(last_row, 'signal_bounce_from_support') and last_row.get('signal_bounce_from_support', False):
-                        technical_confirm = True
-                        confirm_signals.append("Support")
-                    
-                    if hasattr(last_row, 'signal_bounce_from_resistance') and last_row.get('signal_bounce_from_resistance', False):
-                        technical_confirm = True
-                        confirm_signals.append("Resistance")
-                    
-                    if hasattr(last_row, 'signal_price_at_support') and last_row.get('signal_price_at_support', False):
-                        technical_confirm = True
-                        confirm_signals.append("At Support")
-                    
-                    if hasattr(last_row, 'signal_price_at_resistance') and last_row.get('signal_price_at_resistance', False):
-                        technical_confirm = True
-                        confirm_signals.append("At Resistance")
-                    
-                    # If technical confirmation required but not found, skip entry
-                    from config import REQUIRE_TECHNICAL_CONFIRMATION
-                    if REQUIRE_TECHNICAL_CONFIRMATION and not technical_confirm:
-                        self.logger.info(f"[{self.symbol} {self.timeframe}] Signal {side} found but no technical confirmation - SKIP")
-                        print(f"⚠️ [{self.trader.exchange_name}] [{self.symbol} {self.timeframe}] Signal {side} but no Fibo/S/R confirmation - SKIP")
-                        return
-                    
-                    self.logger.info(f"[{self.symbol} {self.timeframe}] Signal: {side} ({conf})")
-                    
-                    # === CRITICAL PRE-TRADE CHECK ===
-                    # Verify with exchange before calculating or placing order
-                    # This prevents 'Dual Orders' if local state is stale
-                    if not self.trader.dry_run:
-                        state = await self.trader.verify_symbol_state(self.symbol)
-                        if state and (state['active_exists'] or state['order_exists']):
-                            msg = "position" if state['active_exists'] else "open order"
-                            print(f"🛑 [{self.trader.exchange_name}] [{self.symbol}] STOP: Found existing {msg} on exchange! skipping new order.")
-                            self.logger.warning(f"[{self.symbol}] Pre-trade check failed ({msg} exists): {state}")
-                            # Trigger sync to adopt this state
-                            await self.trader.reconcile_positions()
-                            return
-
-                    # === SAFE REVERSAL ENTRY ===
-                    # If this signal flips the previous trade direction for this symbol, take it cautiously.
-                    last_trade_side = signal_tracker.get_last_trade_side(self.symbol)
-                    is_reversal = last_trade_side and last_trade_side != side
-                    
-                    # Get exchange min cost early to support floor-aware reduction
-                    try:
-                        market = self.trader.exchange.market(self.symbol)
-                        exchange_min_notional = float(market.get('limits', {}).get('cost', {}).get('min', 5.0) or 5.0)
-                    except:
-                        exchange_min_notional = 5.0
-
-                    # Dynamic Tier Sizing - Get leverage early for display
-                    score = conf * 10
-                    tier = self.get_tier_config(score)
-                    target_lev = tier.get('leverage', LEVERAGE)
-                    
-                    if is_reversal:
-                        new_lev = max(3, int(target_lev * 0.6))
-                        print(f"⚠️ [{self.symbol} {self.timeframe}] REVERSAL DETECTED ({last_trade_side} -> {side}). Reduction: x{target_lev} -> x{new_lev}")
-                        target_lev = new_lev
-                    
-                    tech_info = f" ({', '.join(confirm_signals)})" if confirm_signals else ""
-                    print(f"🎯 [{self.symbol} {self.timeframe}] SIGNAL FOUND: {side} x{target_lev}{tech_info} | Conf: {conf:.2f} | Price: {current_price:.3f}")
-                    
-                    # Use dynamic SL/TP from strategy
-                    # UPDATED: Tighter SL for reversals to be 'Safe' as requested
-                    current_sl_pct = self.strategy.sl_pct
-                    if is_reversal:
-                        current_sl_pct *= 0.6 # 40% tighter stop
-                        
-                    sl, tp = self.risk_manager.calculate_sl_tp(
-                        current_price, side, 
-                        sl_pct=current_sl_pct, 
-                        tp_pct=self.strategy.tp_pct
-                    )
-                    
-                    # Dynamic Tier Sizing (target_lev already adjusted above if reversal)
-                    target_cost = tier.get('cost_usdt', None)
-                    target_risk = tier.get('risk_pct', None)
-                    
-                    qty = 0
-                    if target_cost is not None:
-                        # Fixed Margin Mode (User Preferred)
-                        actual_cost = target_cost
-                        if is_reversal:
-                            # Safely reduce cost while respecting exchange floor
-                            unreduced_notional = target_cost * target_lev
-                            reduced_cost = target_cost * 0.5
-                            reduced_notional = reduced_cost * target_lev
-                            
-                            if reduced_notional < exchange_min_notional and unreduced_notional >= exchange_min_notional:
-                                # Compensate to exactly meet the floor + small buffer
-                                actual_cost = (exchange_min_notional * 1.05) / target_lev
-                                print(f"⛽ [{self.trader.exchange_name}] [{self.symbol}] Floor Protection: Adjusting reversal cost to ${actual_cost:.2f} to meet ${exchange_min_notional} min.")
-                            else:
-                                actual_cost = reduced_cost # Normal 50% reduction
-                        
-                        # Ensure we don't exceed available balance if it's very low
-                        # but NEVER exceed the user's hard cap of $5
-                        if actual_cost > current_equity:
-                             safe_cost = max(0, current_equity * 0.98) # Reduced buffer to 2% for fees (was 5%)
-                             if self.balance_tracker:
-                                 b = self.balance_tracker.balances.get(self.trader.exchange_name, {})
-                                 total = b.get('total', 0)
-                                 reserved = b.get('reserved', 0)
-                                 print(f"⚠️ [{self.trader.exchange_name}] [{self.symbol}] Scaling down Margin: ${actual_cost:.2f} -> ${safe_cost:.2f} (Total Equity: ${total:.2f} | Reserved: ${reserved:.2f} | Available: ${current_equity:.2f})")
-                             else:
-                                 print(f"⚠️ [{self.trader.exchange_name}] [{self.symbol}] Scaling down Margin: ${actual_cost:.2f} -> ${safe_cost:.2f} (Available: ${current_equity:.2f})")
-                             actual_cost = safe_cost
-                        
-                        # Minimum Notional Check: If after scale-down it's too small, skip
-                        if actual_cost < 1.0:
-                             print(f"⏹️ [{self.trader.exchange_name}] [{self.symbol}] Scale-down resulted in margin too low (${actual_cost:.2f}). Skipping trade.")
-                             return
-
-                        qty = self.risk_manager.calculate_size_by_cost(current_price, actual_cost, target_lev)
-                        risk_info = f"${actual_cost:.1f} Margin" if is_reversal else f"${target_cost} Margin"
-                    else:
-                        # Fallback to Risk %
-                        use_risk = target_risk if target_risk else 0.01
-                        if is_reversal: use_risk *= 0.5
-                        
-                        qty = self.risk_manager.calculate_position_size(
-                            current_equity, current_price, sl, 
-                            leverage=target_lev, risk_pct=use_risk
-                        )
-                        risk_info = f"{use_risk*100}% Risk"
-                    
-                    # === MINIMUM NOTIONAL FLOOR ===
-                    strict_min_notional = exchange_min_notional
-                    exchange_min_cost = exchange_min_notional
-
-                    actual_notional = qty * current_price
-                    
-                    # Allow a tiny floating point tolerance (e.g. 9.99 vs 10.0)
-                    if qty > 0 and actual_notional < (strict_min_notional * 0.99):
-                        msg = f"[{self.trader.exchange_name}] [{self.symbol}] Calculated Size ${actual_notional:.2f} < Strict Min ${strict_min_notional:.2f} (Exch: ${exchange_min_cost}). Skipping (Strict Rule)."
-                        self.logger.warning(msg)
-                        print(f"⏹️ {msg}")
-                        qty = 0  # STRICT SKIP
-
-                    
-                    if qty > 0:
-                        # Calculate estimated margin cost for reservation
-                        estimated_margin_cost = (qty * current_price) / target_lev
-                        print(f"💰 [{self.trader.exchange_name}] [{self.symbol}] Trade Plan: Margin ${estimated_margin_cost:.2f} | Notional ${actual_notional:.2f} | Lev x{target_lev}")
-                        
-                        exec_side = side.lower()
-                        
-                        # === DUPLICATE PREVENTION ===
-                        # Check if we already have a pending order for this symbol/timeframe
-                        # This prevents placing multiple orders for the same signal
-                        # Determine namespaced key using unified helper
-                        pos_key_check = self.trader._get_pos_key(self.symbol, self.timeframe)
-                        
-                        # Check in pending_orders (live mode)
-                        if pos_key_check in self.trader.pending_orders:
-                            existing_pending = self.trader.pending_orders[pos_key_check]
-                            self.logger.warning(f"[DUPLICATE SKIP] {pos_key_check} already has pending order (ID: {existing_pending.get('order_id', 'N/A')})")
-                            print(f"⚠️ [{self.trader.exchange_name}] [{self.symbol} {self.timeframe}] Already have pending order - SKIP to prevent duplicate")
-                            return
-                        
-                        # Check in active_positions (both live and dry_run)
-                        if pos_key_check in self.trader.active_positions:
-                            existing_status = self.trader.active_positions[pos_key_check].get('status', 'unknown')
-                            if existing_status == 'pending':
-                                existing_order_id = self.trader.active_positions[pos_key_check].get('order_id', 'N/A')
-                                self.logger.warning(f"[DUPLICATE SKIP] {pos_key_check} already has pending position (ID: {existing_order_id})")
-                                print(f"⚠️ [{self.trader.exchange_name}] [{self.symbol} {self.timeframe}] Already have pending position - SKIP to prevent duplicate")
-                                return
-                        
-                        # Determine order type and price
-                        from config import USE_LIMIT_ORDERS, PATIENCE_ENTRY_PCT, LIMIT_ORDER_TIMEOUT
-                        order_type = 'market'
-                        entry_price = current_price
-                        
-                        if USE_LIMIT_ORDERS:
-                            # Use limit order with patience for better entry
-                            order_type = 'limit'
-                            if side == 'BUY':
-                                # Buy at lower price (more patience)
-                                entry_price = current_price * (1 - PATIENCE_ENTRY_PCT)
-                            else:
-                                # Sell at higher price (more patience)
-                                entry_price = current_price * (1 + PATIENCE_ENTRY_PCT)
-                            
-                            # Recalculate SL/TP based on LIMIT entry price (not current price)
-                            sl, tp = self.risk_manager.calculate_sl_tp(
-                                entry_price, side, 
-                                sl_pct=self.strategy.sl_pct, 
-                                tp_pct=self.strategy.tp_pct
-                            )
-                            
-                            tech_label = " (Fibo/SR)" if technical_confirm else ""
-                            print(f"📋 [{self.trader.exchange_name}] [{self.symbol}] Using LIMIT order: {entry_price:.3f} (patience: {PATIENCE_ENTRY_PCT*100:.1f}% from {current_price:.3f}){tech_label}")
-                        
-                        # Extract signals from comment for adaptive learning
-                        # Comment format: "Long Score 6.5 (RSI_oversold,EMA9_EMA21_cross_up,...)"
-                        signals_used = []
-                        comment = signal_data.get('comment', '')
-                        if '(' in comment and ')' in comment:
-                            try:
-                                signals_str = comment.split('(')[1].split(')')[0]
-                                signals_used = [s.strip() for s in signals_str.split(',') if s.strip()]
-                            except:
-                                pass
-                        
-                        # Extract snapshot (features) for training
-                        snapshot = signal_data.get('snapshot')
-                        
-                        # === BALANCE RESERVATION ===
-                        # Prevent race conditions by locking estimated funds
-                        if self.trader.exchange.is_authenticated or self.trader.dry_run:
-                            if self.balance_tracker:
-                                if not self.balance_tracker.reserve(self.trader.exchange_name, estimated_margin_cost):
-                                    print(f"⚠️ [{self.symbol}] Reservation failed. Insufficient shared funds for ${estimated_margin_cost:.2f}. Skipping.")
-                                    return
-
-                        # === PUBLIC MODE GUARD (Simulation Fallback) ===
-                        is_public_sim = not self.trader.dry_run and not self.trader.exchange.is_authenticated
-                        if is_public_sim:
-                            print(f"📢 [{self.trader.exchange_name}] [{self.symbol} {self.timeframe}] SIGNAL FOUND (Public Mode): {side} @ {entry_price:.3f} | Simulation Active.")
-                            # We let it fall through to place_order, which will handle the simulation
-                            # But we should mark it as such for notifications
-                            pass
-
-                        try:
-                            res = await self.trader.place_order(
-                                self.symbol, exec_side, qty, 
-                                timeframe=self.timeframe, 
-                                order_type=order_type,
-                                price=entry_price, 
-                                sl=sl, tp=tp,
-                                timeout=LIMIT_ORDER_TIMEOUT if order_type == 'limit' else None,
-                                leverage=target_lev,
-                                signals_used=signals_used,
-                                entry_confidence=conf,  # For adaptive position adjustment
-                                snapshot=snapshot       # Save features for RL training
-                            )
-                        except Exception as e:
-                            # Re-raise to be caught by outer loop, but ensure finally runs
-                            raise e
-                        finally:
-                            # ALWAYS release reservation.
-                            # If order succeeded, exchange balance will decrease, and next update will be correct.
-                            # If failed, we must unlock funds.
-                            if self.balance_tracker:
-                                self.balance_tracker.release(self.trader.exchange_name, estimated_margin_cost)
-
-                        if res:
-                            from notification import format_pending_order, format_position_filled, format_symbol
-                            
-                            # Determine which formatter to use
-                            raw_status = (res.get('status') or '').lower()
-                            if raw_status in ['open', 'pending'] or order_type == 'limit':
-                                terminal_msg, telegram_msg = format_pending_order(
-                                    symbol=self.symbol,
-                                    timeframe=self.timeframe,
-                                    side=side,
-                                    entry_price=entry_price,
-                                    sl_price=sl,
-                                    tp_price=tp,
-                                    score=conf,
-                                    leverage=target_lev,
-                                    dry_run=self.trader.dry_run,
-                                    exchange_name=self.trader.exchange_name
-                                )
-                            else:
-                                # Market order filled immediately
-                                terminal_msg, telegram_msg = format_position_filled(
-                                    symbol=self.symbol,
-                                    timeframe=self.timeframe,
-                                    side=side,
-                                    entry_price=entry_price,
-                                    size=qty,
-                                    notional=estimated_margin_cost * target_lev,
-                                    sl_price=sl,
-                                    tp_price=tp,
-                                    score=conf,
-                                    leverage=target_lev,
-                                    dry_run=self.trader.dry_run,
-                                    exchange_name=self.trader.exchange_name
-                                )
-                            
-                            print(terminal_msg)
-                            await send_telegram_message(telegram_msg, exchange_name=self.trader.exchange_name)
-                        else:
-                            print(f"❌ [{self.symbol}] Order placement failed (See warning logs).")
-                        
-                        # NOTE: SL/TP setup is already handled in execution.py:420
-                        # No need to call setup_sl_tp_for_pending() here to avoid duplicates
-
-
+                # Execute
+                await self.execute_entry(signal_data, current_equity)
         except Exception as e:
+            self.logger.error(f"Error in TradingBot.run_step ({self.symbol} {self.timeframe}): {e}")
             import traceback
-            traceback.print_exc()
-            self.logger.error(f"Error in bot step {self.symbol}: {e}")
+            self.logger.error(traceback.format_exc())
+
 
 import time
 from analyzer import run_global_optimization
@@ -1238,23 +817,81 @@ async def main():
                         await send_telegram_message(f"🚨 CIRCUIT BREAKER: {cb_reason} (Next reminder in 2h)", exchange_name=ex_name)
                         main.last_cb_alert[ex_name] = curr_time
 
-            # 3. Run Logic for all bots
-            # SKIP unauthenticated exchanges to prevent pointless signal analysis/errors
-            active_tasks = []
+            # 3. COORDINATED LOGIC (Symbol-wise Competition)
+            # Group bots by (trader, symbol) to coordinate across timeframes
+            bot_groups = {}
             for bot in bots:
                 if not bot.running: continue
-                
-                ex_name = bot.trader.exchange_name
-                
-                # Check if this exchange tripped the circuit breaker
-                bot_stop_trading, _ = risk_managers.get(ex_name).check_circuit_breaker(balance_tracker.get_available(ex_name)) if risk_managers.get(ex_name) and balance_tracker.get_available(ex_name) > 0 else (False, "")
+                key = (bot.trader, bot.symbol)
+                if key not in bot_groups:
+                    bot_groups[key] = []
+                bot_groups[key].append(bot)
 
-                # Only run if it's paper trading OR authenticated live trading OR PUBLIC MODE (Task requirement)
-                # Public mode allowed: we just skip ordering logic inside run_step
-                active_tasks.append(bot.run_step(circuit_breaker_triggered=bot_stop_trading))
+            async def process_symbol_group(trader, symbol, group_bots):
+                # 3.1 MONITORING PHASE (Parallel)
+                await asyncio.gather(*[b.run_monitoring_cycle() for b in group_bots])
                 
-            if active_tasks: 
-                await asyncio.gather(*active_tasks)
+                # 3.2 ENTRY EVALUATION PHASE
+                # Use trader's lock to prevent race conditions during evaluation
+                async with trader._get_lock(symbol):
+                    # Check if already in symbol (filled or pending)
+                    existing_pending_key = None
+                    existing_pending_pos = None
+                    has_filled = False
+                    
+                    for key, pos in trader.active_positions.items():
+                        if pos.get('symbol') == symbol:
+                            if pos.get('status') == 'filled':
+                                has_filled = True
+                                break
+                            elif pos.get('status') == 'pending':
+                                existing_pending_key = key
+                                existing_pending_pos = pos
+
+                    if has_filled:
+                        return
+
+                    # Collect signals from all timeframes in parallel
+                    signal_tasks = [b.get_new_entry_signal() for b in group_bots]
+                    signals = await asyncio.gather(*signal_tasks)
+                    
+                    # Filter for valid signals
+                    valid_signals = [] # list of (bot, signal_data)
+                    for idx, sig in enumerate(signals):
+                        if sig:
+                            valid_signals.append((group_bots[idx], sig))
+                    
+                    if not valid_signals:
+                        return
+                        
+                    # 3.3 CONFIDENCE COMPETITION (Highest Confidence Wins)
+                    best_bot, best_signal = max(valid_signals, key=lambda x: x[1]['confidence'])
+                    
+                    # 3.4 PENDING COMPETITION & EXECUTION
+                    if existing_pending_pos:
+                        ex_conf = existing_pending_pos.get('entry_confidence', 0)
+                        ex_tf = existing_pending_pos.get('timeframe')
+                        new_conf = best_signal['confidence']
+                        
+                        # Replace if new signal is significantly better (+5% threshold to avoid noise)
+                        if new_conf > (ex_conf + 0.05):
+                            print(f"🔄 [{symbol}] COMPETITION: {best_bot.timeframe} ({new_conf:.2f}) > {ex_tf} ({ex_conf:.2f}). Replacing order...")
+                            await trader.cancel_pending_order(existing_pending_key, reason=f"Replaced by better signal on {best_bot.timeframe}")
+                        else:
+                            # Current pending is good enough
+                            return
+
+                    # Final execution
+                    ex_name = best_bot.trader.exchange_name
+                    bot_stop_trading, _ = risk_managers.get(ex_name).check_circuit_breaker(balance_tracker.get_available(ex_name)) if risk_managers.get(ex_name) and balance_tracker.get_available(ex_name) > 0 else (False, "")
+
+                    if not bot_stop_trading:
+                        await best_bot.execute_entry(best_signal, balance_tracker.get_available(ex_name))
+
+            # Run all symbol groups in parallel
+            group_tasks = [process_symbol_group(t, s, g) for (t, s), g in bot_groups.items()]
+            if group_tasks:
+                await asyncio.gather(*group_tasks)
             
             
             from config import HEARTBEAT_INTERVAL, FAST_HEARTBEAT_INTERVAL

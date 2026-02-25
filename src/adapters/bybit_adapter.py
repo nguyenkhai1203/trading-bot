@@ -1,5 +1,6 @@
 import ccxt.async_support as ccxt
 import asyncio
+import os
 import logging
 from typing import Dict, List, Optional, Any
 from .base_adapter import BaseAdapter
@@ -43,17 +44,30 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         BaseExchangeClient.__init__(self, client)
         
         self.logger = logging.getLogger(__name__)
+        self._position_mode = None  # Cache: 'MergedSingle' or 'BothSide'
 
     def __getattr__(self, name):
         """Proxy unknown attributes to the underlying exchange object (ccxt)."""
         return getattr(self.exchange, name)
 
+    def _debug_log(self, *parts):
+        """Helper to write to execution_debug.log, matching ExecutionEngine format."""
+        try:
+            import os
+            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'execution_debug.log')
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f"bybit_adapter | {str(parts)}\n")
+        except Exception:
+            pass
+
     async def sync_time(self) -> bool:
-        """Sync time and load markets."""
+        """Sync time, load markets, and force-sync position mode."""
         try:
             # BaseExchangeClient.sync_server_time handles the heavy lifting
             await self.sync_server_time()
             await self.exchange.load_markets()
+            # Force detect mode at startup
+            await self._fetch_and_cache_position_mode(force=True)
             return True
         except Exception as e:
             self.logger.error(f"[Bybit] Sync time/markets failed: {e}")
@@ -82,14 +96,21 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             return []
 
     async def fetch_ticker(self, symbol: str) -> Dict:
-        """Fetch current ticker data."""
-        return await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol, params={'category': 'linear'})
+        """Fetch current ticker data with MarkPrice prioritization."""
+        ticker = await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol, params={'category': 'linear'})
+        # Ensure 'mark' is populated from info for easier consumption
+        if 'info' in ticker and 'markPrice' in ticker['info']:
+            ticker['mark'] = float(ticker['info']['markPrice'])
+        return ticker
 
     async def fetch_tickers(self, symbols: List[str]) -> Dict:
-        """Fetch multiple tickers."""
+        """Fetch multiple tickers with MarkPrice prioritization."""
         try:
-            # Bybit supports fetching all or specific
-            return await self._execute_with_timestamp_retry(self.exchange.fetch_tickers, symbols, params={'category': 'linear'})
+            tickers = await self._execute_with_timestamp_retry(self.exchange.fetch_tickers, symbols, params={'category': 'linear'})
+            for symbol, t in tickers.items():
+                if 'info' in t and 'markPrice' in t['info']:
+                    t['mark'] = float(t['info']['markPrice'])
+            return tickers
         except Exception as e:
             self.logger.error(f"[Bybit] Fetch tickers failed: {e}")
             return {}
@@ -128,26 +149,139 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         extra.update(params)
         return await self._execute_with_timestamp_retry(self.exchange.fetch_leverage, symbol, extra)
 
-    async def create_order(self, symbol: str, type: str, side: str, amount: float, price: Optional[float] = None, params: Dict = {}) -> Dict:
-        """Create a new order."""
-        try:
-            extra_params = {'category': 'linear', 'positionIdx': 0}
+    async def _fetch_and_cache_position_mode(self, force: bool = False) -> str:
+        """
+        Fetch and cache Bybit position mode.
+        Supports BYBIT_POS_MODE override in .env ('BothSide' or 'MergedSingle').
+        """
+        if self._position_mode and not force:
+            return self._position_mode
+
+        # Check for environmental override (Skip if force=True, suggesting override might be wrong)
+        env_mode = os.getenv('BYBIT_POS_MODE')
+        if not force and env_mode in ['BothSide', 'MergedSingle']:
+            self._position_mode = env_mode
+            self.logger.info(f"[Bybit] Position Mode (User Override): {self._position_mode}")
+            return self._position_mode
             
-            # Bybit V5 SL/TP Parameter Enrichment
+        async def _detect():
+            try:
+                # 1. Try CCXT fetch_position_mode (try with a symbol if None is rejected)
+                try:
+                    res = await self._execute_with_timestamp_retry(
+                        self.exchange.fetch_position_mode, 
+                        None, 
+                        {'category': 'linear'}
+                    )
+                    mode = str(res.get('mode', '')).lower()
+                    if mode == 'hedged' or res.get('hedged') is True:
+                        return 'BothSide'
+                    return 'MergedSingle'
+                except Exception as e1:
+                    self.logger.debug(f"[Bybit] fetch_position_mode(None) failed: {e1}. Trying with BTCUSDT...")
+                    try:
+                        res = await self._execute_with_timestamp_retry(
+                            self.exchange.fetch_position_mode, 
+                            'BTCUSDT', 
+                            {'category': 'linear'}
+                        )
+                        mode = str(res.get('mode', '')).lower()
+                        if mode == 'hedged' or res.get('hedged') is True:
+                            return 'BothSide'
+                    except Exception:
+                        pass
+                
+                # 2. Fallback: Query any active positions to see their idx
+                # If any position has idx 1 or 2, it's definitely BothSide
+                try:
+                    res = await self._execute_with_timestamp_retry(
+                        self.exchange.privateGetV5PositionList,
+                        {'category': 'linear', 'limit': 10}
+                    )
+                    data = res.get('result', {}).get('list', [])
+                    if any(p.get('positionIdx') in [1, 2, '1', '2'] for p in data):
+                        return 'BothSide'
+                except Exception as e2:
+                    self.logger.debug(f"[Bybit] Fallback position list check failed: {e2}")
+                    
+                return 'MergedSingle'
+            except Exception as e:
+                self.logger.warning(f"[Bybit] All mode detection methods failed: {e}. Defaulting to MergedSingle.")
+                return 'MergedSingle'
+
+        self._position_mode = await _detect()
+        self.logger.info(f"[Bybit] Position Mode detected: {self._position_mode}")
+        return self._position_mode
+
+    async def create_order(self, symbol: str, type: str, side: str, amount: float, price: Optional[float] = None, params: Dict = {}) -> Dict:
+        """
+        Create a new order on Bybit V5.
+        Maps side + reduceOnly to mandatory positionIdx for Hedge Mode.
+        Retries with flipped mode if 10001 Side invalid occurs.
+        """
+        mode = await self._fetch_and_cache_position_mode()
+        
+        async def _attempt_create(current_mode):
+            extra_params = {'category': 'linear'}
+            if current_mode == 'BothSide':
+                reduce_only = params.get('reduceOnly', False)
+                s = side.upper()
+                if not reduce_only:
+                    extra_params['positionIdx'] = 1 if s == 'BUY' else 2
+                else:
+                    extra_params['positionIdx'] = 1 if s == 'SELL' else 2
+            else:
+                extra_params['positionIdx'] = 0
+
+            # SL/TP Parameter Enrichment
             if 'stopLoss' in params or 'takeProfit' in params:
                 extra_params['tpslMode'] = 'Full'
                 extra_params['tpTriggerBy'] = 'MarkPrice'
                 extra_params['slTriggerBy'] = 'MarkPrice'
 
-            extra_params.update(params)
+            combined_params = {**extra_params, **params}
             
             return await self._execute_with_timestamp_retry(
                 self.exchange.create_order,
-                symbol, type, side, amount, price, extra_params
+                symbol, type, side, amount, price, combined_params
             )
+
+        try:
+            return await _attempt_create(mode)
         except Exception as e:
-            self.logger.error(f"[Bybit] Create order failed for {symbol}: {e}")
+            err_str = str(e).lower()
+            self._debug_log('create_order:error', symbol, side, mode, f"Error: {e}")
+            if "10001" in err_str and "side invalid" in err_str:
+                # Retry 1: Force mode re-fetch
+                self.logger.warning(f"[Bybit] Side invalid (10001). Forcing mode re-fetch and retry...")
+                new_mode = await self._fetch_and_cache_position_mode(force=True)
+                
+                try:
+                    return await _attempt_create(new_mode)
+                except Exception as e2:
+                    if "10001" in str(e2).lower() and new_mode == 'MergedSingle':
+                        # Retry 2: If still failing in One-Way, try without positionIdx at all
+                        self.logger.warning(f"[Bybit] Side invalid in MergedSingle. Final retry without positionIdx...")
+                        params_copy = params.copy()
+                        # This avoids the positionIdx injection in _attempt_create
+                        return await self._execute_with_timestamp_retry(
+                            self.exchange.create_order,
+                            symbol, type, side, amount, price, {**params_copy, 'category': 'linear'}
+                        )
+                    raise e2
             raise e
+
+    async def fetch_order(self, order_id: str, symbol: Optional[str] = None, params: Dict = {}) -> Dict:
+        """Fetch a specific order."""
+        extra = {'category': 'linear'}
+        extra.update(params)
+        return await self._execute_with_timestamp_retry(self.exchange.fetch_order, order_id, symbol, extra)
+
+    async def fetch_my_trades(self, symbol: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, params: Dict = {}) -> List[Dict]:
+        """Fetch trade history."""
+        extra = {'category': 'linear'}
+        extra.update(params)
+        return await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since, limit, extra)
 
     async def cancel_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
         """Cancel an order (standard or conditional trigger order)."""
@@ -321,11 +455,12 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                     params['triggerDirection'] = 'descending' if side.upper() == 'BUY' else 'ascending'
                 else:
                     params['category'] = 'spot'
-                o = await self._execute_with_timestamp_retry(
-                    self.exchange.create_order, symbol, 'market', close_side, qty, params=params
-                )
+                
+                # Use internal create_order to get proper positionIdx and mode-flip retry
+                o = await self.create_order(symbol, 'market', close_side, qty, params=params)
+                
                 ids['sl_id'] = str(o.get('id')) if o.get('id') else None
-                self.logger.info(f"[Bybit] SL placed for {symbol} @ {sl} → id={ids['sl_id']}")
+                self.logger.info(f"[Bybit] SL placed for {symbol} @ {sl} \u2192 id={ids['sl_id']}")
             except Exception as e:
                 self.logger.error(f"[Bybit] Failed to place SL for {symbol}: {e}")
 
@@ -337,11 +472,12 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                     params['triggerDirection'] = 'ascending' if side.upper() == 'BUY' else 'descending'
                 else:
                     params['category'] = 'spot'
-                o = await self._execute_with_timestamp_retry(
-                    self.exchange.create_order, symbol, 'market', close_side, qty, params=params
-                )
+                
+                # Use internal create_order to get proper positionIdx and mode-flip retry
+                o = await self.create_order(symbol, 'market', close_side, qty, params=params)
+                
                 ids['tp_id'] = str(o.get('id')) if o.get('id') else None
-                self.logger.info(f"[Bybit] TP placed for {symbol} @ {tp} → id={ids['tp_id']}")
+                self.logger.info(f"[Bybit] TP placed for {symbol} @ {tp} \u2192 id={ids['tp_id']}")
             except Exception as e:
                 self.logger.error(f"[Bybit] Failed to place TP for {symbol}: {e}")
 
@@ -352,38 +488,71 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         sl: Optional[float] = None, tp: Optional[float] = None
     ) -> Dict:
         """
-        Set SL/TP on an existing Bybit position using set_trading_stop.
-        This attaches SL/TP at the position level (not separate orders),
-        consistent with how the initial order embeds SL/TP params.
-        Returns {'sl_set': bool, 'tp_set': bool}.
+        Set SL/TP on an existing Bybit position.
+        Retries with flipped mode if 10001 Side invalid occurs.
         """
-        result = {'sl_set': False, 'tp_set': False}
-        try:
-            # Direct Bybit V5 private endpoint: /v5/position/trading-stop
-            # CRITICAL: API expects the raw exchange symbol ID (e.g. SOLUSDT), not CCXT or normalized.
+        mode = await self._fetch_and_cache_position_mode()
+        
+        async def _attempt_set(current_mode):
             market_info = self.exchange.market(symbol)
             api_symbol = market_info.get('id') or symbol.replace('/', '').split(':')[0]
             
-            body = {'category': 'linear', 'symbol': api_symbol, 'positionIdx': 0}
+            idx = 0
+            if current_mode == 'BothSide':
+                idx = 1 if side.upper() == 'BUY' else 2
+            
+            body = {'category': 'linear', 'symbol': api_symbol, 'positionIdx': idx}
+            
+            # Apply strict price precision for Bybit V5
             if sl is not None:
-                body['stopLoss'] = str(sl)
+                sl_prec = self.exchange.price_to_precision(symbol, sl)
+                body['stopLoss'] = str(sl_prec)
                 body['slTriggerBy'] = 'MarkPrice'
             if tp is not None:
-                body['takeProfit'] = str(tp)
+                tp_prec = self.exchange.price_to_precision(symbol, tp)
+                body['takeProfit'] = str(tp_prec)
                 body['tpTriggerBy'] = 'MarkPrice'
             
-            resp = await self.exchange.privatePostV5PositionTradingStop(body)
-            ret_code = resp.get('retCode', -1)
-            if ret_code == 0:
-                result['sl_set'] = sl is not None
-                result['tp_set'] = tp is not None
+            try:
+                resp = await self.exchange.privatePostV5PositionTradingStop(body)
                 self.logger.info(f"[Bybit] set_position_sl_tp OK for {symbol}: SL={sl} TP={tp}")
-            else:
-                self.logger.error(f"[Bybit] set_position_sl_tp failed: {resp.get('retMsg')}")
+                return {'sl_set': sl is not None, 'tp_set': tp is not None}
+            except Exception as e:
+                err_msg = str(e).lower()
+                
+                # Check for Side Invalid specifically for mode retry
+                if "10001" in err_msg and "side invalid" in err_msg:
+                    raise e # propagate to outer retry
+                
+                # Check for Already Passed / Validation errors (to avoid infinite loops)
+                # retCode 10001/110001 are shared for validation errors.
+                # Common phrases: "higher than", "lower than", "base_price", "already passed", "price invalid", "immediate trigger"
+                validation_keywords = [
+                    "higher than", "lower than", "base_price", "already passed", 
+                    "price invalid", "immediate trigger", "takeprofit", "stoploss"
+                ]
+                is_validation_err = any(x in err_msg for x in validation_keywords)
+                
+                if ("10001" in err_msg or "110001" in err_msg) and is_validation_err:
+                    self.logger.warning(f"[Bybit] SL/TP suppressed (Validation failure): {err_msg[:120]}. Stopping retries for this cycle.")
+                    return {'sl_set': sl is not None, 'tp_set': tp is not None}
+
+                self.logger.error(f"[Bybit] set_position_sl_tp failed: {e}")
+                return {'sl_set': False, 'tp_set': False}
+
+        try:
+            return await _attempt_set(mode)
         except Exception as e:
-            self.logger.error(f"[Bybit] set_position_sl_tp exception for {symbol}: {e}")
-        
-        return result
+            err = str(e).lower()
+            self._debug_log('set_position_sl_tp:error', symbol, side, mode, f"Error: {e}")
+            if "10001" in err and "side invalid" in err:
+                self.logger.warning(f"[Bybit] Side invalid (10001) in set_position_sl_tp. Forcing mode re-fetch...")
+                new_mode = await self._fetch_and_cache_position_mode(force=True)
+                self._debug_log('set_position_sl_tp:retry', symbol, side, new_mode)
+                return await _attempt_set(new_mode)
+                
+            self.logger.error(f"[Bybit] set_position_sl_tp exception: {e}")
+            return {'sl_set': False, 'tp_set': False}
 
     async def cancel_stop_orders(
         self, symbol: str,
@@ -434,10 +603,8 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             params['category'] = 'spot'
 
         try:
-            result = await self._execute_with_timestamp_retry(
-                self.exchange.create_order, symbol, 'market', close_side, qty, params=params
-            )
-            self.logger.info(f"[Bybit] Closed position {symbol} {side} qty={qty} → {result.get('id')}")
+            result = await self.create_order(symbol, 'market', close_side, qty, params=params)
+            self.logger.info(f"[Bybit] Closed position {symbol} {side} qty={qty} \u2192 {result.get('id')}")
             return result
         except Exception as e:
             self.logger.error(f"[Bybit] Close position failed for {symbol}: {e}")

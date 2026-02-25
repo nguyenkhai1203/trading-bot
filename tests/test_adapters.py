@@ -4,6 +4,12 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from adapters.binance_adapter import BinanceAdapter
 from adapters.bybit_adapter import BybitAdapter
 
+@pytest.fixture(autouse=True)
+def isolate_env():
+    """Ensure tests aren't affected by local .env."""
+    with patch('os.getenv', return_value=None):
+        yield
+
 class TestBinanceAdapter:
     @pytest.fixture
     def mock_ccxt_binance(self):
@@ -91,10 +97,13 @@ class TestBybitAdapter:
         exch.fetch_positions = AsyncMock(return_value=[
             {'symbol': 'LTC/USDT:USDT', 'contracts': 10.0, 'info': {'category': 'linear', 'size': '10'}}
         ])
+        exch.fetch_position_mode = AsyncMock(return_value={'mode': 'hedged', 'hedged': True})
+        exch.privateGetV5PositionList = AsyncMock(return_value={'result': {'list': [{'positionIdx': 1}]}})
         exch.cancel_order = AsyncMock(return_value={'id': 'cancelled'})
         exch.create_order = AsyncMock(return_value={'id': 'new_order'})
         exch.privatePostV5PositionTradingStop = AsyncMock(return_value={'retCode': 0})
         exch.market = MagicMock(return_value={'id': 'LTCUSDT'})
+        exch.price_to_precision = MagicMock(side_effect=lambda s, p: str(p))
         return exch
 
     @pytest.fixture
@@ -143,5 +152,5 @@ class TestBybitAdapter:
         assert res['sl_set'] is True
         assert mock_ccxt_bybit.privatePostV5PositionTradingStop.called
         body = mock_ccxt_bybit.privatePostV5PositionTradingStop.call_args[0][0]
-        assert body['stopLoss'] == '100.0'
+        assert str(body['stopLoss']) == '100.0'
         assert body['symbol'] == 'LTCUSDT'

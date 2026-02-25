@@ -2,8 +2,10 @@ import ccxt.async_support as ccxt
 import logging
 import json
 import os
+import sys
 import tempfile
 import asyncio
+import numpy as np
 
 from config import (
     LEVERAGE, GLOBAL_MAX_LEVERAGE, BINANCE_API_KEY, BINANCE_API_SECRET, AUTO_CREATE_SL_TP,
@@ -20,6 +22,26 @@ import requests
 from urllib.parse import urlencode
 
 # Logger Adapter for Exchange Prefix
+class BotJSONEncoder(json.JSONEncoder):
+    """Custom JSON encoder for non-serializable types like Timestamp and numpy types."""
+    def default(self, obj):
+        try:
+            # Handle pandas Timestamp
+            if hasattr(obj, 'isoformat'):
+                return obj.isoformat()
+            # Handle numpy integers and floats
+            if isinstance(obj, (np.integer, np.floating)):
+                return obj.item()
+            # Handle numpy arrays
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            # Handle other types that might have to_dict
+            if hasattr(obj, 'to_dict'):
+                return obj.to_dict()
+            return super().default(obj)
+        except Exception:
+            return str(obj)
+
 class ExchangeLoggerAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
         return '[%s] %s' % (self.extra['exchange_name'], msg), kwargs
@@ -51,10 +73,25 @@ class Trader:
         else:
             self.data_manager = data_manager
             
-        # Persistent storage for positions
-        self.positions_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'positions.json')
-        self.history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_history.json')
+        # Detection: if running under pytest, use temp files for persistence
+        is_testing = "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TRADING_BOT_TEST_MODE") == 'True'
         
+        # Persistent storage for positions (Hard Isolation for Live/Test)
+        if is_testing:
+            # Create per-instance temp files to avoid cross-test interference
+            temp_dir = tempfile.gettempdir()
+            suffix = f"_{os.getpid()}_{id(self)}.json"
+            self.positions_file = os.path.join(temp_dir, f"test_positions{suffix}")
+            self.history_file = os.path.join(temp_dir, f"test_trade_history{suffix}")
+            self.cooldown_file = os.path.join(temp_dir, f"test_cooldowns{suffix}")
+        else:
+            # Dry-Run vs Live file separation
+            suffix = "_test.json" if self.dry_run else ".json"
+            
+            self.positions_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"positions{suffix}")
+            self.history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"trade_history{suffix}")
+            self.cooldown_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"cooldowns{suffix}")
+            
         # Cross-Exchange Data Buckets (to prevent data loss while filtering)
         self._other_exchange_positions = {}
         self._other_pending_orders = {}
@@ -261,7 +298,7 @@ class Trader:
             try:
                 tmp = self.positions_file + '.tmp'
                 with open(tmp, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=4)
+                    json.dump(data, f, indent=4, cls=BotJSONEncoder)
                     f.flush()
                     try:
                         os.fsync(f.fileno())
@@ -294,6 +331,11 @@ class Trader:
 
     async def _verify_or_clear_id(self, pos_key, order_id, symbol, orders_in_snap):
         """Authoritative check for order existence. Returns (verified_id, order_data)."""
+        if self.dry_run:
+            # In Dry Run, we cannot verify IDs against exchange.
+            # We return the order_id as "verified" to allow local state to remain.
+            return order_id, None
+            
         if not order_id: return None, None
         
         # 1. Fast path: Check global snapshot
@@ -468,44 +510,63 @@ class Trader:
     
     def _load_cooldowns(self):
         """Load SL cooldowns from file."""
-        cooldown_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cooldowns.json')
-        if os.path.exists(cooldown_file):
+        if os.path.exists(self.cooldown_file):
             try:
-                with open(cooldown_file, 'r') as f:
+                with open(self.cooldown_file, 'r') as f:
                     cooldowns = json.load(f)
                 # Filter out expired cooldowns
                 now = time.time()
-                return {k: v for k, v in cooldowns.items() if v > now}
+                # Migrate old unprefixed keys if any (assuming they belong to current exchange for simplicity, 
+                # or just let them expire and vanish)
+                valid = {}
+                for k, v in cooldowns.items():
+                    if v > now:
+                        valid[k] = v
+                return valid
             except Exception:
                 pass
         return {}
     
     def _save_cooldowns(self):
         """Save SL cooldowns to file."""
-        cooldown_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cooldowns.json')
         try:
-            with open(cooldown_file, 'w') as f:
-                json.dump(self._sl_cooldowns, f, indent=4)
+            # Re-load to merge with other instance's changes if they wrote to disk
+            disk_cooldowns = {}
+            if os.path.exists(self.cooldown_file):
+                with open(self.cooldown_file, 'r') as f:
+                    disk_cooldowns = json.load(f)
+            
+            # Update disk_cooldowns with our local ones
+            disk_cooldowns.update(self._sl_cooldowns)
+            
+            # Filter expired before saving
+            now = time.time()
+            valid = {k: v for k, v in disk_cooldowns.items() if v > now}
+            
+            with open(self.cooldown_file, 'w') as f:
+                json.dump(valid, f, indent=4)
         except Exception as e:
             self.logger.error(f"Error saving cooldowns: {e}")
 
     def set_sl_cooldown(self, symbol):
         """Set cooldown after a stop loss hit for this symbol."""
         expiry = time.time() + SL_COOLDOWN_SECONDS
-        self._sl_cooldowns[symbol] = expiry
+        key = f"{self.exchange_name}:{symbol}"
+        self._sl_cooldowns[key] = expiry
         self._save_cooldowns()  # Persist to file
         hours = SL_COOLDOWN_SECONDS / 3600
-        self.logger.info(f"[COOLDOWN] {symbol} blocked for {hours:.1f} hours after SL")
+        self.logger.info(f"[COOLDOWN] {key} blocked for {hours:.1f} hours after SL")
         print(f"⏸️ [{self.exchange_name}] [{symbol}] Cooldown activated for {hours:.1f} hours after SL")
 
     def is_in_cooldown(self, symbol):
         """Check if symbol is in cooldown period after SL."""
-        if symbol not in self._sl_cooldowns:
+        key = f"{self.exchange_name}:{symbol}"
+        if key not in self._sl_cooldowns:
             return False
         
-        if time.time() >= self._sl_cooldowns[symbol]:
+        if time.time() >= self._sl_cooldowns[key]:
             # Cooldown expired, remove it
-            del self._sl_cooldowns[symbol]
+            del self._sl_cooldowns[key]
             self._save_cooldowns()  # Persist change
             return False
         
@@ -513,9 +574,10 @@ class Trader:
 
     def get_cooldown_remaining(self, symbol):
         """Get remaining cooldown time in minutes."""
-        if symbol not in self._sl_cooldowns:
+        key = f"{self.exchange_name}:{symbol}"
+        if key not in self._sl_cooldowns:
             return 0
-        remaining = self._sl_cooldowns[symbol] - time.time()
+        remaining = self._sl_cooldowns[key] - time.time()
         return max(0, remaining / 60)  # Return minutes
 
     def check_pending_limit_fills(self, symbol, timeframe, current_price):
@@ -673,31 +735,8 @@ class Trader:
             
         return True, "OK", qty
 
-    async def place_order(self, symbol, side, amount, price=None, order_type='LIMIT', reduce_only=False, params={}):
-        """
-        Place an order with permission checks.
-        """
-        # 1. Permission Check
-        if not self.exchange.can_trade:
-            self.logger.info(f"📢 [PUBLIC MODE] Simulation: {side} {symbol} {amount} @ {price or 'MARKET'}")
-            # Return a dummy order structure so calling code doesn't crash
-            return {
-                'id': f'sim_{int(time.time()*1000)}',
-                'symbol': symbol,
-                'status': 'closed', # Instant fill for sim? or open? Let's say closed for now to avoid management overhead
-                'price': price,
-                'amount': amount,
-                'filled': amount,
-                'side': side,
-                'type': order_type,
-                'info': {'msg': 'Simulation Mode (Public Only)'}
-            }
 
-        # 2. Rate Limit / Cooldown Checks
-        # (This section is empty in the provided diff, assuming it's a placeholder for future logic)
-        # The original place_order method follows this.
-
-    async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None):
+    async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None, reduce_only=False, params=None):
         """Places an order and updates persistent storage. For limit orders, monitors fill in background."""
         
         # Determine if TP/SL are attached (for scope safety)
@@ -799,9 +838,12 @@ class Trader:
             return {'id': 'dry_run_id', 'status': 'closed' if not is_limit else 'open', 'filled': qty if not is_limit else 0}
 
         # LIVE LOGIC
-        params = {}
+        # Prepare params
+        params = params or {}
         if sl: params['stopLoss'] = sl
         if tp: params['takeProfit'] = tp
+        if reduce_only: 
+            params['reduceOnly'] = True
 
 
 
@@ -819,9 +861,10 @@ class Trader:
 
         try:
             if order_type == 'market':
-                # Generate Client Order ID for recovery
+                # Generate Client Order ID for recovery (Unique prefix per mode)
                 api_symbol = self._normalize_symbol(symbol)
-                client_id = f"bot_{api_symbol}_{side}_{int(time.time()*1000)}"
+                prefix = "dry_" if self.dry_run else "bot_"
+                client_id = f"{prefix}{api_symbol}_{side}_{int(time.time()*1000)}"
                 params['newClientOrderId'] = client_id
                 
                 # Debug log: attempting market order
@@ -954,9 +997,10 @@ class Trader:
             else:
                 # Limit order - place and track as pending
                 
-                # Generate Client Order ID for recovery
+                # Generate Client Order ID for recovery (Unique prefix per mode)
                 api_symbol = self._normalize_symbol(symbol)
-                client_id = f"bot_{api_symbol}_{side}_{int(time.time()*1000)}"
+                prefix = "dry_" if self.dry_run else "bot_"
+                client_id = f"{prefix}{api_symbol}_{side}_{int(time.time()*1000)}"
                 params['newClientOrderId'] = client_id
                 
                 try:
@@ -1354,21 +1398,17 @@ class Trader:
         fees = pos.get('_exit_fees', 0)
         
         # 2. Record to signal_performance.json
-        from signal_tracker import record_trade
+        from signal_tracker import tracker as signal_tracker
         try:
-            pnl, pnl_pct = record_trade(
+            await signal_tracker.record_trade(
                 symbol=symbol,
-                side=side,
-                entry_price=entry_price,
-                exit_price=exit_price,
-                qty=qty,
-                reason=exit_reason,
-                fee=fees,
-                signals=pos.get('signals_used', []),
-                confidence=pos.get('entry_confidence', 0.5),
-                snapshot=pos.get('snapshot'),
                 timeframe=pos.get('timeframe', '1h'),
-                timestamp=pos.get('timestamp')
+                side=side,
+                signals_used=pos.get('signals_used', []),
+                result='WIN' if pnl > 0 else 'LOSS',
+                pnl_pct=pnl_pct / 100,  # record_trade expects decimal
+                btc_change=0, # Optional or fetch
+                snapshot=pos.get('snapshot')
             )
 
             # Notify Telegram if closed outside bot (Sync)
@@ -1797,8 +1837,11 @@ class Trader:
 
     async def setup_sl_tp_for_pending(self, symbol, timeframe=None):
         """
-        For all pending limit orders, setup SL/TP conditional orders (Binance Futures).
+        For all pending limit orders, setup SL/TP conditional orders.
         """
+        if self.dry_run:
+            self.logger.info(f"[SIMULATION] Skipping SL/TP setup for {symbol}")
+            return True
         pos_key = self._get_pos_key(symbol, timeframe)
         pending = self.pending_orders.get(pos_key)
         # Fallback to persisted pending in active_positions if in-memory pending not present
@@ -2918,9 +2961,9 @@ class Trader:
 
     async def recreate_missing_sl_tp(self, pos_key, recreate_sl=True, recreate_tp=True, recreate_sl_force=False, recreate_tp_force=False):
         """Recreate missing SL/TP orders for a given position."""
-        if self.dry_run or self.exchange.is_public_only:
-            return {'sl_recreated': False, 'tp_recreated': False, 'status': 'skipped'}
-            
+        if self.dry_run:
+            self.logger.info(f"[SIMULATION] Skipping SL/TP recreation for {pos_key}")
+            return {'sl_recreated': False, 'tp_recreated': False}
         # Acquire per-position lock to prevent race conditions
         async with self._get_position_lock(pos_key):
             result = {'sl_recreated': False, 'tp_recreated': False, 'errors': []}
@@ -2929,33 +2972,63 @@ class Trader:
                 result['errors'].append('position_not_found')
                 return result
 
-            # EXCHANGE-AWARE CHECK: Skip repairs if position belongs to a different exchange
-            # This prevents Bybit bot from trying to repair Binance positions (causing errors/noise)
+            # 1. Exchange Mismatch check
             if self.exchange_name and not pos_key.startswith(self.exchange_name):
-                # self.logger.debug(f"[REPAIR] Skipping {pos_key} - belongs to different exchange")
                 result['status'] = 'exchange_mismatch'
                 return result
+                
+            symbol = pos.get('symbol')
+            side = pos.get('side')
+            sl = pos.get('sl')
+            tp = pos.get('tp')
+            qty = pos.get('qty')
             
-            # TRADING PERMISSION GUARD: Ensure we have private keys before attempting repair
+            # 2. Urgent Protection Check (Price Fetch here)
+            current_price = 0.0
+            try:
+                ticker = await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol)
+                if self.exchange_name.upper() == 'BYBIT':
+                    # Robust mark price extraction for Bybit V5
+                    current_price = float(ticker.get('mark') or ticker.get('info', {}).get('markPrice') or ticker.get('last') or ticker.get('close') or 0)
+                else:
+                    current_price = float(ticker.get('last') or ticker.get('close') or 0)
+            except Exception as e:
+                self.logger.warning(f"Could not fetch current price for {symbol} validation: {e}")
+
+            if current_price > 0:
+                is_hit = False
+                reason = ""
+                # Add a 0.8% safety buffer for Bybit to prevent immediate trigger rejections
+                buffer = 0.008 if self.exchange_name.upper() == 'BYBIT' else 0.0
+                
+                if side == 'BUY':
+                    if tp and current_price >= tp * (1 - buffer):
+                        is_hit, reason = True, f"TP passed or within buffer ({current_price} >= {tp})"
+                    elif sl and current_price <= sl * (1 + buffer):
+                        is_hit, reason = True, f"SL passed or within buffer ({current_price} <= {sl})"
+                else: # SELL
+                    if tp and current_price <= tp * (1 + buffer):
+                        is_hit, reason = True, f"TP passed or within buffer ({current_price} <= {tp})"
+                    elif sl and current_price >= sl * (1 - buffer):
+                        is_hit, reason = True, f"SL passed or within buffer ({current_price} >= {sl})"
+                
+                if is_hit:
+                    self.logger.warning(f"🚀 [URGENT] {pos_key} target hit locally ({reason}). Closing at Market.")
+                    await self.force_close_position(pos_key, reason=f"Target Hit: {reason}")
+                    return {'sl_recreated': False, 'tp_recreated': False, 'status': 'closed'}
+
+            # 3. Guards for Order Recreation (Actual Exchange actions)
+            if self.dry_run or self.exchange.is_public_only:
+                return {'sl_recreated': False, 'tp_recreated': False, 'status': 'skipped'}
+                
             if not self.exchange.can_trade:
                 self.logger.warning(f"[REPAIR] No trading permissions for {self.exchange_name}. Skipping repair for {pos_key}")
                 result['status'] = 'permission_denied'
                 return result
 
-            # If global setting disables auto SL/TP creation, skip and return informational result
             if not AUTO_CREATE_SL_TP:
                 result['errors'].append('auto_create_disabled')
                 return result
-
-            if self.dry_run:
-                result['errors'].append('dry_run_mode')
-                return result
-
-            symbol = pos.get('symbol')
-            side = pos.get('side')
-            qty = pos.get('qty')
-            sl = pos.get('sl')
-            tp = pos.get('tp')
             close_side = 'sell' if side == 'BUY' else 'buy'
 
             # ─── AUTO-CALCULATE MISSING SL/TP (TECHNICAL / ATR) ───
@@ -3021,26 +3094,50 @@ class Trader:
                     self.logger.error(f"[REPAIR] Auto-calc SL/TP failed for {pos_key}: {e}")
             # ─── END AUTO-CALC ──────────────────
 
+
             # ─── BYBIT: Use position-level SL/TP (trading-stop) ───────────────────────
-            # On Bybit, SL/TP is attached to the position (not separate orders).
-            # Recreating as separate conditional orders would NOT be detected by the
-            # sync loop's `position['stopLoss']` check, causing an infinite loop.
             if self.exchange_name.upper() == 'BYBIT' and hasattr(self.exchange, 'set_position_sl_tp'):
                 try:
                     set_sl = sl if (recreate_sl and sl) else None
                     set_tp = tp if (recreate_tp and tp) else None
+                    
                     if set_sl or set_tp:
-                        r = await self.exchange.set_position_sl_tp(symbol, side, sl=set_sl, tp=set_tp)
-                        if r.get('sl_set'):
-                            pos['sl_order_id'] = 'attached'
-                            result['sl_recreated'] = True
-                            self._debug_log('recreated_sl', pos_key, 'attached')
-                        if r.get('tp_set'):
-                            pos['tp_order_id'] = 'attached'
-                            result['tp_recreated'] = True
-                            self._debug_log('recreated_tp', pos_key, 'attached')
-                        self.active_positions[pos_key] = pos
-                        self._save_positions()
+                        # Price validation (API errors 10001 protection)
+                        # CRITICAL: Do NOT fall back to entry_price for validation if ticker failed.
+                        # If price is unknown, we cannot safely set SL/TP.
+                        val_price = current_price
+                        
+                        if val_price > 0:
+                            # Use 0.8% buffer for Bybit to prevent "Immediate Trigger" rejections
+                            buffer_val = 0.008 if self.exchange_name.upper() == 'BYBIT' else 0.0
+                            
+                            if side == 'BUY':
+                                # TP must be above price, SL must be below
+                                if set_tp and set_tp <= val_price * (1 + buffer_val): 
+                                    self.logger.warning(f"[Bybit Safety] Blocking TP {set_tp} for BUY (Price {val_price} + Buffer)")
+                                    set_tp = None
+                                if set_sl and set_sl >= val_price * (1 - buffer_val): 
+                                    self.logger.warning(f"[Bybit Safety] Blocking SL {set_sl} for BUY (Price {val_price} - Buffer)")
+                                    set_sl = None
+                            else: # SELL
+                                # TP must be below price, SL must be above
+                                if set_tp and set_tp >= val_price * (1 - buffer_val): 
+                                    self.logger.warning(f"[Bybit Safety] Blocking TP {set_tp} for SELL (Price {val_price} - Buffer)")
+                                    set_tp = None
+                                if set_sl and set_sl <= val_price * (1 + buffer_val): 
+                                    self.logger.warning(f"[Bybit Safety] Blocking SL {set_sl} for SELL (Price {val_price} + Buffer)")
+                                    set_sl = None
+
+                        if set_sl or set_tp:
+                            r = await self.exchange.set_position_sl_tp(symbol, side, sl=set_sl, tp=set_tp)
+                            if r.get('sl_set'):
+                                pos['sl_order_id'] = 'attached'
+                                result['sl_recreated'] = True
+                            if r.get('tp_set'):
+                                pos['tp_order_id'] = 'attached'
+                                result['tp_recreated'] = True
+                            self.active_positions[pos_key] = pos
+                            self._save_positions()
                 except Exception as e:
                     result['errors'].append(f'bybit_set_tpsl:{e}')
                 return result
@@ -3058,13 +3155,15 @@ class Trader:
                         except Exception:
                             pass  # Ignore if already gone
 
-                    # SL Validation
-                    current_price = (await self.exchange.fetch_ticker(symbol))['last']
+                    # SL Validation (Already covered by Urgent Protection, but keeping as double-check)
                     is_valid_sl = False
-                    if side == 'BUY': # Long: SL must be < Current
-                        is_valid_sl = sl < current_price
-                    else: # Short: SL must be > Current
-                        is_valid_sl = sl > current_price
+                    if current_price > 0:
+                        if side == 'BUY': 
+                            is_valid_sl = sl < current_price
+                        else:
+                            is_valid_sl = sl > current_price
+                    else:
+                        is_valid_sl = True # Fallback
                     
                     if not is_valid_sl:
                         self.logger.warning(f"[SL SAFETY] Skipping SL for {pos_key}: SL {sl} vs Current {current_price} (Immediate Trigger Risk)")
@@ -3103,29 +3202,15 @@ class Trader:
                         except Exception:
                             pass  # Ignore if already gone
 
-                    # Safety check: Verify TP price won't trigger immediately
+                    # Safety check: (Already covered by Urgent Protection)
                     try:
-                        ticker = await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol)
-                        current_price = float(ticker.get('last') or ticker.get('close'))
-                        
-                        # Check if TP would trigger immediately (with 0.1% buffer)
-                        # Ensure current_price and tp are not None
-                        if current_price is None or tp is None:
-                            raise Exception("TP_SAFETY_NO_PRICE")
-
-                        if side == 'BUY':
-                            # For LONG, TP should be above current price
-                            if tp <= current_price * 1.001:
-                                result['errors'].append(f'tp_safety_abort:TP {tp} too close to current {current_price}')
-                                print(f"[TP SAFETY] Aborting TP creation for {pos_key}: TP {tp} <= current {current_price}")
-                                # Skip TP creation but don't fail the entire operation
-                                raise Exception("TP_SAFETY_ABORT")
-                        else:
-                            # For SHORT, TP should be below current price
-                            if tp >= current_price * 0.999:
-                                result['errors'].append(f'tp_safety_abort:TP {tp} too close to current {current_price}')
-                                print(f"[TP SAFETY] Aborting TP creation for {pos_key}: TP {tp} >= current {current_price}")
-                                raise Exception("TP_SAFETY_ABORT")
+                        if current_price > 0:
+                            if side == 'BUY':
+                                if tp <= current_price * 1.001:
+                                    raise Exception("TP_SAFETY_ABORT")
+                            else:
+                                if tp >= current_price * 0.999:
+                                    raise Exception("TP_SAFETY_ABORT")
                     except Exception as safety_error:
                         if "TP_SAFETY_ABORT" in str(safety_error):
                             raise  # Re-raise to skip TP creation

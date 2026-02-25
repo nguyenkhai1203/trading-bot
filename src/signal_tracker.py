@@ -11,6 +11,7 @@ NEW in v2.0:
 
 import json
 import os
+import sys
 import time
 from datetime import datetime, timedelta
 from collections import defaultdict
@@ -34,7 +35,21 @@ LAST_ADAPTIVE_LOG_TIME = 0
 
 
 class SignalTracker:
-    def __init__(self):
+    def __init__(self, tracker_file=None):
+        is_testing = "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TRADING_BOT_TEST_MODE") == 'True'
+        
+        if tracker_file:
+            self.tracker_file = tracker_file
+        elif is_testing:
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            # Use pid and id(self) to ensure unique files per test runner/instance
+            self.tracker_file = os.path.join(temp_dir, f"test_signal_performance_{os.getpid()}_{id(self)}.json")
+        else:
+            from config import DRY_RUN
+            suffix = "_test.json" if DRY_RUN else ".json"
+            self.tracker_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"signal_performance{suffix}")
+            
         self.data = self._load()
         self.consecutive_losses = 0  # Reset on win
         self.recent_loss_symbols = []  # Track which symbols lost recently
@@ -51,9 +66,9 @@ class SignalTracker:
     
     def _load(self):
         """Load signal performance data from file."""
-        if os.path.exists(TRACKER_FILE):
+        if os.path.exists(self.tracker_file):
             try:
-                with open(TRACKER_FILE, 'r') as f:
+                with open(self.tracker_file, 'r') as f:
                     return json.load(f)
             except Exception as e:
                 print(f"Error loading signal tracker: {e}")
@@ -65,12 +80,12 @@ class SignalTracker:
     def _save(self):
         """Save signal performance data to file."""
         try:
-            with open(TRACKER_FILE, 'w') as f:
+            with open(self.tracker_file, 'w') as f:
                 json.dump(self.data, f, indent=2)
         except Exception as e:
             print(f"Error saving signal tracker: {e}")
     
-    def record_trade(self, symbol, timeframe, side, signals_used, result, pnl_pct,
+    async def record_trade(self, symbol, timeframe, side, signals_used, result, pnl_pct,
                  btc_change=None, snapshot=None,
                  pnl_usdt=None, entry_price=None, exit_price=None,
                  qty=None, exit_reason=None, entry_time=None, exit_time=None,
@@ -78,23 +93,6 @@ class SignalTracker:
                  sl_tightened=False, max_pnl_pct=0):
         """
         Record a completed trade for learning.
-
-        Args:
-            symbol: Trading pair (e.g., 'NEAR/USDT')
-            timeframe: Timeframe (e.g., '1h')
-            side: 'BUY' or 'SELL'
-            signals_used: List of signal names that triggered entry
-            result: 'WIN' (TP hit) or 'LOSS' (SL hit)
-            pnl_pct: PnL percentage
-            btc_change: BTC 1h price change (optional, for market condition check)
-            snapshot: Dictionary of normalized features at entry (for Neural Net training)
-            pnl_usdt: Realised PnL in USDT (accounting, replaces trade_history.json)
-            entry_price: Entry fill price
-            exit_price: Exit fill price
-            qty: Position size (base asset)
-            exit_reason: Why the trade closed (TP, SL, Signal Flip, etc.)
-            entry_time: Entry timestamp (epoch ms)
-            exit_time: Exit timestamp (epoch ms)
         """
         trade = {
             'timestamp': datetime.now().isoformat(),
@@ -149,9 +147,9 @@ class SignalTracker:
             # Only log when approaching threshold
             if self.consecutive_losses >= LOSS_TRIGGER_COUNT:
                 print(f"\n⚠️  [ADAPTIVE] {self.consecutive_losses} consecutive losses detected")
-                self._trigger_adaptive_check(btc_change)
+                await self._trigger_adaptive_check(btc_change)
     
-    def _trigger_adaptive_check(self, btc_change=None):
+    async def _trigger_adaptive_check(self, btc_change=None):
         """Trigger adaptive analysis after consecutive losses."""
         # Step 1: Check market condition
         market_status = self.check_market_condition(btc_change)
@@ -172,7 +170,10 @@ class SignalTracker:
         callback_success = True
         if self._analysis_callback:
             try:
-                self._analysis_callback(symbols_to_analyze)
+                if asyncio.iscoroutinefunction(self._analysis_callback):
+                    await self._analysis_callback(symbols_to_analyze)
+                else:
+                    self._analysis_callback(symbols_to_analyze)
                 print(f"   ✓ Mini-analyzer completed")
             except Exception as e:
                 print(f"   ✗ Analyzer error: {e}")
@@ -180,7 +181,10 @@ class SignalTracker:
         
         if self._position_adjust_callback:
             try:
-                self._position_adjust_callback()
+                if asyncio.iscoroutinefunction(self._position_adjust_callback):
+                    await self._position_adjust_callback()
+                else:
+                    self._position_adjust_callback()
                 print(f"   ✓ Position check completed")
             except Exception as e:
                 print(f"   ✗ Position adjust error: {e}")
@@ -201,12 +205,6 @@ class SignalTracker:
     def check_market_condition(self, btc_change):
         """
         Check if market is in crash/pump condition.
-        
-        Args:
-            btc_change: BTC 1h price change as decimal (e.g., -0.03 = -3%)
-        
-        Returns:
-            'crash' | 'pump' | 'normal'
         """
         if btc_change is None:
             return 'normal'  # No data, assume normal
@@ -260,7 +258,6 @@ class SignalTracker:
     def get_weight_multiplier(self, signal_name):
         """
         Get weight multiplier for a signal based on recent performance.
-        Returns 1.0 for neutral, <1.0 for penalty, >1.0 for boost.
         """
         perf = self.get_signal_performance(signal_name)
         
@@ -282,7 +279,6 @@ class SignalTracker:
     def adjust_weights(self, weights_dict):
         """
         Apply adaptive adjustments to a weights dictionary.
-        Returns adjusted weights.
         """
         adjusted = {}
         changes = []
