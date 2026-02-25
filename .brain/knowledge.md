@@ -235,3 +235,9 @@ Wait-and-Patience and metadata tracking use a standardized symbol format to avoi
 | `src/cooldowns.json` | Dynamic trade restrictions | `cooldowns_test.json` |
 | `src/strategy_config.json` | Indicator weights (Shared) | N/A |
 | `src/notification.py` | Alert delivery logic | N/A |
+
+### 6. Bybit V5 & Recovery Stability
+- **"Side invalid" (retCode 10001)**: In One-Way mode, omit `positionIdx` entirely. Sending `0` can fail on some account types.
+- **Param Cleanup**: Cross-exchange logic (like recovery) must not leak exchange-specific parameters (e.g., `origClientOrderId` from Binance) into other adapters.
+- **Fail-Fast Recovery**: Recovery blocks must only handle Network/Timeout errors. Logic errors (403, 10001, Insufficient Balance) must skip recovery to prevent infinite fail-loops.
+- **Symbol Consistency**: ALWAYS use normalized symbols (`BTCUSDT`) for `client_id` to ensure tracking accuracy.

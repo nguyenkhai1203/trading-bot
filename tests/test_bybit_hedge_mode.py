@@ -58,7 +58,7 @@ async def test_one_way_mode_mapping(adapter, mock_ccxt_bybit):
     adapter._position_mode = 'MergedSingle'
     await adapter.create_order('BTC/USDT', 'market', 'BUY', 0.001)
     params = get_params(mock_ccxt_bybit.create_order)
-    assert params['positionIdx'] == 0
+    assert 'positionIdx' not in params
 
 @pytest.mark.asyncio
 async def test_hedge_mode_close_buy(adapter, mock_ccxt_bybit):

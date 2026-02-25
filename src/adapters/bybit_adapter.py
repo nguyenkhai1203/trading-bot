@@ -231,7 +231,9 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                 else:
                     extra_params['positionIdx'] = 1 if s == 'SELL' else 2
             else:
-                extra_params['positionIdx'] = 0
+                # Omit positionIdx for MergedSingle (One-Way) to avoid 10001 errors on some V5 accounts
+                # Bybit defaults to correct behavior in One-Way when idx is not specified.
+                pass
 
             # SL/TP Parameter Enrichment
             if 'stopLoss' in params or 'takeProfit' in params:
@@ -270,12 +272,6 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                         )
                     raise e2
             raise e
-
-    async def fetch_order(self, order_id: str, symbol: Optional[str] = None, params: Dict = {}) -> Dict:
-        """Fetch a specific order."""
-        extra = {'category': 'linear'}
-        extra.update(params)
-        return await self._execute_with_timestamp_retry(self.exchange.fetch_order, order_id, symbol, extra)
 
     async def fetch_my_trades(self, symbol: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, params: Dict = {}) -> List[Dict]:
         """Fetch trade history."""
@@ -401,8 +397,8 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         self.logger.warning(f"[Bybit] Set margin mode failed for {symbol}: {last_err}")
 
     async def fetch_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
-        """Fetch order with Bybit-specific acknowledgment and conditional order retry."""
-        extra_params = {'acknowledged': True, 'category': 'linear'}
+        """Fetch order with Bybit-specific conditional order retry."""
+        extra_params = {'category': 'linear'}
         extra_params.update(params)
         
         try:

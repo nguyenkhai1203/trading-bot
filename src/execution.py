@@ -906,22 +906,20 @@ class Trader:
                     await asyncio.sleep(1)
                     
                     try:
-                        # Try to fetch by Client ID
-                        # Note: fetch_order by client_id usually works on Binance if we pass param
-                        # Or fetch_open_orders and filter? fetch_order is better if supported.
-                        # CCXT: fetch_order(id, symbol, params={'clientOrderId': ...}) depending on exchange.
-                        # For Binance: fetch_order(id, symbol) where id can be clientOrderId usually requires logic.
-                        # Safest: fetch_all_orders or fetch_open_orders?
-                        # Binance allows fetching by origClientOrderId.
-                        
-                        # Try fetch_order with implicit ID logic or fetch_open_orders scan
-                        # Let's try explicit fetch using params if needed, or just iterate active orders
-                        # Actually, ccxt.binance fetch_order implementation: if id is not passed, it tries params['origClientOrderId']
-                        
+                        # RECOVERY GUARD: Only attempt recovery for Network/Timeout errors.
+                        # Do not attempt recovery for Logic errors (Side invalid, Insufficient balance, etc.)
+                        err_str = str(e).lower()
+                        is_logic_error = any(x in err_str for x in ["10001", "side invalid", "insufficient", "170131", "403", "401"])
+                        if is_logic_error:
+                            raise e
+
                         found_order = None
                         try:
-                            # Attempt 1: Specific fetch using client id param (Binance specific)
-                            found_order = await self.exchange.fetch_order(client_id, symbol, params={'origClientOrderId': client_id})
+                            # Agnostic fetch: Pass client_id to adapter.
+                            # Adapter handles exchange-specific mapping (Bybit category:linear, etc.)
+                            # We omit origClientOrderId here as it's Binance-specific and can cause errors on other exchanges.
+                            # If an exchange needs it, it should be handled inside the adapter.
+                            found_order = await self.exchange.fetch_order(client_id, symbol)
                         except Exception:
                             # Attempt 2: Scan open orders
                             open_orders = await self.exchange.fetch_open_orders(symbol)
@@ -1021,9 +1019,15 @@ class Trader:
                     await asyncio.sleep(1)
                     
                     try:
+                        # RECOVERY GUARD: Only attempt recovery for Network/Timeout errors.
+                        err_str = str(e).lower()
+                        is_logic_error = any(x in err_str for x in ["10001", "side invalid", "insufficient", "403"])
+                        if is_logic_error:
+                            raise e
+
                         found_order = None
                         try:
-                            found_order = await self.exchange.fetch_order(client_id, symbol, params={'origClientOrderId': client_id})
+                            found_order = await self.exchange.fetch_order(client_id, symbol)
                         except Exception:
                             open_orders = await self.exchange.fetch_open_orders(symbol)
                             for o in open_orders:
