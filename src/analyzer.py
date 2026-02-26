@@ -209,6 +209,8 @@ class StrategyAnalyzer:
         test_signals_cache = {}
         
         for thresh in thresholds_to_test:
+            if not hasattr(mock_strat, 'config_data') or not mock_strat.config_data:
+                mock_strat.config_data = {}
             mock_strat.config_data['thresholds'] = {'entry_score': thresh}
             train_signals_cache[thresh] = self._compute_signals(train_df, mock_strat)
             test_signals_cache[thresh] = self._compute_signals(test_df, mock_strat)
@@ -272,10 +274,15 @@ class StrategyAnalyzer:
     def _compute_signals(self, df, strat):
         """Pre-compute signals once per threshold."""
         signals = []
-        for i in range(20, len(df)):
-            row = df.iloc[i]
-            # CRITICAL PERFORMANCE OPTIMIZATION: Do not use adaptive weights during backtest grid search
-            # adjust_weights aggregates 1000s of past trades on EVERY ROW, taking ~20ms per row * 4000 rows = 80s per threshold!
+        # CRITICAL PERFORMANCE OPTIMIZATION: 
+        # df.iloc[i] is extremely slow in Python loops (takes ~200-500us per row).
+        # Converting to a list of dicts first brings this down to ~1-2us per row.
+        # This speeds up Step 2 Walk-Forward Validation drastically.
+        fast_rows = df.to_dict('records')
+        
+        for i in range(20, len(fast_rows)):
+            row = fast_rows[i]
+            # Do not use adaptive weights during backtest grid search to save aggregation time
             # use_brain=False skips neural network inference for 10x speedup in backtesting.
             sig = strat.get_signal(row, use_adaptive=False, use_brain=False)
             signals.append(sig['side'] if sig['side'] in ['BUY', 'SELL'] else None)
@@ -671,8 +678,15 @@ async def run_global_optimization():
     
     validation_results = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = list(executor.map(validate_task, validation_tasks))
-        validation_results = [r for r in futures if r is not None]
+        futures = [executor.submit(validate_task, task) for task in validation_tasks]
+        total_tasks = len(futures)
+        for i, future in enumerate(as_completed(futures)):
+            result = future.result()
+            if result is not None:
+                validation_results.append(result)
+            if (i + 1) % 10 == 0 or (i + 1) == total_tasks:
+                print(f"  [{i+1}/{total_tasks}] tasks validated...", end='\r')
+    print() # newline after progress bar
     
     step2_time = time.time() - step2_start
     print(f"  ✨ Step 2 complete: {len(validation_results)} validated in {step2_time:.1f}s")

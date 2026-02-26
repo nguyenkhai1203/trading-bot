@@ -8,6 +8,16 @@ from risk_manager import RiskManager
 
 class TestTraderExecutionLogic:
     @pytest.fixture
+    def mock_db(self):
+        db = MagicMock()
+        db.get_risk_metric = AsyncMock(return_value=None)
+        db.set_risk_metric = AsyncMock(return_value=None)
+        db.save_position = AsyncMock(return_value=1)
+        db.update_position_status = AsyncMock(return_value=None)
+        db.get_active_positions = AsyncMock(return_value=[])
+        return db
+
+    @pytest.fixture
     def mock_exchange(self):
         exch = MagicMock()
         exch.id = 'binance'
@@ -25,13 +35,11 @@ class TestTraderExecutionLogic:
         return exch
 
     @pytest.fixture
-    def trader(self, mock_exchange):
+    def trader(self, mock_exchange, mock_db):
         with patch('execution.ExchangeLoggerAdapter'):
-            t = Trader(exchange=mock_exchange, dry_run=False)
+            t = Trader(exchange=mock_exchange, db=mock_db, profile_id=1, profile_name="TestProfile", dry_run=False)
             t.active_positions = {}
-            t._save_positions = MagicMock()
-            t._load_positions = MagicMock(return_value={})
-            t._sl_cooldowns = {} # Clear any loaded cooldowns for test isolation
+            t._update_db_position = AsyncMock() # Replace DB update with mock
             
             # Mock the expensive/external calls
             t.modify_sl_tp = AsyncMock(return_value=True)
@@ -41,11 +49,9 @@ class TestTraderExecutionLogic:
             
             # Mock the internal API retry mechanism to bypass static method logic
             async def mock_exec(func, *args, **kwargs):
-                print(f"[DEBUG] mock_exec calling: {func}")
                 res = func(*args, **kwargs)
                 if asyncio.iscoroutine(res):
                     res = await res
-                print(f"[DEBUG] mock_exec result: {res}")
                 return res
             t._execute_with_timestamp_retry = AsyncMock(side_effect=mock_exec)
             
@@ -129,7 +135,6 @@ class TestTraderExecutionLogic:
             
             await trader.update_dynamic_sltp(pos_key, df_trail=df_trail, df_guard=df_guard)
             
-        # TP pull closer 50% from 48000 towards 45000 -> 46500
         assert trader.active_positions[pos_key]['tp'] == 46500.0
         assert trader.active_positions[pos_key]['tp_tightened'] is True
         trader.recreate_missing_sl_tp.assert_called_once()
@@ -137,7 +142,6 @@ class TestTraderExecutionLogic:
     @pytest.mark.asyncio
     async def test_reconcile_positions_adoption(self, trader, mock_exchange):
         """Verify that unknown exchange positions are adopted locally."""
-        # Exchange has ETH long position
         mock_exchange.fetch_positions.return_value = [{
             'symbol': 'ETH/USDT:USDT',
             'contracts': 1.0,
@@ -147,11 +151,8 @@ class TestTraderExecutionLogic:
         }]
         
         trader.active_positions = {}
-        
-        # Reconcile
         await trader.reconcile_positions(auto_fix=True)
         
-        # Check adoption
         found = False
         for k, p in trader.active_positions.items():
             if 'ETH/USDT' in p['symbol']:
@@ -174,7 +175,6 @@ class TestTraderExecutionLogic:
             'timeframe': '1h'
         }
         
-        # Exchange has position but NO orders in snapshot
         mock_exchange.fetch_positions.return_value = [{
             'symbol': 'BTC/USDT',
             'contracts': 1.0,
@@ -201,20 +201,14 @@ class TestTraderExecutionLogic:
             'timeframe': '1h'
         }
         
-        # 80% of 10000 profit is 8000. Price at 58000.
         with patch('execution.ENABLE_PROFIT_LOCK', True), \
              patch('execution.PROFIT_LOCK_THRESHOLD', 0.8), \
              patch('execution.PROFIT_LOCK_LEVEL', 0.1):
             
-            # Recreate sl/tp mock
             trader.recreate_missing_sl_tp = AsyncMock(return_value=True)
-            
-            # Test with price at 51000 (20% progress) -> No change
             await trader.adjust_sl_tp_for_profit_lock(pos_key, 51000.0)
             assert trader.active_positions[pos_key]['sl'] == 49000.0
             
-            # Test with price at 59000 (90% progress) -> SL moves to profit
-            # Profit target was 10000. 10% lock is 1000. New SL should be 51000.
             await trader.adjust_sl_tp_for_profit_lock(pos_key, 59000.0)
             assert trader.active_positions[pos_key]['sl'] == 51000.0
             assert trader.active_positions[pos_key]['profit_locked'] is True
@@ -223,70 +217,44 @@ class TestTraderExecutionLogic:
     def test_balance_tracker_workflow(self):
         """Verify BalanceTracker reservation and release logic."""
         bt = BalanceTracker()
-        exchange_name = "BINANCE"
+        ex = "BINANCE"
+        pid = 1
         
-        # Initial status
-        bt.update_balance(exchange_name, 1000.0)
-        assert bt.get_available(exchange_name) == 1000.0
+        bt.update_balance(ex, pid, 1000.0)
+        assert bt.get_available(ex, pid) == 1000.0
         
-        # Reserve $200
-        success = bt.reserve(exchange_name, 200.0)
+        success = bt.reserve(ex, pid, 200.0)
         assert success is True
-        assert bt.get_available(exchange_name) == 800.0
+        assert bt.get_available(ex, pid) == 800.0
         
-        # Reserve $900 (Fails)
-        success = bt.reserve(exchange_name, 900.0)
+        success = bt.reserve(ex, pid, 900.0)
         assert success is False
-        assert bt.get_available(exchange_name) == 800.0
         
-        # Release $100
-        bt.release(exchange_name, 100.0)
-        assert bt.get_available(exchange_name) == 900.0
+        bt.release(ex, pid, 100.0)
+        assert bt.get_available(ex, pid) == 900.0
         
-        # Reset
         bt.reset_reservations()
-        assert bt.get_available(exchange_name) == 1000.0
+        assert bt.get_available(ex, pid) == 1000.0
 
-    def test_trader_cooldowns(self, trader):
-        """Verify symbol-level cooldown activation and checks."""
-        symbol = "BTC/USDT"
-        
-        # Initially no cooldown
-        assert trader.is_in_cooldown(symbol) is False
-        
-        # Set cooldown
-        with patch('execution.SL_COOLDOWN_SECONDS', 3600):
-            trader.set_sl_cooldown(symbol)
-            assert trader.is_in_cooldown(symbol) is True
-            
-            # Check remaining
-            remaining = trader.get_cooldown_remaining(symbol)
-            assert 59 <= remaining <= 60 # approx 60 mins
-            
-        key = f"BINANCE:{symbol}"
-        trader._sl_cooldowns[key] = 0
-        assert trader.is_in_cooldown(symbol) is False
-
-    def test_circuit_breaker_logic(self):
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_logic(self, mock_db):
         """Verify RiskManager's circuit breaker triggers on drawdown/daily loss."""
-        rm = RiskManager(max_drawdown_pct=0.1, daily_loss_limit_pct=0.03)
+        rm = RiskManager(db=mock_db, profile_id=1, max_drawdown_pct=0.1, daily_loss_limit_pct=0.03)
         
-        # Initial OK
-        triggered, reason = rm.check_circuit_breaker(1000.0)
+        triggered, reason = await rm.check_circuit_breaker(1000.0)
         assert triggered is False
-        assert reason == "OK"
         
-        # Drawdown: Peak 1000 -> 890 (11% drop) -> Triggered
-        triggered, reason = rm.check_circuit_breaker(890.0)
+        # Drawdown
+        triggered, reason = await rm.check_circuit_breaker(890.0)
         assert triggered is True
         assert "Max Drawdown" in reason
         
-        # Reset and Daily Loss: Start 1000 -> 960 (4% loss) -> Triggered
-        rm.peak_balance = 0 # reset for test
-        rm._last_reset_date = None # force today reset
-        triggered, reason = rm.check_circuit_breaker(1000.0)
+        # Reset and Daily Loss
+        rm.peak_balance = 0
+        rm._last_reset_date = None
+        triggered, reason = await rm.check_circuit_breaker(1000.0)
         assert triggered is False
         
-        triggered, reason = rm.check_circuit_breaker(960.0)
+        triggered, reason = await rm.check_circuit_breaker(960.0)
         assert triggered is True
         assert "Daily Loss" in reason

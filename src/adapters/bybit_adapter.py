@@ -120,7 +120,10 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         try:
             # For Bybit V5, category is crucial.
             params = {'category': 'linear'}
-            return await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol, params=params)
+            orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol, params=params)
+            for o in orders:
+                o['status'] = self.normalize_status(o.get('status'))
+            return orders
         except Exception as e:
             self.logger.error(f"[Bybit] Fetch open orders failed: {e}")
             return []
@@ -409,12 +412,14 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             if mode == 'MergedSingle' and 'positionIdx' not in extra_params:
                 extra_params['positionIdx'] = 0
                 
-            return await self._execute_with_timestamp_retry(
+            res = await self._execute_with_timestamp_retry(
                 self.exchange.fetch_order,
                 order_id,
                 symbol,
                 extra_params
             )
+            res['status'] = self.normalize_status(res.get('status'))
+            return res
         except Exception as e:
             err_str = str(e).lower()
             # If Bybit says order not found, it might be an SL/TP conditional order
@@ -427,12 +432,14 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                 cond_params = extra_params.copy()
                 cond_params['trigger'] = True
                 try:
-                    return await self._execute_with_timestamp_retry(
+                    res = await self._execute_with_timestamp_retry(
                         self.exchange.fetch_order,
                         order_id,
                         symbol,
                         cond_params
                     )
+                    res['status'] = self.normalize_status(res.get('status'))
+                    return res
                 except Exception as retry_e:
                      self.logger.warning(f"[Bybit] Conditional retry failed for {order_id}: {retry_e}")
                      raise retry_e

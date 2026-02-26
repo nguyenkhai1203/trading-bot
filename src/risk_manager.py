@@ -1,136 +1,112 @@
 import json
 import os
 import sys
+import logging
 from datetime import datetime
 
 class RiskManager:
-    def __init__(self, exchange_name='BINANCE', risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.05, config_path=None):
+    """
+    RiskManager handles circuit breakers, drawdown protection, and position sizing.
+    Now integrated with DataManager for persistent SQLite storage.
+    """
+    def __init__(self, db, profile_id: int, env: str = 'LIVE', exchange_name='BINANCE', 
+                 risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.05):
+        self.db = db
+        self.profile_id = profile_id
+        self.env = env.upper()
         self.exchange_name = exchange_name.upper()
         self.risk_per_trade = risk_per_trade
         self.leverage = leverage
         self.max_drawdown_pct = max_drawdown_pct
         self.daily_loss_limit_pct = daily_loss_limit_pct
+        self.logger = logging.getLogger("RiskManager")
         
-        # Detection: if running under pytest and no config_path provided, use a temp file
-        is_testing = "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TRADING_BOT_TEST_MODE") == 'True'
-        
-        if config_path:
-            self.config_file = config_path
-        elif is_testing:
-            import tempfile
-            # Create a per-instance temp file to avoid cross-test interference
-            temp_dir = tempfile.gettempdir()
-            self.config_file = os.path.join(temp_dir, f"test_daily_config_{os.getpid()}_{id(self)}.json")
-        else:
-            from config import DRY_RUN
-            suffix = "_test.json" if DRY_RUN else ".json"
-            self.config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"daily_config{suffix}")
-            
-        self.starting_balance_day = None
+        self.starting_balance_day = 0
         self.peak_balance = 0
         self._last_reset_date = None  # Track daily reset
-        self._load_daily_config()
 
-    def _load_daily_config(self):
-        """Load daily balance and reset date from file."""
-        if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, 'r') as f:
-                    full_data = json.load(f)
-                    # Support legacy flat format for Binance
-                    # (Only if it's NOT a nested dictionary structure containing the exchange name as a key)
-                    if self.exchange_name == 'BINANCE' and 'starting_balance_day' in full_data and 'BINANCE' not in full_data:
-                        data = full_data
-                    else:
-                        data = full_data.get(self.exchange_name, {})
-                        
-                    self.starting_balance_day = data.get('starting_balance_day')
-                    self._last_reset_date = data.get('last_reset_date')
-                    if self._last_reset_date:
-                        self._last_reset_date = datetime.strptime(self._last_reset_date, '%Y-%m-%d').date()
-                    self.peak_balance = data.get('peak_balance', 0)
-            except Exception:
-                pass
-
-    def _save_daily_config(self):
-        """Save daily balance and reset date to file."""
+    async def sync_from_db(self):
+        """Load risk metrics from SQLite database."""
         try:
-            full_data = {}
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
-                    full_data = json.load(f)
+            self.peak_balance = await self.db.get_risk_metric(self.profile_id, 'peak_balance', self.env) or 0
+            self.starting_balance_day = await self.db.get_risk_metric(self.profile_id, 'starting_balance_day', self.env) or 0
             
-            # If flat legacy file, migrate to dict
-            if 'starting_balance_day' in full_data and 'BINANCE' not in full_data:
-                binance_data = {
-                    'starting_balance_day': full_data.get('starting_balance_day'),
-                    'last_reset_date': full_data.get('last_reset_date'),
-                    'peak_balance': full_data.get('peak_balance', 0)
-                }
-                full_data = {'BINANCE': binance_data}
-
-            full_data[self.exchange_name] = {
-                'starting_balance_day': self.starting_balance_day,
-                'last_reset_date': str(self._last_reset_date) if self._last_reset_date else None,
-                'peak_balance': self.peak_balance
-            }
+            reset_date_val = await self.db.get_risk_metric(self.profile_id, 'last_reset_date_val', self.env)
+            if reset_date_val:
+                # Store as YYYYMMDD float
+                year = int(reset_date_val // 10000)
+                month = int((reset_date_val % 10000) // 100)
+                day = int(reset_date_val % 100)
+                self._last_reset_date = datetime(year, month, day).date()
             
-            with open(self.config_file, 'w') as f:
-                json.dump(full_data, f, indent=4)
-        except Exception:
-            pass
+            self.logger.info(f"[{self.exchange_name}] Synced risk metrics: Peak={self.peak_balance:.2f}, DayStart={self.starting_balance_day:.2f}")
+        except Exception as e:
+            self.logger.error(f"Error syncing risk metrics from DB: {e}")
 
-    def reset_peak(self, current_balance):
-        """Force reset peak to current balance (use after clearing data)."""
+    async def _update_db_metrics(self):
+        """Save current metrics to database."""
+        try:
+            await self.db.set_risk_metric(self.profile_id, 'peak_balance', float(self.peak_balance), self.env)
+            await self.db.set_risk_metric(self.profile_id, 'starting_balance_day', float(self.starting_balance_day), self.env)
+            
+            if self._last_reset_date:
+                date_val = self._last_reset_date.year * 10000 + self._last_reset_date.month * 100 + self._last_reset_date.day
+                await self.db.set_risk_metric(self.profile_id, 'last_reset_date_val', float(date_val), self.env)
+        except Exception as e:
+            self.logger.error(f"Error saving risk metrics to DB: {e}")
+
+    async def reset_peak(self, current_balance):
+        """Force reset peak to current balance."""
         self.peak_balance = current_balance
-        self._save_daily_config()
+        await self._update_db_metrics()
         return f"Peak reset to {current_balance}"
 
-    def check_circuit_breaker(self, current_balance):
+    async def check_circuit_breaker(self, current_balance):
         """
-        Returns: True if trading should STOP, False otherwise.
+        Returns: (is_stop, reason)
         """
         today = datetime.now().date()
         
-        # Reset daily tracker at midnight
+        changes = False
+        # 1. Daily Tracker Reset
         if self._last_reset_date != today:
             self.starting_balance_day = current_balance
             self._last_reset_date = today
-            self._save_daily_config()
+            changes = True
+            self.logger.info(f"[{self.exchange_name}] Day reset. Starting balance: {self.starting_balance_day:.2f}")
         
-        # Init peak tracker if needed
+        # 2. Peak Tracker Init
         if self.peak_balance == 0 and current_balance > 0:
             self.peak_balance = current_balance
-            self._save_daily_config()
+            changes = True
             
-        # Update Peak (Only if balance is positive to prevent reset on errors)
+        # 3. Peak Update
         if current_balance > self.peak_balance:
             self.peak_balance = current_balance
-            self._save_daily_config()
+            changes = True
             
-        # 1. Max Drawdown Check (from Peak)
+        if changes:
+            await self._update_db_metrics()
+            
+        # 4. Max Drawdown Protection
         if self.peak_balance > 0:
             drawdown = (self.peak_balance - current_balance) / self.peak_balance
             if drawdown >= self.max_drawdown_pct:
-                return True, f"Max Drawdown Hit: {drawdown*100:.2f}%"
+                return True, f"Max Drawdown Hit: {drawdown*100:.2f}% (Peak: {self.peak_balance:.2f}, Curr: {current_balance:.2f})"
             
-        # 2. Daily Loss Limit (from Day Start)
+        # 5. Daily Loss Protection
         if self.starting_balance_day and self.starting_balance_day > 0:
             daily_loss = (self.starting_balance_day - current_balance) / self.starting_balance_day
             if daily_loss >= self.daily_loss_limit_pct:
-                return True, f"Daily Loss Limit Hit: {daily_loss*100:.2f}%"
+                return True, f"Daily Loss Limit Hit: {daily_loss*100:.2f}% (Start: {self.starting_balance_day:.2f}, Curr: {current_balance:.2f})"
             
         return False, "OK"
 
-    
     def calculate_position_size(self, account_balance, entry_price, stop_loss_price, leverage=None, risk_pct=None):
-        """
-        Calculates position size with explicit leverage/risk overrides.
-        """
+        """Calculates position size with explicit leverage/risk overrides."""
         if entry_price <= 0 or stop_loss_price <= 0:
             return 0
             
-        # Use provided values or class defaults
         active_risk = risk_pct if risk_pct is not None else self.risk_per_trade
         active_leverage = leverage if leverage is not None else self.leverage
         
@@ -140,37 +116,24 @@ class RiskManager:
         if price_diff == 0:
             return 0
 
-        # Position Size = Risk Amount / Price Difference per unit
         position_size = risk_amount / price_diff
-        
-        # Calculate Value
         position_value = position_size * entry_price
         
-        # Margin Check with Active Leverage
         required_margin = position_value / active_leverage
         if required_margin > account_balance:
-            # Scale down
             max_size = (account_balance * active_leverage) / entry_price
             position_size = min(position_size, max_size)
 
         return position_size
 
     def calculate_size_by_cost(self, entry_price, cost_usdt, leverage):
-        """
-        Calculates position size given a fixed USDT cost (margin) and leverage.
-        Position Value = Cost * Leverage
-        Size = Position Value / Price
-        """
+        """Calculates position size given a fixed USDT cost (margin) and leverage."""
         if entry_price <= 0 or cost_usdt <= 0: return 0
-        
         position_value = cost_usdt * leverage
-        qty = position_value / entry_price
-        return qty
+        return position_value / entry_price
 
     def calculate_sl_tp(self, entry_price, signal_type, atr=None, sl_pct=0.02, tp_pct=0.04):
-        """
-        Calculates Stop Loss and Take Profit levels.
-        """
+        """Calculates Stop Loss and Take Profit levels."""
         side = signal_type.upper()
         if side in ['BUY', 'LONG']:
             if atr:
@@ -188,19 +151,4 @@ class RiskManager:
                 tp = entry_price * (1 - tp_pct)
         else:
             return None, None
-            
         return sl, tp
-
-# Test
-if __name__ == "__main__":
-    rm = RiskManager(risk_per_trade=0.02, leverage=5)
-    balance = 100
-    entry = 5000
-    sl = 4900
-    
-    qty = rm.calculate_position_size(balance, entry, sl)
-    print(f"Balance: ${balance}, Risk: 2%, Leverage: 5x")
-    print(f"Entry: {entry}, SL: {sl} (Diff: {entry-sl})")
-    print(f"Calculated Qty: {qty:.4f} BTC")
-    print(f"Notional Value: ${qty * entry:.2f}")
-    print(f"Required Margin: ${(qty * entry)/5:.2f}")

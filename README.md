@@ -30,11 +30,28 @@ python3 src/analyzer.py
 python3 scripts/clean_positions.py  # Fix corrupted positions (NaN values)
 ```
 
-### 3. Launch the Bot
+### 3. Data Migration (Optional)
+If you have legacy `positions.json` or `signal_performance.json` data, migrate it to the new SQLite database:
+```bash
+python3 src/migrate_json_to_sql.py --backup
+```
+
+### 4. Setup Multi-Profile
+Profiles are managed via the database. To add a new profile or change exchange keys, use the `scripts/manage_profiles.py` utility (if available) or interact with the `profiles` table in `trading_bot.db`.
+
+### 5. Launch the Bot
 ```bash
 python3 launcher.py
 ```
 *Note: Launcher starts both the trading loop and the Telegram command bot.*
+
+## 🗄️ Database Architecture
+The bot uses a centralized SQLite database (`trading_bot.db`) for all persistent state, replacing unstable JSON files.
+- **WAL Mode**: Enabled for high-performance concurrent writes.
+- **Foreign Keys**: Enforced for data integrity between profiles and trades.
+- **Schema**: Tables for `profiles`, `trades` (active/closed), `ohlcv_cache`, `ai_training_logs`, and `risk_metrics`.
+- **pos_key**: A standardized unique identifier (`P{ID}_{EXCHANGE}_{SYMBOL}_{TF}`) ensures perfect state recovery across restarts.
+
 
 ### 5. 🧪 Running Tests
 The bot includes a comprehensive test suite (Unit, Integration, and Hardcore Anomalies).

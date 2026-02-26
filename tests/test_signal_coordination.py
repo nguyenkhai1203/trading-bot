@@ -18,8 +18,8 @@ async def test_confidence_competition_new_entry():
     
     mock_dm = MagicMock()
     
-    bot_5m = TradingBot('BTC/USDT', '5m', mock_dm, mock_trader)
-    bot_1h = TradingBot('BTC/USDT', '1h', mock_dm, mock_trader)
+    bot_5m = TradingBot('BTC/USDT', '5m', mock_dm, mock_trader, MagicMock(), MagicMock())
+    bot_1h = TradingBot('BTC/USDT', '1h', mock_dm, mock_trader, MagicMock(), MagicMock())
     
     # Mock get_new_entry_signal
     sig_5m = {'side': 'BUY', 'confidence': 0.4, 'last_row': MagicMock()}
@@ -79,8 +79,8 @@ async def test_pending_replacement_logic():
     
     mock_dm = MagicMock()
     
-    bot_5m = TradingBot('BTC/USDT', '5m', mock_dm, mock_trader)
-    bot_1h = TradingBot('BTC/USDT', '1h', mock_dm, mock_trader)
+    bot_5m = TradingBot('BTC/USDT', '5m', mock_dm, mock_trader, MagicMock(), MagicMock())
+    bot_1h = TradingBot('BTC/USDT', '1h', mock_dm, mock_trader, MagicMock(), MagicMock())
     
     sig_5m = {'side': 'BUY', 'confidence': 0.8, 'last_row': MagicMock()}
     sig_1h = None # No new signal or same signal

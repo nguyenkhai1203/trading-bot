@@ -123,6 +123,8 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
 
             # Process Standard Orders
             if isinstance(std_orders_res, list):
+                for o in std_orders_res:
+                    o['status'] = self.normalize_status(o.get('status'))
                 all_orders.extend(std_orders_res)
             elif isinstance(std_orders_res, Exception):
                 raise std_orders_res # Re-raise if standard fetch fails
@@ -134,6 +136,9 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
                     o['algoType'] = o.get('algoType') 
                     if not o.get('symbol') and symbol:
                         o['symbol'] = symbol
+                    # Normalize algo status
+                    algo_raw_status = o.get('algoStatus') or o.get('status')
+                    o['status'] = self.normalize_status(algo_raw_status)
                     all_orders.append(o)
             elif isinstance(algo_orders_res, Exception):
                  # For Binance, if Algo fetch fails, we MUST NOT return just partial list
@@ -341,12 +346,14 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             # Map Client ID to origClientOrderId if not numeric
             if not str(order_id).isdigit() and 'origClientOrderId' not in params:
                 params['origClientOrderId'] = order_id
-            return await self._execute_with_timestamp_retry(
+            res = await self._execute_with_timestamp_retry(
                 self.exchange.fetch_order,
                 order_id,
                 symbol,
                 params
             )
+            res['status'] = self.normalize_status(res.get('status'))
+            return res
         except Exception as e:
             err_str = str(e).lower()
             if "not found" in err_str or "does not exist" in err_str or "2013" in err_str or "orderid" in err_str:
@@ -361,7 +368,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
                             if str(algo.get('algoId')) == str(order_id) or str(algo.get('clientOrderId')) == str(order_id):
                                 algo['is_algo'] = True
                                 algo['id'] = str(algo.get('algoId', order_id))
-                                algo['status'] = 'open' if algo.get('algoStatus') == 'WORKING' else algo.get('algoStatus', 'open').lower()
+                                algo['status'] = self.normalize_status(algo.get('algoStatus') or 'open')
                                 return algo
                 except Exception as algo_e:
                     self.logger.warning(f"[Binance] Algo check failed for {order_id}: {algo_e}")
@@ -378,7 +385,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
                             self.logger.info(f"[Binance] Order {order_id} found in trade history! Returning as CLOSED.")
                             return {
                                 'id': order_id, 
-                                'status': 'closed', 
+                                'status': 'CLOSED', 
                                 'filled': match.get('amount', 0), 
                                 'average': match.get('price', 0),
                                 'info': match

@@ -155,30 +155,38 @@ async def main():
     import time
     timeframes = ['15m', '30m', '1h', '2h', '4h', '8h', '1d']
     
-    # Map exchange name to its specific symbols
     exchange_symbols = {
         'BINANCE': BINANCE_SYMBOLS,
         'BYBIT': BYBIT_SYMBOLS
     }
     
-    all_tasks = []
+    exchange_tasks = {}
     for ex_name in ACTIVE_EXCHANGES:
         ex_name = ex_name.strip().upper()
         symbols = exchange_symbols.get(ex_name, [])
+        tasks = []
         for symbol in symbols:
             for timeframe in timeframes:
-                all_tasks.append((symbol, timeframe, ex_name))
+                tasks.append((symbol, timeframe, ex_name))
+        exchange_tasks[ex_name] = tasks
+
+    # Reorganize to interleave exchanges (e.g., [Bin1, Byb1, Bin2, Byb2...])
+    all_tasks = []
+    max_len = max([len(t) for t in exchange_tasks.values()]) if exchange_tasks else 0
+    for i in range(max_len):
+        for ex_name in ACTIVE_EXCHANGES:
+            ex_name = ex_name.strip().upper()
+            if i < len(exchange_tasks[ex_name]):
+                all_tasks.append(exchange_tasks[ex_name][i])
     
     total = len(all_tasks)
     success_count = 0
     
-    # Dynamic batch size based on exchange
-    # Bybit is stricter with rate limits, so we process it slower or in smaller batches
-    # If mixed, we stick to conservative limits
-    is_bybit_active = 'BYBIT' in [x.upper() for x in ACTIVE_EXCHANGES]
-    batch_size = 4 if is_bybit_active else 10
+    # [v2.6] Parallelized batching by interleaved exchange pairs
+    batch_size = 8  # Tăng lên 8 symbols (4 Binance + 4 Bybit) để tối ưu tốc độ tối đa
+    wait_time = 2   # Nghỉ 2s giữa các gói
     
-    print(f"[*] Starting download with batch size: {batch_size}")
+    print(f"[*] Starting download with INTERLEAVED exchanges. Batch size: {batch_size}")
     
     for i in range(0, total, batch_size):
         batch = all_tasks[i:i+batch_size]
@@ -195,10 +203,8 @@ async def main():
         actual_downloads = sum(1 for r in results if r == 2)
         success_count += sum(1 for r in results if r > 0)
         
-        # Only sleep if we made real API calls this batch
+        # Only sleep if we actually hit the API and there are more tasks
         if i + batch_size < total and actual_downloads > 0:
-            has_bybit = any(t[2] == 'BYBIT' for t in batch)
-            wait_time = 5 if has_bybit else 2
             print(f"    Sleeping {wait_time}s to respect rate limits...")
             await asyncio.sleep(wait_time)
     

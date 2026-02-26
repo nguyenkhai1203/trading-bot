@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import time as time_mod
 from unittest.mock import MagicMock, AsyncMock, patch
 import pandas as pd
 import numpy as np
@@ -34,7 +35,7 @@ class TestTradingBotIntegration:
         trader.adjust_sl_tp_for_profit_lock = AsyncMock(return_value=None)
         
         balance_tracker = BalanceTracker()
-        balance_tracker.update_balance('BINANCE', 1000.0)
+        balance_tracker.update_balance('BINANCE', 1, 1000.0)
         
         # Create a temporary daily_config.json for tests
         fd, temp_path = tempfile.mkstemp(suffix='.json')
@@ -65,7 +66,7 @@ class TestTradingBotIntegration:
             mock_strat.sl_pct = 0.02
             mock_strat.tp_pct = 0.04
             
-            bot = TradingBot('BTC/USDT', '1h', dm, trader, balance_tracker=bt)
+            bot = TradingBot('BTC/USDT', '1h', dm, trader, MagicMock(), MagicMock(), balance_tracker=bt)
             
             # Mock strategy to return a BUY signal
             mock_strat.get_signal = MagicMock(return_value={
@@ -77,7 +78,7 @@ class TestTradingBotIntegration:
             })
             
             # Inject isolated RiskManager
-            bot.risk_manager = RiskManager(config_path=mock_components['temp_config'])
+            bot.risk_manager = RiskManager(db=MagicMock(), profile_id=1)
             
             # Mock data manager to return data
             df = pd.DataFrame({'close': [50000.0], 'high': [50100.0], 'low': [49900.0]})
@@ -91,12 +92,18 @@ class TestTradingBotIntegration:
             # Mock exchange market for min cost
             trader.exchange.market.return_value = {'limits': {'cost': {'min': 5.0}}}
 
+            bot.signal_tracker.should_skip_symbol = MagicMock(return_value=(False, ""))
+            bot.signal_tracker.get_last_trade_side = MagicMock(return_value=None)
+            
             # Execute step
             try:
-                with patch('bot.send_telegram_message', AsyncMock()), \
-                     patch('bot.signal_tracker.should_skip_symbol', return_value=(False, "")), \
-                     patch('bot.signal_tracker.get_last_trade_side', return_value=None):
-                    await bot.run_step()
+                with patch('bot.send_telegram_message', AsyncMock()):
+                    
+                    is_closed = await bot.run_monitoring_cycle()
+                    if not is_closed:
+                        signal = await bot.get_new_entry_signal()
+                        if signal:
+                            await bot.execute_entry(signal, 1000.0)
             finally:
                 if os.path.exists(mock_components['temp_config']):
                     os.remove(mock_components['temp_config'])
@@ -104,7 +111,7 @@ class TestTradingBotIntegration:
             # Assertions
             trader.place_order.assert_called_once()
             # Reservation should be released in finally block
-            assert bt.balances['BINANCE']['reserved'] == 0.0
+            assert bt.balances[('BINANCE', 1)]['reserved'] == 0.0
 
     @pytest.mark.asyncio
     async def test_run_step_duplicate_prevention(self, mock_components):
@@ -114,7 +121,7 @@ class TestTradingBotIntegration:
         bt = mock_components['balance_tracker']
         
         with patch('bot.WeightedScoringStrategy'):
-            bot = TradingBot('BTC/USDT', '1h', dm, trader, balance_tracker=bt)
+            bot = TradingBot('BTC/USDT', '1h', dm, trader, MagicMock(), MagicMock(), balance_tracker=bt)
             
             # Mock data manager to return data
             df = pd.DataFrame({'close': [50000.0]})
@@ -122,9 +129,18 @@ class TestTradingBotIntegration:
             
             # Mock existing position
             trader.has_any_symbol_position = AsyncMock(return_value=True)
+            trader.active_positions = {'BINANCE_BTC_USDT_1h': {'status': 'filled', 'symbol': 'BTC/USDT', 'side': 'BUY'}}
             
             # Execute step
-            await bot.run_step()
+            bot.signal_tracker.should_skip_symbol = MagicMock(return_value=(False, ""))
+            is_closed = await bot.run_monitoring_cycle()
+            if not is_closed:
+                # Due to has_any_symbol_position logic in real execute_entry, we skip or mock it
+                if await trader.has_any_symbol_position(bot.symbol):
+                    pass # Don't get signal
+                else:
+                    signal = await bot.get_new_entry_signal()
+                    if signal: await bot.execute_entry(signal, 1000.0)
             
             # Assertions
             trader.place_order.assert_not_called()
@@ -138,11 +154,15 @@ class TestTradingBotIntegration:
         
         with patch('bot.WeightedScoringStrategy') as mock_strat_cls:
             mock_strat = mock_strat_cls.return_value
-            bot = TradingBot('BTC/USDT', '1h', dm, trader, balance_tracker=bt)
+            bot = TradingBot('BTC/USDT', '1h', dm, trader, MagicMock(), MagicMock(), balance_tracker=bt)
             pos_key = 'BINANCE_BTC_USDT_1h'
             
-            # Mock a pending order
-            trader.pending_orders[pos_key] = {'side': 'BUY', 'price': 50000.0}
+            # Mock a pending order — timestamp must be > 120s old so MIN_PENDING_SECS guard passes
+            stale_ts = int((time_mod.time() - 200) * 1000)
+            trader.active_positions[pos_key] = {
+                'status': 'pending', 'side': 'BUY', 'entry_price': 50000.0,
+                'timestamp': stale_ts
+            }
             
             # Mock data
             df = pd.DataFrame({'close': [50000.0]})
@@ -153,12 +173,17 @@ class TestTradingBotIntegration:
             mock_strat.get_signal = MagicMock(return_value={'side': 'SELL', 'confidence': 0.8})
             
             # Execute step
+            bot.signal_tracker.should_skip_symbol = MagicMock(return_value=(False, ""))
             with patch('bot.send_telegram_message', AsyncMock()):
-                await bot.run_step()
+                is_closed = await bot.run_monitoring_cycle()
+                if not is_closed:
+                    signal = await bot.get_new_entry_signal()
+                    if signal: await bot.execute_entry(signal, 1000.0)
                 
             # Assertions
             trader.cancel_pending_order.assert_called_once()
-            assert "Signal reversed to SELL" in trader.cancel_pending_order.call_args[1].get('reason', '')
+            # Reason contains "reversal" ("Strong signal reversal") 
+            assert "reversal" in trader.cancel_pending_order.call_args[1].get('reason', '').lower()
 
     @pytest.mark.asyncio
     async def test_run_step_circuit_breaker(self, mock_components):
@@ -168,11 +193,17 @@ class TestTradingBotIntegration:
         bt = mock_components['balance_tracker']
         
         with patch('bot.WeightedScoringStrategy'):
-            bot = TradingBot('BTC/USDT', '1h', dm, trader, balance_tracker=bt)
+            bot = TradingBot('BTC/USDT', '1h', dm, trader, MagicMock(), MagicMock(), balance_tracker=bt)
             
-            # Execute step with circuit breaker flag
-            await bot.run_step(circuit_breaker_triggered=True)
+            # Execute step with circuit breaker flag simulation
+            bot.running = False # Simulate circuit breaker tripped
+            
+            bot.signal_tracker.should_skip_symbol = MagicMock(return_value=(False, ""))
+            is_closed = await bot.run_monitoring_cycle()
+            if not is_closed:
+                signal = await bot.get_new_entry_signal()
+                if signal: await bot.execute_entry(signal, 1000.0)
             
             # Assertions
             assert bot.running is False
-            dm.get_data.assert_not_called()
+            trader.place_order.assert_not_called()

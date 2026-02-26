@@ -62,16 +62,16 @@ class TestWeightedScoringStrategy:
         assert signal_sell['side'] == 'SELL'
         assert signal_sell['confidence'] == 7.0
 
-    @patch('strategy.tracker')
-    def test_get_signal_adaptive_weights(self, mock_tracker, strategy):
+    def test_get_signal_adaptive_weights(self, strategy):
         """Verify adaptive weight adjustments via SignalTracker."""
         row = {'signal_EMA_9_cross_21_up': True}
         # Normal weight 4.0
         
         # Mock tracker to boost weight to 6.0
+        mock_tracker = MagicMock()
         mock_tracker.adjust_weights.return_value = {'EMA_9_cross_21_up': 6.0}
         
-        signal = strategy.get_signal(row, use_adaptive=True, use_brain=False)
+        signal = strategy.get_signal(row, use_adaptive=True, use_brain=False, tracker=mock_tracker)
         assert signal['confidence'] == 6.0
         mock_tracker.adjust_weights.assert_called_once()
 

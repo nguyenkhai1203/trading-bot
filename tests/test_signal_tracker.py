@@ -6,16 +6,11 @@ from signal_tracker import SignalTracker
 
 class TestSignalTracker:
     @pytest.fixture
-    def tracker(self, tmp_path):
-        """Create a SignalTracker with a temporary file path."""
-        # Use custom path for signal_performance.json
-        custom_file = str(tmp_path / "test_performance.json")
-        
-        # Patch the file path in the tracker instance
-        # Note: SignalTracker loads in __init__
-        with patch('signal_tracker.os.path.join', return_value=custom_file):
-            st = SignalTracker()
-            return st
+    def tracker(self):
+        """Create a SignalTracker with a mocked db."""
+        mock_db = MagicMock()
+        st = SignalTracker(db=mock_db, profile_id=1)
+        return st
 
     @pytest.mark.asyncio
     async def test_record_trade_win_resets_loss_counter(self, tracker):
@@ -42,15 +37,15 @@ class TestSignalTracker:
         
         # Win
         tracker._update_signal_stats(signals, 'WIN')
-        assert tracker.data['signal_stats']['RSI_Oversold']['wins'] == 1
-        assert tracker.data['signal_stats']['EMA_Cross']['total'] == 1
+        assert tracker.signal_stats['RSI_Oversold']['wins'] == 1
+        assert tracker.signal_stats['EMA_Cross']['total'] == 1
         
         # Loss
         tracker._update_signal_stats(signals, 'LOSS')
-        assert tracker.data['signal_stats']['RSI_Oversold']['losses'] == 1
-        assert tracker.data['signal_stats']['RSI_Oversold']['total'] == 2
+        assert tracker.signal_stats['RSI_Oversold']['losses'] == 1
+        assert tracker.signal_stats['RSI_Oversold']['total'] == 2
         # win_rate is not stored, but we can verify results list
-        assert tracker.data['signal_stats']['RSI_Oversold']['recent_results'] == [1, 0]
+        assert tracker.signal_stats['RSI_Oversold']['recent_results'] == [1, 0]
 
     def test_get_weight_multiplier(self, tracker):
         """Verify adaptive weight multipliers based on win rate."""
@@ -59,7 +54,7 @@ class TestSignalTracker:
         
         # Good performance (100% WR over 5 trades)
         # Recent results: 1 = win, 0 = loss
-        tracker.data['signal_stats']['WINNER'] = {
+        tracker.signal_stats['WINNER'] = {
             'wins': 5, 'losses': 0, 'total': 5, 
             'recent_results': [1, 1, 1, 1, 1]
         }
@@ -67,7 +62,7 @@ class TestSignalTracker:
         assert tracker.get_weight_multiplier('WINNER') == 1.2
         
         # Poor performance (0% WR over 5 trades)
-        tracker.data['signal_stats']['LOSER'] = {
+        tracker.signal_stats['LOSER'] = {
             'wins': 0, 'losses': 5, 'total': 5, 
             'recent_results': [0, 0, 0, 0, 0]
         }
@@ -78,11 +73,11 @@ class TestSignalTracker:
         """Verify that weight dictionary is adjusted correctly."""
         weights = {'SIGNAL_A': 10.0, 'SIGNAL_B': 10.0}
         
-        tracker.data['signal_stats']['SIGNAL_A'] = {
+        tracker.signal_stats['SIGNAL_A'] = {
             'wins': 10, 'losses': 0, 'total': 10, 
             'recent_results': [1] * 10
         }
-        tracker.data['signal_stats']['SIGNAL_B'] = {
+        tracker.signal_stats['SIGNAL_B'] = {
             'wins': 0, 'losses': 10, 'total': 10, 
             'recent_results': [0] * 10
         }
@@ -101,7 +96,7 @@ class TestSignalTracker:
         
         # Bad history (0% WR)
         now_iso = datetime.now().isoformat()
-        tracker.data['trades'] = [
+        tracker.trades = [
             {'symbol': 'BAD/USDT', 'result': 'LOSS', 'timestamp': now_iso},
             {'symbol': 'BAD/USDT', 'result': 'LOSS', 'timestamp': now_iso},
             {'symbol': 'BAD/USDT', 'result': 'LOSS', 'timestamp': now_iso}

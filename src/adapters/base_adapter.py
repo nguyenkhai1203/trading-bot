@@ -18,6 +18,18 @@ class BaseAdapter(ABC):
         else:
             self.name = raw_id
 
+    def normalize_status(self, raw_status: str) -> str:
+        """Standardize exchange status to internal DB status."""
+        if not raw_status: return 'OPENED'
+        s = raw_status.lower()
+        if s in ['open', 'untouched', 'new', 'partially_filled', 'working']:
+            return 'OPENED'
+        if s in ['closed', 'filled']:
+            return 'CLOSED'
+        if s in ['canceled', 'cancelled', 'expired', 'rejected']:
+            return 'CANCELLED'
+        return 'OPENED' # Fallback to opened for safety
+
     @property
     def is_authenticated(self) -> bool:
         """Check if the exchange client has legitimate trading permissions."""

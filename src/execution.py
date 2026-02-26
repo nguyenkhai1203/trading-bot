@@ -6,6 +6,7 @@ import sys
 import tempfile
 import asyncio
 import numpy as np
+from datetime import datetime
 
 from config import (
     LEVERAGE, GLOBAL_MAX_LEVERAGE, BINANCE_API_KEY, BINANCE_API_SECRET, AUTO_CREATE_SL_TP,
@@ -14,6 +15,13 @@ from config import (
     ENABLE_PROFIT_LOCK, PROFIT_LOCK_THRESHOLD, PROFIT_LOCK_LEVEL,
     MAX_TP_EXTENSIONS, ATR_EXT_MULTIPLIER,
     STOP_LOSS_PCT, TAKE_PROFIT_PCT
+)
+from notification import (
+    send_telegram_message,
+    format_pending_order,
+    format_position_filled,
+    format_position_closed,
+    format_order_cancelled
 )
 import time
 import hmac
@@ -50,8 +58,12 @@ class ExchangeLoggerAdapter(logging.LoggerAdapter):
 SL_COOLDOWN_SECONDS = 2 * 3600  # 2 hours cooldown after stop loss
 
 class Trader:
-    def __init__(self, exchange, dry_run=True, data_manager=None):
+    def __init__(self, exchange, db, profile_id, profile_name="Unknown", signal_tracker=None, dry_run=True, data_manager=None):
         self.exchange = exchange
+        self.db = db
+        self.profile_id = profile_id
+        self.profile_name = profile_name
+        self.signal_tracker = signal_tracker
         self.dry_run = dry_run
         
         # Configure Logger with Exchange Prefix
@@ -69,38 +81,20 @@ class Trader:
         # Use shared MarketDataManager for time synchronization
         if data_manager is None:
             from data_manager import MarketDataManager
-            self.data_manager = MarketDataManager()
+            self.data_manager = MarketDataManager(db=self.db)
         else:
             self.data_manager = data_manager
             
-        # Detection: if running under pytest, use temp files for persistence
-        is_testing = "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TRADING_BOT_TEST_MODE") == 'True'
+        # Hard isolation for Live/Test environment is handled by DataManager/DB Path
         
-        # Persistent storage for positions (Hard Isolation for Live/Test)
-        if is_testing:
-            # Create per-instance temp files to avoid cross-test interference
-            temp_dir = tempfile.gettempdir()
-            suffix = f"_{os.getpid()}_{id(self)}.json"
-            self.positions_file = os.path.join(temp_dir, f"test_positions{suffix}")
-            self.history_file = os.path.join(temp_dir, f"test_trade_history{suffix}")
-            self.cooldown_file = os.path.join(temp_dir, f"test_cooldowns{suffix}")
-        else:
-            # Dry-Run vs Live file separation
-            suffix = "_test.json" if self.dry_run else ".json"
-            
-            self.positions_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"positions{suffix}")
-            self.history_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"trade_history{suffix}")
-            self.cooldown_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"cooldowns{suffix}")
-            
-        # Cross-Exchange Data Buckets (to prevent data loss while filtering)
-        self._other_exchange_positions = {}
-        self._other_pending_orders = {}
+        # Cross-Exchange Data Buckets are no longer needed as each Trader instance 
+        # is tied to exactly one DB and Profile.
         
-        self.active_positions = self._load_positions() 
+        self.active_positions = {} # Tracked via DB, synced in initial loop or via specific call
         self.pending_orders = {}  # Track pending limit orders: {pos_key: {'order_id': id, 'symbol': symbol, 'side': side, 'price': price}}
         self._symbol_locks = {}  # Per-symbol locks to prevent entry race conditions
         self._position_locks = {}  # Per-position locks for SL/TP recreation
-        self._sl_cooldowns = self._load_cooldowns()  # Persist cooldowns across restarts
+        self._sl_cooldowns = {}  # To be synced via db.get_risk_metric if needed
         self.default_leverage = LEVERAGE
         self._missing_order_counts = {} # { order_id: missing_cycle_count }
         self._pos_action_timestamps = {} # { pos_key_action: timestamp_ms } to prevent rapid spam
@@ -154,180 +148,172 @@ class Trader:
             return await res
         return res
 
-    def _load_positions(self):
-        """Loads positions and pending orders from the JSON file, filtering for current exchange."""
-        if os.path.exists(self.positions_file):
-            try:
-                with open(self.positions_file, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                    if not content:
-                        self.active_positions = {}
-                        self.pending_orders = {}
-                        self._save_positions()
-                        return self.active_positions
-                    
-                    data = json.loads(content)
-                    
-                    raw_active = {}
-                    raw_pending = {}
-
-                    # Backward compatibility check
-                    if 'active_positions' in data or 'pending_orders' in data:
-                        raw_active = data.get('active_positions', {})
-                        raw_pending = data.get('pending_orders', {})
-                    else:
-                        raw_active = data
-                    
-                    # Partition Data by Exchange Prefix
-                    prefix = f"{self.exchange_name}_"
-                    filtered_active = {}
-                    filtered_pending = {}
-                    
-                    for k, v in raw_active.items():
-                        original_k = k
-                        # Fix 1: Properly ensure exchange prefix logic for "zombie" recovery
-                        if not k.startswith(('BINANCE_', 'BYBIT_')):
-                            # If no prefix, it's a zombie. Attribute to current exchange.
-                            k = f"{self.exchange_name}_{k}"
-                            
-                        # Fix 2: Auto-heal corrupted keys with slashes or colons
-                        if '/' in k or ':' in k:
-                            # Let _get_pos_key construct the definitive secure key
-                            sym = v.get('symbol', k.replace(f"{self.exchange_name}_", ""))
-                            # Remove trailing _adopted or _sync from the raw symbol name
-                            sym = sym.replace('_adopted', '').replace('_sync', '')
-                            k = self._get_pos_key(sym, v.get('timeframe', 'adopted'))
-                        
-                        if k.startswith(prefix):
-                            # Deduplicate: keep filled over pending
-                            if k in filtered_active:
-                                if v.get('status') == 'filled' and filtered_active[k].get('status') != 'filled':
-                                    filtered_active[k] = v
-                            else:
-                                filtered_active[k] = v
-                                
-                            if k != original_k:
-                                self.logger.info(f"Migrating corrupted active key: {original_k} -> {k}")
-                        else:
-                            self._other_exchange_positions[original_k] = v
-                            
-                    for k, v in raw_pending.items():
-                        original_k = k
-                        if not k.startswith(('BINANCE_', 'BYBIT_')):
-                            k = f"{self.exchange_name}_{k}"
-                            
-                        if '/' in k or ':' in k:
-                            sym = v.get('symbol', k.replace(f"{self.exchange_name}_", ""))
-                            sym = sym.replace('_adopted', '').replace('_sync', '')
-                            # Add _order to clearly distinguish from positions if it's an adopted order
-                            tf = v.get('timeframe', 'adopted')
-                            if tf == 'sync' and '_order' not in sym:
-                                tf = 'order_adopted'
-                            k = self._get_pos_key(sym, tf)
-                            
-                        if k.startswith(prefix):
-                            if k not in filtered_pending:
-                                filtered_pending[k] = v
-                            if k != original_k:
-                                self.logger.info(f"Migrating corrupted pending key: {original_k} -> {k}")
-                        else:
-                            self._other_pending_orders[original_k] = v
-                    
-                    self.pending_orders = filtered_pending
-                    if self.pending_orders:
-                        self.logger.info(f"Loaded {len(filtered_active)} active positions and {len(self.pending_orders)} pending orders for {self.exchange_name}.")
-                    
-                    return filtered_active
-                        
-            except json.JSONDecodeError as e:
-                self.logger.error(f"Error loading positions file: {e}")
-                self.active_positions = {}
-                self.pending_orders = {}
-                # Do not overwrite on decode error to prevent data loss
-            except Exception as e:
-                self.logger.error(f"Error loading positions file: {e}")
-                self.active_positions = {}
-                self.pending_orders = {}
-        else:
+    async def sync_from_db(self):
+        """Authoritative sync: Load active positions and pending orders from the database."""
+        try:
+            # 1. Load active positions
+            active_list = await self.db.get_active_positions(self.profile_id)
             self.active_positions = {}
-            self.pending_orders = {}
-            self._save_positions()
-        return self.active_positions
-
-    def _save_positions(self):
-        """Saves current active positions AND pending orders to the JSON file, preserving other exchanges."""
-        
-        # ATOMIC RELOAD & MERGE: Always read latest from disk before saving to prevent overwriting 
-        # changes made by other processes or Trader instances (e.g. Bybit overwriting Binance adoptions)
-        other_active = {}
-        other_pending = {}
-        
-        if os.path.exists(self.positions_file):
-            try:
-                with open(self.positions_file, 'r', encoding='utf-8') as f:
-                    disk_data = json.load(f)
-                    raw_active = disk_data.get('active_positions', disk_data)
-                    raw_pending = disk_data.get('pending_orders', {})
-                    
-                    prefix = f"{self.exchange_name}_"
-                    # Keep everything NOT belonging to THIS exchange
-                    other_active = {k: v for k, v in raw_active.items() if not k.startswith(prefix)}
-                    other_pending = {k: v for k, v in raw_pending.items() if not k.startswith(prefix)}
-            except Exception as e:
-                # If read fails, fallback to memory-only "other" data (failsafe but less robust)
-                self.logger.warning(f"Could not reload positions for atomic merge: {e}. Using cached memory-only data.")
-                other_active = self._other_exchange_positions
-                other_pending = self._other_pending_orders
-
-        # Merge current exchange data with data from other exchanges
-        merged_active = other_active
-        merged_active.update(self.active_positions)
-        
-        merged_pending = other_pending
-        merged_pending.update(self.pending_orders)
-
-        # Prepare data structure
-        data = {
-            'active_positions': merged_active,
-            'pending_orders': merged_pending,
-            'last_sync': time.time()
-        }
-        
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                tmp = self.positions_file + '.tmp'
-                with open(tmp, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=4, cls=BotJSONEncoder)
-                    f.flush()
-                    try:
-                        os.fsync(f.fileno())
-                    except Exception:
-                        pass
+            for p in active_list:
+                # Use pos_key as the primary slot identifier
+                pos_key = p.get('pos_key')
+                if not pos_key:
+                    pos_key = self._get_pos_key(p['symbol'], p['timeframe'])
                 
-                # Windows file locking workaround: retry replace
-                try:
-                    os.replace(tmp, self.positions_file)
-                    return  # Success
-                except PermissionError:
-                    if attempt < max_retries - 1:
-                        time.sleep(0.1)  # Wait 100ms and retry
-                        continue
-                    else:
-                        raise
-                        
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    time.sleep(0.1)
-                    continue
+                # Transform DB row to execution engine format
+                status_raw = p.get('status', 'ACTIVE').upper()
+                mapped_status = 'pending' if status_raw == 'OPENED' else 'filled'
+                
+                # Parse signals_used from meta_json if available, or fallback to p['signals_used'] if it existed
+                meta = p.get('meta') or {}
+                
+                self.active_positions[pos_key] = {
+                    "symbol": p['symbol'],
+                    "side": p['side'],
+                    "qty": p['qty'],
+                    "entry_price": p['entry_price'],
+                    "sl": p['sl_price'],
+                    "tp": p['tp_price'],
+                    "timeframe": p['timeframe'],
+                    "status": mapped_status,
+                    "leverage": p.get('leverage', self.default_leverage),
+                    "order_id": p.get('exchange_order_id'),
+                    "sl_id": p.get('sl_order_id'),
+                    "tp_id": p.get('tp_order_id'),
+                    "timestamp": p.get('entry_time', 0),
+                    "signals_used": meta.get('signals_used', []),
+                    "entry_confidence": meta.get('entry_confidence', 0.5),
+                    "snapshot": meta.get('snapshot')
+                }
+
+            # 2. Update pending orders subset
+            self.pending_orders = {k: v for k, v in self.active_positions.items() if v.get('status') == 'pending'}
+            
+            # 3. SL Cooldowns
+            try:
+                raw_data = await self.db.get_risk_metric(self.profile_id, 'sl_cooldowns_json', env=self.env)
+                if raw_data:
+                    cooldowns = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+                    now = time.time()
+                    self._sl_cooldowns = {k: v for k, v in cooldowns.items() if v > now}
                 else:
-                    self.logger.error(f"Error saving positions file after {max_retries} attempts: {e}")
-                    # Try to clean up tmp file
-                    try:
-                        if os.path.exists(tmp):
-                            os.remove(tmp)
-                    except:
-                        pass
+                    self._sl_cooldowns = {}
+            except Exception as e:
+                self.logger.warning(f"Failed to sync cooldowns from DB: {e}")
+                
+            self.logger.info(f"Synced {len(self.active_positions)} positions and {len(self._sl_cooldowns)} cooldowns from DB for Profile {self.profile_id}")
+        except Exception as e:
+            self.logger.error(f"Failed to sync from DB: {e}")
+
+    async def _update_db_position(self, pos_key):
+        """Persist a single position change to the database."""
+        pos = self.active_positions.get(pos_key)
+        if not pos: 
+            return
+
+        # Map internal status to DB status
+        internal_status = pos.get('status', 'filled').lower()
+        db_status = 'ACTIVE'
+        if internal_status == 'pending':
+            db_status = 'OPENED'
+        elif internal_status in ['filled', 'active']:
+            db_status = 'ACTIVE'
+
+        try:
+            trade_data = {
+                'id': pos.get('id'),             # Pass ID if we already have it
+                'profile_id': self.profile_id,
+                'pos_key': pos_key,               # Critical: Slot ID
+                'exchange_order_id': pos.get('order_id'),
+                'exchange': self.exchange_name,
+                'symbol': pos['symbol'],
+                'side': pos['side'],
+                'entry_price': pos['entry_price'],
+                'qty': pos['qty'],
+                'leverage': pos.get('leverage', self.default_leverage),
+                'status': db_status,
+                'sl_price': pos.get('sl'),
+                'tp_price': pos.get('tp'),
+                'timeframe': pos.get('timeframe'),
+                'sl_order_id': pos.get('sl_id'),
+                'tp_order_id': pos.get('tp_id'),
+                'entry_time': pos.get('timestamp'),
+                'meta': {
+                    'signals_used': pos.get('signals_used', []),
+                    'entry_confidence': pos.get('entry_confidence', 0.5),
+                    'snapshot': pos.get('snapshot')
+                }
+            }
+            trade_id = await self.db.save_position(trade_data)
+            print(f"X_SYNC_X Saved {pos_key} to DB with ID: {trade_id}")
+            # Store back the ID to avoid redundant lookups
+            pos['id'] = trade_id
+            print(f"X_SYNC_X Post-save ID in memory: {pos.get('id')}")
+        except Exception as e:
+            self.logger.error(f"Failed to update DB for {pos_key}: {e}")
+
+    async def _clear_db_position(self, pos_key, exit_price=None, exit_reason=None):
+        """Mark a position as CLOSED or CANCELLED in the database."""
+        # Use active_positions or pending_orders
+        pos = self.active_positions.get(pos_key) or self.pending_orders.get(pos_key)
+        
+        status = 'CLOSED'
+        if pos and pos.get('status') == 'pending':
+            status = 'CANCELLED'
+            
+        try:
+            pnl = 0
+            if pos and exit_price and pos.get('entry_price'):
+                fee_est = (pos['entry_price'] + exit_price) * pos['qty'] * 0.0006
+                if pos['side'] == 'BUY':
+                    pnl = (exit_price - pos['entry_price']) * pos['qty'] - fee_est
+                else:
+                    pnl = (pos['entry_price'] - exit_price) * pos['qty'] - fee_est
+
+            # Look up internal trade ID if possible
+            # We use pos_key to identify which row to close
+            await self.db._execute_write("""
+                UPDATE trades SET 
+                    status=?, exit_price=?, pnl=?, exit_reason=?, exit_time=?
+                WHERE profile_id=? AND pos_key=? AND status IN ('ACTIVE', 'OPENED')
+            """, (status, exit_price, pnl, exit_reason, int(time.time() * 1000) if status == 'CLOSED' else None, 
+                  self.profile_id, pos_key))
+            
+            # 3. Notification (only for CLOSED real trades)
+            if status == 'CLOSED' and pos and exit_price:
+                roe = (exit_price - pos['entry_price']) / pos['entry_price'] * pos.get('leverage', 1) * 100
+                if pos['side'] == 'SELL': roe = -roe
+                
+                # Convert timestamps to datetime
+                entry_dt = None
+                if pos.get('timestamp'):
+                    entry_dt = datetime.fromtimestamp(pos['timestamp'] / 1000)
+                
+                _, tg_msg = format_position_closed(
+                    symbol=pos['symbol'],
+                    timeframe=pos.get('timeframe', '1h'),
+                    side=pos['side'],
+                    entry_price=pos['entry_price'],
+                    exit_price=exit_price,
+                    size=pos['qty'],
+                    pnl=pnl,
+                    pnl_pct=roe,
+                    reason=exit_reason or 'Exit',
+                    entry_time=entry_dt,
+                    exit_time=datetime.now(),
+                    dry_run=self.dry_run,
+                    exchange_name=self.exchange_name,
+                    profile_label=self.profile_name
+                )
+                await send_telegram_message(tg_msg)
+        except Exception as e:
+            self.logger.error(f"Failed to clear DB position {pos_key}: {e}")
+
+    async def _save_positions(self):
+        """Deprecated: Use _update_db_position() for granular updates."""
+        # For compatibility during migration, we can implement a bulk sync if absolutely needed,
+        # but the goal is to use granular updates.
+        pass
 
     async def _verify_or_clear_id(self, pos_key, order_id, symbol, orders_in_snap):
         """Authoritative check for order existence. Returns (verified_id, order_data)."""
@@ -432,32 +418,38 @@ class Trader:
             return symbol
 
     def _get_pos_key(self, symbol, timeframe=None):
-        """Standardized position key: EXCHANGE_SYMBOL_QUOTE_TIMEFRAME"""
+        """Standardized position key: P{ID}_{EXCHANGE}_{SYMBOL}_{TF}"""
         exchange_name = self.exchange_name
         # Extract base/quote and replace slashes with underscores (e.g., BTC/USDT -> BTC_USDT)
         # Handle settlement info if present (e.g. BTC/USDT:USDT -> discard the :USDT part)
         clean_symbol = symbol.split(':')[0].replace('/', '_').upper()
+        base_key = f"P{self.profile_id}_{exchange_name}_{clean_symbol}"
         if timeframe:
-            return f"{exchange_name}_{clean_symbol}_{timeframe}"
-        return f"{exchange_name}_{clean_symbol}"
+            return f"{base_key}_{timeframe}"
+        return base_key
 
     def _parse_pos_key(self, pos_key):
         """
         Parses the pos_key back into its components: exchange, symbol (unified), and timeframe.
+        Handles both old format (EXCHANGE_BASE_QUOTE_TF) and new format (P{id}_EXCHANGE_BASE_QUOTE_TF).
         Returns: (exchange, symbol, timeframe)
         """
         if not pos_key:
             return None, None, None
             
         parts = pos_key.split('_')
-        # Format: EXCHANGE_BASE_QUOTE_TIMEFRAME
-        if len(parts) >= 3:
-            exchange = parts[0]
-            base = parts[1]
-            quote = parts[2]
+        # New format: P{profile_id}_EXCHANGE_BASE_QUOTE_TF  (e.g. P1_BINANCE_BTC_USDT_1h)
+        # Old format: EXCHANGE_BASE_QUOTE_TF
+        # Skip the P{id} prefix if present
+        start = 1 if parts[0].startswith('P') and parts[0][1:].isdigit() else 0
+        
+        if len(parts) >= start + 3:
+            exchange = parts[start]
+            base = parts[start + 1]
+            quote = parts[start + 2]
             # Reconstitute symbol (unified format BASE/QUOTE)
             symbol = f"{base}/{quote}"
-            timeframe = parts[3] if len(parts) > 3 else None
+            timeframe = parts[start + 3] if len(parts) > start + 3 else None
             return exchange, symbol, timeframe
         
         # Fallback for simpler or legacy keys
@@ -487,57 +479,27 @@ class Trader:
         except Exception:
             pass
     
-    def _load_cooldowns(self):
-        """Load SL cooldowns from file."""
-        if os.path.exists(self.cooldown_file):
-            try:
-                with open(self.cooldown_file, 'r') as f:
-                    cooldowns = json.load(f)
-                # Filter out expired cooldowns
-                now = time.time()
-                # Migrate old unprefixed keys if any (assuming they belong to current exchange for simplicity, 
-                # or just let them expire and vanish)
-                valid = {}
-                for k, v in cooldowns.items():
-                    if v > now:
-                        valid[k] = v
-                return valid
-            except Exception:
-                pass
-        return {}
-    
-    def _save_cooldowns(self):
-        """Save SL cooldowns to file."""
+    async def _async_save_cooldowns(self):
+        """Persist current SL cooldowns to SQLite."""
         try:
-            # Re-load to merge with other instance's changes if they wrote to disk
-            disk_cooldowns = {}
-            if os.path.exists(self.cooldown_file):
-                with open(self.cooldown_file, 'r') as f:
-                    disk_cooldowns = json.load(f)
-            
-            # Update disk_cooldowns with our local ones
-            disk_cooldowns.update(self._sl_cooldowns)
-            
             # Filter expired before saving
             now = time.time()
-            valid = {k: v for k, v in disk_cooldowns.items() if v > now}
-            
-            with open(self.cooldown_file, 'w') as f:
-                json.dump(valid, f, indent=4)
+            self._sl_cooldowns = {k: v for k, v in self._sl_cooldowns.items() if v > now}
+            await self.db.set_risk_metric(self.profile_id, 'sl_cooldowns_json', json.dumps(self._sl_cooldowns))
         except Exception as e:
-            self.logger.error(f"Error saving cooldowns: {e}")
+            self.logger.warning(f"Failed to save cooldowns to DB: {e}")
 
-    def set_sl_cooldown(self, symbol):
+    async def set_sl_cooldown(self, symbol):
         """Set cooldown after a stop loss hit for this symbol."""
         expiry = time.time() + SL_COOLDOWN_SECONDS
         key = f"{self.exchange_name}:{symbol}"
         self._sl_cooldowns[key] = expiry
-        self._save_cooldowns()  # Persist to file
+        await self._async_save_cooldowns()
         hours = SL_COOLDOWN_SECONDS / 3600
         self.logger.info(f"[COOLDOWN] {key} blocked for {hours:.1f} hours after SL")
         print(f"⏸️ [{self.exchange_name}] [{symbol}] Cooldown activated for {hours:.1f} hours after SL")
 
-    def is_in_cooldown(self, symbol):
+    async def is_in_cooldown(self, symbol):
         """Check if symbol is in cooldown period after SL."""
         key = f"{self.exchange_name}:{symbol}"
         if key not in self._sl_cooldowns:
@@ -546,7 +508,7 @@ class Trader:
         if time.time() >= self._sl_cooldowns[key]:
             # Cooldown expired, remove it
             del self._sl_cooldowns[key]
-            self._save_cooldowns()  # Persist change
+            await self._async_save_cooldowns()
             return False
         
         return True
@@ -559,7 +521,7 @@ class Trader:
         remaining = self._sl_cooldowns[key] - time.time()
         return max(0, remaining / 60)  # Return minutes
 
-    def check_pending_limit_fills(self, symbol, timeframe, current_price):
+    async def check_pending_limit_fills(self, symbol, timeframe, current_price):
         """
         [DRY RUN] Check if a pending limit order should be filled based on current price.
         Returns True if the order got filled, False otherwise.
@@ -594,7 +556,7 @@ class Trader:
         if filled:
             pos['status'] = 'filled'
             pos['filled_at'] = current_price
-            self._save_positions()
+            await self._update_db_position(pos_key)
             print(f"✅ [{self.exchange_name}] [DRY RUN] Limit order FILLED: {symbol} {side} @ {limit_price:.3f} (current: {current_price:.3f})")
             return True
         
@@ -671,7 +633,7 @@ class Trader:
                             "timestamp": pos['timestamp'],
                             "timeframe": timeframe
                         }
-                        self._save_positions()
+                        await self._update_db_position(key)
                     break
             
             if not found_on_exchange and key in self.active_positions:
@@ -699,20 +661,21 @@ class Trader:
             min_cost = market['limits'].get('cost', {}).get('min', 0) or 0
             min_amount = market['limits'].get('amount', {}).get('min', 0) or 0
         
-        # fallback defaults if exchange info missing
-        if min_cost == 0: min_cost = 5.0 
+        # fallback when exchange info missing (actual min comes from market data above)
+        if min_cost == 0: min_cost = 5.0
             
         notional = price * qty
         
         # 1. Check Amount
         if qty < min_amount:
-            return False, f"Qty {qty} < Min Amount {min_amount}", 0
+            return False, f"Qty {qty} < Min Amount {min_amount}", notional
             
         # 2. Check Cost (Notional)
         if notional < min_cost:
-            return False, f"Value ${notional:.2f} < Min Cost ${min_cost:.2f}", 0
+            return False, f"Value ${notional:.2f} < Min Cost ${min_cost:.2f}", notional
             
         return True, "OK", qty
+
 
 
     async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None, reduce_only=False, params=None):
@@ -813,7 +776,18 @@ class Trader:
                 "snapshot": snapshot,
                 "timestamp": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
             }
-            self._save_positions()
+            await self._update_db_position(pos_key)
+            
+            # Send notification
+            _, tg_msg = format_pending_order(
+                symbol, timeframe, side, price, sl, tp, confidence, leverage, self.dry_run,
+                exchange_name=self.exchange_name, profile_label=self.profile_name
+            ) if is_limit else format_position_filled(
+                symbol, timeframe, side, price, qty_rounded, price * qty_rounded, sl, tp, confidence, leverage, self.dry_run,
+                exchange_name=self.exchange_name, profile_label=self.profile_name
+            )
+            await send_telegram_message(tg_msg)
+            
             return {'id': 'dry_run_id', 'status': 'closed' if not is_limit else 'open', 'filled': qty if not is_limit else 0}
 
         # LIVE LOGIC
@@ -857,7 +831,7 @@ class Trader:
                     self.logger.debug(f"[ORDER REQ] create_order {symbol} {order_type} {side} {qty} {price} {params}")
 
                     order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, order_type, side, qty, price, params=params
+                        self.exchange.create_order, symbol, order_type, side.lower(), qty, price, params=params
                     )
                     self.logger.debug(f"[ORDER RES] {order.get('id')} -> {order}")
                 except Exception as e:
@@ -944,7 +918,7 @@ class Trader:
                     "timestamp": order.get('timestamp', 0),
                     "order_id": order.get('id') # Ensure order_id is saved
                 }
-                self._save_positions()
+                await self._update_db_position(pos_key)
                 # Create SL/TP reduce-only orders for the freshly opened position
                 # SKIP if already attached (Bybit V5)
                 if not tpsl_attached:
@@ -972,7 +946,7 @@ class Trader:
                 order = None
                 try:
                     order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, order_type, side, qty, price, params=params
+                        self.exchange.create_order, symbol, order_type, side.lower(), qty, price, params=params
                     )
                 except Exception as e:
                     # TIMEOUT RECOVERY for Limit Order
@@ -1055,7 +1029,7 @@ class Trader:
                     "snapshot": snapshot,
                     "timestamp": order.get('timestamp', 0)
                 }
-                self._save_positions()
+                await self._update_db_position(pos_key)
                 print(f"📋 [{self.exchange_name}] Limit order placed: {order_id} | {side} {symbol} @ {price:.3f} (waiting for fill...)")
                 self.logger.info(f"Limit order {order_id} placed, monitoring for fill")
 
@@ -1165,7 +1139,7 @@ class Trader:
                     # Choose pending details if available, else read from active_positions
                     pending = self.pending_orders.get(pos_key) or self.active_positions.get(pos_key, {})
                     fill_price = order_status.get('average') or pending.get('price') or pending.get('entry_price')
-                    # Move to filled
+                    # Move to filled — preserve order_id so exchange_order_id is persisted to DB
                     self.active_positions[pos_key] = {
                         "symbol": pending.get('symbol', symbol),
                         "side": pending.get('side', 'BUY'),
@@ -1180,10 +1154,22 @@ class Trader:
                         "signals_used": pending.get('signals_used', []),
                         "entry_confidence": pending.get('entry_confidence', 0.5),
                         "snapshot": pending.get('snapshot'),
-                        "timestamp": order_status.get('timestamp', pending.get('timestamp'))
+                        "timestamp": order_status.get('timestamp', pending.get('timestamp')),
+                        "order_id": order_status.get('id', local_order_id),  # BUG-3: preserve exchange_order_id
+                        "sl_id": pending.get('sl_order_id'),
+                        "tp_id": pending.get('tp_order_id'),
                     }
                     # Persist and cleanup
-                    self._save_positions()
+                    await self._update_db_position(pos_key)
+                    
+                    # Notify fill
+                    _, tg_msg = format_position_filled(
+                        symbol, pending.get('timeframe', '1h'), pending.get('side', 'BUY'), fill_price, pending.get('qty', 0),
+                        fill_price * pending.get('qty', 0), pending.get('sl'), pending.get('tp'),
+                        pending.get('entry_confidence'), pending.get('leverage'), self.dry_run,
+                        exchange_name=self.exchange_name, profile_label=self.profile_name
+                    )
+                    await send_telegram_message(tg_msg)
                     # After marking filled, ensure SL/TP conditional orders are placed
                     try:
                         await self._create_sl_tp_orders_for_position(pos_key)
@@ -1294,6 +1280,11 @@ class Trader:
                         if "order not found" not in str(e).lower() and "already" not in str(e).lower():
                             self.logger.warning(f"Failed to cancel TP {tp_order_id}: {e}")
             
+            # BUG-2: Cache position data BEFORE deleting from memory
+            # pending may be None for DRY RUN (stored in active_positions only)
+            active_pos_snapshot = self.active_positions.get(pos_key)
+            pos_info = pending or active_pos_snapshot  # use whichever is available
+
             # Clean up from both sources to prevent loops
             if pos_key in self.pending_orders:
                 del self.pending_orders[pos_key]
@@ -1303,11 +1294,22 @@ class Trader:
                 pos = self.active_positions[pos_key]
                 if pos.get('status') == 'pending':
                     self.logger.info(f"Clearing pending position state for {pos_key}")
-                    del self.active_positions[pos_key]
-            
-            self._save_positions()
+                # Clear from memory
+                del self.active_positions[pos_key]
+                await self._clear_db_position(pos_key, exit_reason=reason)
             
             print(f"❌ [{self.exchange_name}] Cancelled pending order: {symbol} | Reason: {reason}")
+            
+            # Notify cancellation — use pos_info (cached before deletion)
+            _, tg_msg = format_order_cancelled(
+                symbol,
+                pos_info.get('timeframe', '1h') if pos_info else '?',
+                pos_info.get('side', 'BUY') if pos_info else '?',
+                pos_info.get('price', pos_info.get('entry_price', 0)) if pos_info else 0,
+                reason, self.dry_run, exchange_name=self.exchange_name
+            )
+            await send_telegram_message(tg_msg)
+            
             self.logger.info(f"Cancelled limit order {order_id}: {reason}")
             return True
             
@@ -1386,19 +1388,19 @@ class Trader:
         # 1. Fetch fees from exchange if not already stored during sync
         fees = pos.get('_exit_fees', 0)
         
-        # 2. Record to signal_performance.json
-        from signal_tracker import tracker as signal_tracker
+        # 2. Record to database via signal_tracker
         try:
-            await signal_tracker.record_trade(
-                symbol=symbol,
-                timeframe=pos.get('timeframe', '1h'),
-                side=side,
-                signals_used=pos.get('signals_used', []),
-                result='WIN' if pnl > 0 else 'LOSS',
-                pnl_pct=pnl_pct / 100,  # record_trade expects decimal
-                btc_change=0, # Optional or fetch
-                snapshot=pos.get('snapshot')
-            )
+            if self.signal_tracker:
+                await self.signal_tracker.record_trade(
+                    symbol=symbol,
+                    timeframe=pos.get('timeframe', '1h'),
+                    side=side,
+                    signals_used=pos.get('signals_used', []),
+                    result='WIN' if pnl > 0 else 'LOSS',
+                    pnl_pct=pnl_pct / 100,  # record_trade expects decimal
+                    btc_change=0, # Optional or fetch
+                    snapshot=pos.get('snapshot')
+                )
 
             # Notify Telegram if closed outside bot (Sync)
             if exit_reason and "Sync" in exit_reason:
@@ -1415,9 +1417,10 @@ class Trader:
                     pnl_pct=pnl_pct,
                     reason="EXCHANGE SYNC (CLOSED)",
                     entry_time=pos.get('timestamp'),
+                    profile_label=self.profile_name
                 )
                 print(terminal_msg)
-                await send_telegram_message(telegram_msg, exchange_name=self.exchange_name)
+                await send_telegram_message(telegram_msg)
             
             self.logger.info(f"Trade logged: {symbol} {side} | PnL: {pnl:.2f} ({pnl_pct:.2f}%) | Reason: {exit_reason}")
 
@@ -1438,7 +1441,7 @@ class Trader:
             del self.active_positions[key]
             if key in self.pending_orders:
                 del self.pending_orders[key]
-            self._save_positions()
+            # No need to call _save_positions, status is already updated in log_trade or force_close
             self.logger.info(f"Position for {key} removed.")
             return True
         return False
@@ -1495,7 +1498,7 @@ class Trader:
         if success:
             # modify_sl_tp already persists sl; just mark flag and save
             pos['sl_tightened'] = True
-            self._save_positions()
+            await self._update_db_position(pos_key)
             return round(new_sl, 4)
         return None
 
@@ -1613,7 +1616,7 @@ class Trader:
         if changes:
             pos['sl_tightened'] = True
             pos['last_dynamic_update'] = self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
-            self._save_positions()
+            await self._update_db_position(pos_key)
             self.logger.info(f"🔄 [DYNAMIC SL/TP] {symbol}: SL={pos['sl']} TP={pos['tp']}")
             
             # Recreate orders on exchange
@@ -1722,7 +1725,7 @@ class Trader:
             
         if changes:
             pos['profit_locked'] = True
-            self._save_positions()
+            await self._update_db_position(pos_key)
             msg = f"💰 [PROFIT LOCK] {pos_key}: New SL={pos['sl']}, New TP={pos['tp']} (Prog: {progress*100:.1f}%)"
             print(msg)
             self.logger.info(msg)
@@ -1757,7 +1760,7 @@ class Trader:
         if self.dry_run:
             # Dry run: just remove position
             del self.active_positions[pos_key]
-            self._save_positions()
+            await self._clear_db_position(pos_key, exit_reason=reason)
             self.logger.info(f"[DRY RUN] Force closed {pos_key}: {reason}")
             return True
         
@@ -1768,7 +1771,9 @@ class Trader:
             del self.active_positions[pos_key]
             if pos_key in self.pending_orders:
                 del self.pending_orders[pos_key]
-            self._save_positions()
+            
+            # Clear from DB
+            await self._clear_db_position(pos_key, exit_reason=reason)
 
             self.logger.info(f"[FORCE CLOSE] Closed {pos_key}: {reason}")
             return True
@@ -1898,7 +1903,7 @@ class Trader:
                         self.pending_orders[pos_key]['sl_order_id'] = sl_order_id
                     if pos_key in self.active_positions:
                         self.active_positions[pos_key]['sl_order_id'] = sl_order_id
-                        self._save_positions()
+                        await self._update_db_position(pos_key)
                     print(f"[SETUP] SL placed for {symbol} @ {sl_to_place} (id={sl_order_id})")
                 elif sl_to_place:
                     self.logger.error(f"[SL FAILED] No order ID returned for {symbol}")
@@ -1910,7 +1915,7 @@ class Trader:
                         self.pending_orders[pos_key]['tp_order_id'] = tp_order_id
                     if pos_key in self.active_positions:
                         self.active_positions[pos_key]['tp_order_id'] = tp_order_id
-                        self._save_positions()
+                        await self._update_db_position(pos_key)
                     print(f"[SETUP] TP placed for {symbol} @ {tp_to_place} (id={tp_order_id})")
                 elif tp_to_place:
                     self.logger.error(f"[TP FAILED] No order ID returned for {symbol}")
@@ -1996,17 +2001,17 @@ class Trader:
             )
 
             if ids.get('sl_id'):
-                position['sl_order_id'] = ids['sl_id']
+                position['sl_id'] = ids['sl_id']       # key matches _update_db_position
                 results['sl_order'] = {'id': ids['sl_id']}
                 print(f"[AUTO-SL] Placed SL for {pos_key} id={ids['sl_id']} @ {sl}")
             if ids.get('tp_id'):
-                position['tp_order_id'] = ids['tp_id']
+                position['tp_id'] = ids['tp_id']       # key matches _update_db_position
                 results['tp_order'] = {'id': ids['tp_id']}
                 print(f"[AUTO-TP] Placed TP for {pos_key} id={ids['tp_id']} @ {tp}")
 
             # Persist order ids to positions
             self.active_positions[pos_key] = position
-            self._save_positions()
+            await self._update_db_position(pos_key)
             return results
         except Exception as e:
             self.logger.error(f"Failed to create SL/TP for {pos_key}: {e}")
@@ -2226,7 +2231,7 @@ class Trader:
                         "sl_order_id": sl_order_id,
                         "tp_order_id": tp_order_id
                     }
-                    self._save_positions()
+                    await self._update_db_position(pos_key)
                     print(f"[ADOPT] {pos_key} adopted with leverage {actual_leverage}x, auto SL={auto_sl} TP={auto_tp}")
 
         # 2.5 ADOPT ORDERS (Ex -> Local)
@@ -2301,7 +2306,7 @@ class Trader:
                     }
                     self.pending_orders[pos_key] = order_data
                     self.active_positions[pos_key] = order_data
-                    self._save_positions()
+                    await self._update_db_position(pos_key)
                     print(f"📦 [ADOPT] Adopted stray order {o_id} for {sym} as {pos_key}")
                     
                 except Exception as e:
@@ -2343,7 +2348,7 @@ class Trader:
                     pos['timestamp'] = ex_match.get('timestamp') or pos.get('timestamp')
                     pos['missing_cycles'] = 0
                     self.active_positions[pos_key] = pos
-                    self._save_positions()
+                    await self._update_db_position(pos_key)
                     
                     # After marking filled, ensure SL/TP orders are placed (if not already there)
                     try:
@@ -2385,7 +2390,7 @@ class Trader:
                     if 'unverified_since' in pos:
                         del pos['unverified_since']
                     self.active_positions[pos_key] = pos
-                    self._save_positions()
+                    await self._update_db_position(pos_key)
                     status = 'filled'
 
                 # Skip removal if fetch failed!
@@ -2400,7 +2405,7 @@ class Trader:
                             self.logger.info(f"[SYNC WAIT] Position {pos_key} missing from exchange (cycle {missing_cycles}/3). Waiting for history sync...")
                             pos['status'] = 'unverified'
                             self.active_positions[pos_key] = pos
-                            self._save_positions()
+                            await self._update_db_position(pos_key)
                             continue
                             
                         self.logger.info(f"[SYNC] Position {pos_key} missing for {missing_cycles} cycles. Checking trade history...")
@@ -2449,7 +2454,7 @@ class Trader:
                                     self.logger.warning(f"[SYNC] No recent trades found for missing pos {symbol}. Keeping as unverified.")
                                     pos['status'] = 'unverified'
                                     self.active_positions[pos_key] = pos
-                                self._save_positions()
+                                await self._update_db_position(pos_key)
                                 continue
                                 
                         except Exception as e:
@@ -2476,11 +2481,11 @@ class Trader:
                         if is_sl_hit:
                             self.logger.info(f"[{symbol}] Sync detected loss or SL closure. Applying SL Cooldown.")
                             print(f"🛡️ [{self.exchange_name}] [{symbol}] Applying SL Cooldown after external closure.")
-                            self.set_sl_cooldown(symbol)
+                            await self.set_sl_cooldown(symbol)
                         
                         await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Verified Closure)")
                         del self.active_positions[pos_key]
-                        self._save_positions()
+                        await self._update_db_position(pos_key)
                         continue
                     else:
                         self.logger.warning(f"[SYNC] Fetch failed, preserving local position {pos_key} (Assume alive)")
@@ -2504,7 +2509,7 @@ class Trader:
                                 if abs(o_amt - float(qty)) < max(1e-6, 0.01 * float(qty)):
                                     pos['order_id'] = o_id
                                     self.active_positions[pos_key] = pos
-                                    self._save_positions()
+                                    await self._update_db_position(pos_key)
                                     summary['recovered_order_ids'] += 1
                                     break
                         except Exception as e:
@@ -2542,7 +2547,7 @@ class Trader:
                                         self.logger.warning(f"[SYNC] Pending order {order_id} was {status_on_ex.upper()} on exchange. Clearing.")
                                         if pos_key in self.pending_orders: del self.pending_orders[pos_key]
                                         del self.active_positions[pos_key]
-                                        self._save_positions()
+                                        await self._update_db_position(pos_key)
                                         continue
                                 except Exception as e:
                                     # Catch "Order does not exist" (-2013 on Binance, etc.)
@@ -2551,7 +2556,7 @@ class Trader:
                                         self.logger.warning(f"[SYNC] Pending order {order_id} not found on exchange (expired/deleted). Clearing.")
                                         if pos_key in self.pending_orders: del self.pending_orders[pos_key]
                                         del self.active_positions[pos_key]
-                                        self._save_positions()
+                                        await self._update_db_position(pos_key)
                                         continue
                                     self.logger.debug(f"[SYNC] fetch_order check failed for {order_id}: {e}")
 
@@ -2565,7 +2570,7 @@ class Trader:
                                     if 'leverage' in ex_p:
                                         pos['leverage'] = int(ex_p['leverage'])
                                     self.active_positions[pos_key] = pos
-                                    self._save_positions()
+                                    await self._update_db_position(pos_key)
                                 else:
                                     # Order is gone from open, but not in current active_ex_pos.
                                     # Check if it was FILLED and then IMMEDIATELY CLOSED or SL'd
@@ -2625,7 +2630,7 @@ class Trader:
                                                 if is_loss:
                                                     self.logger.info(f"[{symbol}] Sync detected loss for fast pending-to-SL trade. Applying Cooldown.")
                                                     print(f"🛡️ [{self.exchange_name}] [{symbol}] Applying SL Cooldown after fast SL hit.")
-                                                    self.set_sl_cooldown(symbol)
+                                                    await self.set_sl_cooldown(symbol)
                                                 
                                                 await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Fast Fill + SL)")
                                     except Exception as e:
@@ -2638,7 +2643,7 @@ class Trader:
                                     if pos_key in self.pending_orders:
                                         del self.pending_orders[pos_key]
                                     del self.active_positions[pos_key]
-                                    self._save_positions()
+                                    await self._update_db_position(pos_key)
                                     continue
                         except Exception as e:
                             self.logger.warning(f"[SYNC] Failed to verify pending order {order_id}: {e}")
@@ -2732,7 +2737,7 @@ class Trader:
                             pos['sl_order_id'] = found_sl
                             pos['tp_order_id'] = found_tp
                             self.active_positions[pos_key] = pos
-                            self._save_positions()
+                            await self._update_db_position(pos_key)
 
                         # C) AUTO-RECREATE IF TRULY MISSING
                         # Fix: ONLY repair if the position actually exists on the exchange!
@@ -2805,7 +2810,7 @@ class Trader:
                     # Also put in active_positions for persistence
                     self.active_positions[new_pk] = self.pending_orders[new_pk]
                     summary['adopted_orders'] = summary.get('adopted_orders', 0) + 1
-                    self._save_positions()
+                    await self._update_db_position(new_pk)
 
         # 4. GLOBAL ORPHAN REAPER (Conditional Only)
         # This scans ALL account orders and cancels SL/TP that aren't in active_positions
@@ -2914,7 +2919,7 @@ class Trader:
                 pos['tp_order_id'] = None # Clear if definitively gone
         
         if not res['sl_exists'] or not res['tp_exists']:
-            self._save_positions()
+            await self._update_db_position(pos_key)
 
         return res
 
@@ -3106,7 +3111,7 @@ class Trader:
                     
                     if params_updated:
                         self.active_positions[pos_key] = pos
-                        self._save_positions()
+                        await self._update_db_position(pos_key)
 
                 except Exception as e:
                     self.logger.error(f"[REPAIR] Auto-calc SL/TP failed for {pos_key}: {e}")
@@ -3155,7 +3160,7 @@ class Trader:
                                 pos['tp_order_id'] = 'attached'
                                 result['tp_recreated'] = True
                             self.active_positions[pos_key] = pos
-                            self._save_positions()
+                            await self._update_db_position(pos_key)
                 except Exception as e:
                     result['errors'].append(f'bybit_set_tpsl:{e}')
                 return result
@@ -3201,7 +3206,7 @@ class Trader:
                         if ids.get('sl_id'):
                             pos['sl_order_id'] = ids['sl_id']
                             self.active_positions[pos_key] = pos
-                            self._save_positions()
+                            await self._update_db_position(pos_key)
                             result['sl_recreated'] = True
                             self._debug_log('recreated_sl', pos_key, pos['sl_order_id'])
 
@@ -3255,7 +3260,7 @@ class Trader:
                     if ids.get('tp_id'):
                         pos['tp_order_id'] = ids['tp_id']
                         self.active_positions[pos_key] = pos
-                        self._save_positions()
+                        await self._update_db_position(pos_key)
                         result['tp_recreated'] = True
                         self._debug_log('recreated_tp', pos_key, pos['tp_order_id'])
             except Exception as e:
@@ -3264,7 +3269,7 @@ class Trader:
 
             # persist any changes
             self.active_positions[pos_key] = pos
-            self._save_positions()
+            await self._update_db_position(pos_key)
             return result
 
     async def enforce_isolated_on_startup(self, symbols=None):
@@ -3343,7 +3348,7 @@ class Trader:
             if new_tp:
                 position['tp'] = new_tp
             self.active_positions[pos_key] = position
-            self._save_positions()
+            await self._update_db_position(pos_key)
 
             return True
 

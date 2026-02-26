@@ -20,7 +20,8 @@ class TestFastSLSync(unittest.IsolatedAsyncioTestCase):
         self.mock_exchange.milliseconds = MagicMock(return_value=int(time.time() * 1000))
         
         # Initialize Trader
-        self.trader = Trader(self.mock_exchange, dry_run=False)
+        self.mock_db = MagicMock()
+        self.trader = Trader(self.mock_exchange, db=self.mock_db, profile_id=1, dry_run=False)
         self.trader.logger = MagicMock()
         self.trader.exchange_name = 'BINANCE'
         
@@ -28,7 +29,7 @@ class TestFastSLSync(unittest.IsolatedAsyncioTestCase):
         self.trader.log_trade = AsyncMock()
         self.trader._save_positions = MagicMock()
         self.trader._load_positions = MagicMock()
-        self.trader.set_sl_cooldown = MagicMock()
+        self.trader.set_sl_cooldown = AsyncMock()
 
     async def test_fast_sl_recovery(self):
         """Test Case: Pending order is gone from open, but filled and closed in history."""

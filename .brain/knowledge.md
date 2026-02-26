@@ -27,11 +27,12 @@ graph TD
         B --> J
     end
     
-    subgraph "Data Persistence"
-        D <--> K[(OHLCV CSVS)]
-        G <--> L[(positions.json)]
+    subgraph "Data Persistence (SQLite)"
+        D <--> K[(ohlcv_cache table)]
+        G <--> L[(trades table)]
         E <--> M[(strategy_config.json)]
-        G <--> N[(signal_performance.json)]
+        G <--> N[(risk_metrics table)]
+        G <--> O[(ai_training_logs table)]
     end
 
     subgraph "Optimization Loop (Analyzer)"
@@ -66,7 +67,8 @@ When a signal is approved:
 3.  **Monitoring**:
     *   **Market**: Immediate fill, then SL/TP orders are created.
     *   **Limit**: Background task monitors fill status via adapter.
-4.  **TP/SL Management**: For fills, the bot creates "Reduce-Only" orders (or attaches them directly if using Bybit V5).
+    *   **Churn Prevention**: Pending orders have a mandatory `MIN_PENDING_SECS` guard (default 120s) before they can be cancelled to allow exchange latency and liquidity to work. Orders are only cancelled early if a **Strong Reversal** signal (confidence > 0.4) is detected.
+4.  **TP/SL Management**: For fills, the bot creates "Reduce-Only" orders (or attaches them directly if using Bybit V5). The bot tracks these using `sl_id` and `tp_id` keys to ensure database synchronization.
 
 ---
 
@@ -179,6 +181,18 @@ Allows remote interaction with the bot instance.
 *   **Discovery**: Standard `positionIdx: 0` for One-Way mode can still fail on Bybit V5 for some accounts or order types.
 *   **Lesson**: **Progressive Retry Pattern.** If `positionIdx: 0` fails with "Side invalid", force-fetch the mode and then retry. If it still fails and the account is confirmed `MergedSingle`, retry by **omitting** `positionIdx` entirely.
 
+### 12. Database Migration Priority
+*   **Discovery**: Adding indexes or columns to the schema must happen *after* ensuring the database connection is initialized but *before* the application logic attempts to query those new structures.
+*   **Lesson**: Run `PRAGMA incremental_vacuum` and schema migrations as the very first step in `initialize()`.
+
+### 13. Order ID Persistence
+*   **Discovery**: In `_monitor_limit_order_fill`, the `order_id` must be preserved in the `position` dictionary before it is moved to `active_positions`.
+*   **Lesson**: If the `order_id` is lost during transition, the bot loses the ability to reconcile that specific trade with exchange history accurately.
+
+### 14. TP-SL Key Mismatch (The `sl_order_id` vs `sl_id` trap)
+*   **Discovery**: Logic in `execution.py` used `sl_order_id` while the database updater looked for `sl_id`.
+*   **Lesson**: **Standardize Keys Early.** All position-related dicts must use the shortest consistent keys (`sl_id`, `tp_id`) to match the DB mapper's expectations.
+
 
 ---
 
@@ -198,10 +212,11 @@ Every order placed on an exchange is tagged with a unique Client ID for recovery
 - **Dry-Run Prefix**: `dry_` (e.g., `dry_BTCUSDT_BUY_123456789`)
 - **Structure**: `{prefix}{symbol}_{side}_{timestamp_ms}`
 
-### 3. Symbol Normalization
+### 3. Symbol & Database Isolation
 Wait-and-Patience and metadata tracking use a standardized symbol format to avoid discrepancy between Spot and Swap naming:
 - **Internal Key**: `EXCHANGE_BASE_QUOTE_TIMEFRAME` (e.g., `BINANCE_BTC_USDT_1h`)
 - **Exchange API Symbol**: Always normalized via `_normalize_symbol()` to remove extra suffixes (like `:USDT` on Bybit) before logging or state storage.
+- **Database Root**: **No `.db` files allowed in root.** All SQLite databases (`trading_live.db`, `trading_test_v2.db`) must reside in the `/data/` directory.
 
 ---
 

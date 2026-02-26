@@ -55,7 +55,27 @@
 - [x] **Bugfix**: Fixed Binance SHORT position adoption (`reconcile_positions` now uses `abs(qty) > 0`).
 - [x] **Bugfix**: Standardized position extraction in `telegram_bot.py` to match internal state reliably.
 
-### Future Improvements
-- [ ] Add `/optimize` manual trigger via Telegram command
-- [ ] Improve monthly/all-time summary reports
-- [ ] Implement Summary Backtest phase in `run_global_optimization`
+### Iteration 5 — Database & Multi-Profile Integration (Feb 26, 2026)
+- [x] Implement SQLite Schema (`schema.sql`) for profiles and trades
+- [x] Create `DataManager` (Singleton, WAL mode, aiosqlite)
+- [x] Migrate `RiskManager` and `Trader` to DB persistence
+- [x] Data Migration Script (`migrate_json_to_sql.py`) for legacy JSON recovery
+- [x] Refactor `bot.py` for Multi-profile Dependency Injection
+- [x] Implement Process-based `launcher.py` for concurrent execution
+- [x] Fix critical sync bugs and status mapping (`filled` -> `ACTIVE`)
+
+---
+
+## 🏗 Future & In-Progress
+
+### Phase 3: Integration & UX Polish
+- [ ] Add Profile/Exchange labeling to Telegram notifications
+- [ ] Terminal color-coding for multi-profile differentiation
+- [ ] Map adapter-specific status codes to uniform DB states
+- [ ] Neural Brain training automation via DB logs
+
+### Phase 4: Verification & Launch
+- [ ] 24h Dry-run stress test with 5+ concurrent profiles
+- [ ] Final security audit (API key isolation checks)
+- [ ] Full regression testing on signal generation logic
+

@@ -5,48 +5,54 @@ from risk_manager import RiskManager
 class TestRiskManager:
     @pytest.fixture
     def rm(self):
+        from unittest.mock import MagicMock
         return RiskManager(
+            db=MagicMock(),
+            profile_id=1,
             risk_per_trade=0.02, 
             leverage=5, 
             max_drawdown_pct=0.10, 
             daily_loss_limit_pct=0.05
         )
 
-    def test_check_circuit_breaker_daily_loss(self, rm):
+    @pytest.mark.asyncio
+    async def test_check_circuit_breaker_daily_loss(self, rm):
         """Verify that daily loss limit stops trading."""
         rm.starting_balance_day = 1000
         rm._last_reset_date = datetime.now().date()
         
         # Loss of 4% (OK)
-        stop, msg = rm.check_circuit_breaker(960)
+        stop, msg = await rm.check_circuit_breaker(960)
         assert stop is False
         
         # Loss of 6% (Limit hit)
-        stop, msg = rm.check_circuit_breaker(940)
+        stop, msg = await rm.check_circuit_breaker(940)
         assert stop is True
         assert "Daily Loss Limit" in msg
 
-    def test_check_circuit_breaker_max_drawdown(self, rm):
+    @pytest.mark.asyncio
+    async def test_check_circuit_breaker_max_drawdown(self, rm):
         """Verify that max drawdown from peak stops trading."""
         rm.peak_balance = 2000
         
         # Balance 1850 (7.5% drawdown, OK)
-        stop, msg = rm.check_circuit_breaker(1850)
+        stop, msg = await rm.check_circuit_breaker(1850)
         assert stop is False
         
         # Balance 1790 (10.5% drawdown, Limit hit)
-        stop, msg = rm.check_circuit_breaker(1790)
+        stop, msg = await rm.check_circuit_breaker(1790)
         assert stop is True
         assert "Max Drawdown" in msg
 
-    def test_daily_reset_logic(self, rm):
+    @pytest.mark.asyncio
+    async def test_daily_reset_logic(self, rm):
         """Verify that daily trackers reset at midnight."""
         yesterday = datetime.now().date() - timedelta(days=1)
         rm._last_reset_date = yesterday
         rm.starting_balance_day = 5000
         
         # Call now - should reset starting_balance_day to current balance
-        stop, msg = rm.check_circuit_breaker(1000)
+        stop, msg = await rm.check_circuit_breaker(1000)
         assert rm.starting_balance_day == 1000
         assert rm._last_reset_date == datetime.now().date()
 

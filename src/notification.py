@@ -211,7 +211,8 @@ def format_pending_order(
     score: float,
     leverage: int,
     dry_run: bool,
-    exchange_name: Optional[str] = None
+    exchange_name: Optional[str] = None,
+    profile_label: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Format pending limit order notification.
@@ -223,13 +224,14 @@ def format_pending_order(
     dir_label = get_direction_label(side)
     safe_symbol = format_symbol(symbol)
     mode = get_mode_label(dry_run)
-    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
+    
+    ex_tag = f" | {profile_label if profile_label else exchange_name.upper() if exchange_name else ''}"
+    
     terminal = (
         f"⚪ PENDING | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}"
     )
     
-    ex_tag = f" | {exchange_name.upper()}" if exchange_name else ""
     telegram = (
         f"{mode}{ex_tag} | ⚪ PENDING\n"
         f"{safe_symbol} | {timeframe} | {dir_label} x{leverage}\n"
@@ -253,7 +255,8 @@ def format_position_filled(
     score: Optional[float],
     leverage: Optional[int],
     dry_run: bool,
-    exchange_name: Optional[str] = None
+    exchange_name: Optional[str] = None,
+    profile_label: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Format position filled notification.
@@ -266,13 +269,14 @@ def format_position_filled(
     safe_symbol = format_symbol(symbol)
     base_currency = symbol.split('/')[0]
     mode = get_mode_label(dry_run)
-    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
+    
+    ex_tag = f" | {profile_label if profile_label else exchange_name.upper() if exchange_name else ''}"
+    
     terminal = (
-        f"{ex_prefix}⚪ FILLED | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
+        f"⚪ FILLED | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
         f"Size: {format_size(size, symbol)} {base_currency}"
     )
     
-    ex_tag = f" | {exchange_name.upper()}" if exchange_name else ""
     telegram = (
         f"{mode}{ex_tag} | ⚪ FILLED\n"
         f"{safe_symbol} | {timeframe} | {dir_label} ({int(score*100) if score else 0}%)\n"
@@ -296,7 +300,8 @@ def format_position_closed(
     entry_time: Optional[datetime] = None,
     exit_time: Optional[datetime] = None,
     dry_run: bool = False,
-    exchange_name: Optional[str] = None
+    exchange_name: Optional[str] = None,
+    profile_label: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Format position closed notification.
@@ -322,13 +327,12 @@ def format_position_closed(
     else:
         reason_label = reason.upper()
     
-    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     terminal = (
-        f"{ex_prefix}{status_emoji} [{symbol} {timeframe}] {reason_label} @ {format_price(exit_price)} | "
+        f"{status_emoji} [{symbol} {timeframe}] {reason_label} @ {format_price(exit_price)} | "
         f"PnL: {format_pnl(pnl, pnl_pct)}"
     )
     
-    ex_tag = f" | {exchange_name.upper()}" if exchange_name else ""
+    ex_tag = f" | {profile_label if profile_label else exchange_name.upper() if exchange_name else ''}"
     telegram_parts = [
         f"{mode}{ex_tag} | {status_emoji} {reason_label}",
         f"{safe_symbol} | {timeframe} | {dir_label}",

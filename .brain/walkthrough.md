@@ -9,13 +9,13 @@ Quick map to navigate and debug the project.
 | **Data & Candles** | `data_manager.py` | `update_data`, `fetch_ohlcv_with_retry` | Data stale, rate limit, CSV issues |
 | **Signals & Entry** | `bot.py`, `strategy.py` | `run_step`, `get_signal` | Indicator/weight/threshold issues |
 | **Order Execution** | `execution.py`| `place_order`, `cancel_order` | API errors, order not placed |
-| **Position State** | `execution.py`| `active_positions`, `_save_positions` | `positions.json` corruption |
+| **Position State** | `execution.py`| `active_positions`, `_update_db_position` | DB sync issues, slot ID (`pos_key`) mapping |
 | **SL/TP** | `execution.py`, `risk_manager.py` | `tighten_sl`, `recreate_missing_sl_tp` | SL not updating, wrong prices |
-| **Exchange Sync** | `execution.py`| `reconcile_positions`, adopt logic | Ghost orders, missing positions |
+| **Exchange Sync** | `execution.py`| `sync_from_db`, `reconcile_positions` | Restart recovery, ID synchronization |
 | **Exchange APIs** | `adapters/*.py` | `BybitAdapter`, `BinanceAdapter` | Bybit/Binance API quirks |
-| **Notifications** | `telegram_bot.py`, `notification.py` | `get_status_message`, formatters | Telegram crash, wrong display |
+| **Notifications** | `execution.py`, `notification.py` | `send_telegram_message` | Entry/Fill/Exit notifications |
 | **Brain Training** | `signal_tracker.py`, `neural_brain.py` | `record_trade`, `predict_win_rate` | Missing training data, MLP logic |
-| **Data Store** | `signal_performance.json` | — | PnL history, brain snapshot data |
+| **Data Store** | `trading_bot.db` (SQLite) | — | SL/TP order IDs, Trade history, pos_key tracking |
 
 ---
 
@@ -24,6 +24,7 @@ Quick map to navigate and debug the project.
 | Directory / File | Role | Key Features |
 | :--- | :--- | :--- |
 | **`/src`** | **Core Logic** | Main source code for the bot. |
+| ├── `database.py` | Data Persistence | **Core**. SQLite/aiosqlite bridge. Singleton DataManager. |
 | ├── `bot.py` | Heartbeat Loop | Manages main loop, Circuit Breaker, and coordinator. |
 | ├── `execution.py`| Execution Engine | **Critical**. Handles entry/exit, Dynamic SL/TP, and Reconcile. |
 | ├── `strategy.py` | Weighted Scoring | Calculates signals from indicators and optimized weights. |
@@ -33,6 +34,7 @@ Quick map to navigate and debug the project.
 | ├── `feature_engineering.py` | Indicators | Calculates 40+ TA indicators (RSI, MACD, ATR, etc.). |
 | ├── `analyzer.py` | Strategy Optimizer | Grid Search for weight/SL/TP optimization (Layer 1-3). |
 | ├── `backtester.py`| Simulation Engine | High-fidelity backtest with fees and slippage. |
+| ├── `schema.sql` | DB Schema | SQLite table definitions for profiles, trades, and logs. |
 | ├── `adapters/` | Exchange Layer | `binance_adapter.py` and `bybit_adapter.py` for API quirks. |
 | **`/scripts`** | **Maintenance** | Support tools (`check_orphans`, `diagnose`, `download_data`). |
 | **`/data`** | **Database** | Standardized OHLCV CSV files in root directory. |
@@ -40,6 +42,14 @@ Quick map to navigate and debug the project.
 ---
 
 ## �🚀 Major Updates
+
+### Iteration 5 — Database & Multi-Profile Foundation (Feb 26, 2026)
+
+**Transitioned to enterprise-grade data management:**
+- **SQLite Engine**: Replaced legacy `.json` files with a robust SQLite database (`trading_bot.db`). Features WAL mode for concurrency and strict schema enforcement.
+- **Multi-Profile Architecture**: The bot now loads multiple trading profiles (different accounts/exchanges) from the database and runs them concurrently in a single loop using Dependency Injection.
+- **Concurrent Launcher**: New `launcher.py` manages the Trading Engine and Telegram interface as supervised sub-processes, ensuring better stability and resource management.
+- **Improved Sync Logic**: Position recovery now queries the database first, then reconciles with the exchange, eliminating "zombie" positions and state drift.
 
 ### Iteration 4 — Core Sync & Adoption Bug Fixes (Feb 22, 2026)
 
@@ -83,11 +93,12 @@ Quick map to navigate and debug the project.
 
 ```
 Exchange (CCXT) 
-    → Adapter (BinanceAdapter / BybitAdapter)  ← inject params, retry logic
-        → Trader (execution.py)                 ← business logic, position state
-            → TradingBot (bot.py)               ← signal → order lifecycle
-                → SignalTracker                  ← record trade + brain training
-                    → signal_performance.json    ← Single Source of Truth
+    ↔ Adapter (BinanceAdapter / BybitAdapter)  ← inject params, retry logic
+        ↔ Trader (execution.py)                 ← business logic, memory state
+            ↔ DataManager (database.py)         ↔ SQLite (trading_bot.db)
+                ↔ TradingBot (bot.py)           ← signal → order lifecycle
+                    ↔ SignalTracker              ← record performance
+                        ↔ AI logs table          ← MLP Brain preparation
 ```
 
 ---

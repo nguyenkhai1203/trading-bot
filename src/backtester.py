@@ -11,7 +11,8 @@ from feature_engineering import FeatureEngineer
 from strategy import WeightedScoringStrategy
 from data_fetcher import DataFetcher
 import asyncio
-from risk_manager import RiskManager # Need this for sizing logic if not already used heavily
+from risk_manager import RiskManager
+from unittest.mock import MagicMock, AsyncMock
 
 class Backtester:
     def __init__(self, symbol, timeframe, exchange='BINANCE', initial_balance=10000, commission=TRADING_COMMISSION, slippage=SLIPPAGE_PCT):
@@ -27,9 +28,14 @@ class Backtester:
         self.equity_curve = []
         
         self.feature_engineer = FeatureEngineer()
+        # Mock DataManager for backtest persistence (isolation)
+        mock_db = MagicMock()
+        mock_db.get_risk_metric = AsyncMock(return_value=None)
+        mock_db.set_risk_metric = AsyncMock(return_value=None)
+        
         self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe, exchange=exchange)
         # Mock Risk Manager for backtest sizing logic
-        self.risk_manager = RiskManager(risk_per_trade=RISK_PER_TRADE)
+        self.risk_manager = RiskManager(db=mock_db, profile_id=0, risk_per_trade=RISK_PER_TRADE)
 
         # Data dir: absolute path to src/data where CSVs are stored
         self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
@@ -102,7 +108,7 @@ class Backtester:
             # --- Check Entry Signals ---
             # Only enter if no position (simplification)
             if not self.position:
-                signal_data = self.strategy.get_signal(row)
+                signal_data = self.strategy.get_signal(row, tracker=None) # No adaptive in basic backtest
                 side = signal_data['side']
                 conf = signal_data['confidence']
                 

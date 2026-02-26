@@ -7,3 +7,5 @@ requests
 aiohttp
 pytest
 pytest-asyncio
+aiosqlite
+colorama

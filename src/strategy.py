@@ -6,7 +6,6 @@ import os
 import time
 
 from neural_brain import NeuralBrain
-from signal_tracker import tracker
 
 
 class Strategy:
@@ -50,6 +49,7 @@ class WeightedScoringStrategy(Strategy):
         self.logger = logging.getLogger(__name__)
         self.config_mtime = 0  # Track config file modification time
         self.config_version = 0  # Version number for positions to reference
+        self.config_data = {}  # Initialize early to prevent AttributeError in analyzer
         self.weights = self.load_weights(symbol, timeframe, exchange)
         
         # RL BRAIN (Input Size = 17 Normalized Features v4.0)
@@ -87,10 +87,10 @@ class WeightedScoringStrategy(Strategy):
                 data = json.load(f)
         except (PermissionError, IOError, json.JSONDecodeError) as e:
             self.logger.warning(f"Could not read strategy_config.json: {e}. Keeping existing weights.")
-            if hasattr(self, 'config_data'):
-                return self.config_data.get('weights', self.get_default_weights())
-            else:
-                return self.get_default_weights()
+            # Ensure config_data has basic structure if it was empty/failed
+            if not self.config_data:
+                self.config_data = {}
+            return self.config_data.get('weights', self.get_default_weights())
         
         # Track file modification time and increment version on reload
         import os.path as osp
@@ -245,7 +245,7 @@ class WeightedScoringStrategy(Strategy):
             "breakout_below_support":1.1,   # signal_breakout_below_support
         }
 
-    def get_signal(self, row, use_adaptive=True, use_brain=True):
+    def get_signal(self, row, tracker=None, use_adaptive=True, use_brain=True):
         """
         Calculates LONG/SHORT score based on DYNAMIC signals from config.
         Checks if 'signal_{key}' exists in row and is True.
@@ -267,11 +267,11 @@ class WeightedScoringStrategy(Strategy):
         # Get base weights, optionally adjusted by adaptive learning
         w = self.weights.copy()
         
-        if use_adaptive:
+        if use_adaptive and tracker:
             try:
                 w = tracker.adjust_weights(w)
             except Exception:
-                pass  # Fallback to base weights if tracker unavailable
+                pass  # Fallback to base weights if tracker error
 
         # Iterate through all weights in config
         for signal_name, weight in w.items():

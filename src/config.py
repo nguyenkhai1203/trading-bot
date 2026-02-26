@@ -75,7 +75,7 @@ AUTO_CREATE_SL_TP = True
 
 # Patience Entry Settings
 USE_LIMIT_ORDERS = True  # Use limit orders for better entry price
-PATIENCE_ENTRY_PCT = 0.015  # 1.5% better entry price target
+PATIENCE_ENTRY_PCT = 0.01   # 1.0% better entry price target (reduced from 1.5% to fill faster)
 GLOBAL_MAX_COST_PER_TRADE = 5.0 # Absolute max USDT margin per position
 LIMIT_ORDER_TIMEOUT = 300  # 5 minutes timeout for limit orders (seconds)
 REQUIRE_TECHNICAL_CONFIRMATION = False  # Require Fibo/S/R alignment before entry (disabled for now)

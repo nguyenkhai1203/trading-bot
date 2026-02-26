@@ -16,7 +16,8 @@ async def test_urgent_protection_tp_passed_buy():
     mock_ex.fetch_ticker = AsyncMock(return_value={'last': 105})
     mock_ex.milliseconds = MagicMock(return_value=1000)
     
-    trader = Trader(mock_ex, dry_run=False)
+    mock_db = MagicMock()
+    trader = Trader(mock_ex, db=mock_db, profile_id=1, dry_run=False)
     pos_key = "BINANCE_BTC/USDT_1h"
     trader.active_positions[pos_key] = {
         'symbol': 'BTC/USDT',
@@ -49,7 +50,8 @@ async def test_urgent_protection_sl_passed_buy():
     mock_ex.fetch_ticker = AsyncMock(return_value={'last': 90})
     mock_ex.milliseconds = MagicMock(return_value=1000)
     
-    trader = Trader(mock_ex, dry_run=False)
+    mock_db = MagicMock()
+    trader = Trader(mock_ex, db=mock_db, profile_id=1, dry_run=False)
     pos_key = "BINANCE_BTC/USDT_1h"
     trader.active_positions[pos_key] = {
         'symbol': 'BTC/USDT',
@@ -81,7 +83,8 @@ async def test_urgent_protection_tp_passed_sell():
     mock_ex.fetch_ticker = AsyncMock(return_value={'last': 90}) 
     mock_ex.milliseconds = MagicMock(return_value=1000)
     
-    trader = Trader(mock_ex, dry_run=False)
+    mock_db = MagicMock()
+    trader = Trader(mock_ex, db=mock_db, profile_id=1, dry_run=False)
     pos_key = "BINANCE_BTC/USDT_1h"
     trader.active_positions[pos_key] = {
         'symbol': 'BTC/USDT',

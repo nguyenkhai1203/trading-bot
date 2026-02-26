@@ -16,9 +16,10 @@ The system is decoupled into three distinct layers to ensure scalability and mai
     - **Analyzer**: Periodic re-optimization (2x daily) with Parallel Grid Search (8 workers).
     - **Neural Brain**: Lightweight NumPy-based MLP for Veto/Boost confirmed signals.
 3.  **Execution Layer (`Trader`)**: 
-    - **Singleton Architecture**: Unified `Trader` singleton manages all timeframe bots to prevent state corruption.
-    - **Safety Locks**: Symbol-level async mutexes (`asyncio.Lock`) serialize entry processes.
-    - **Authoritative Sync**: Exchange-first reality where `positions.json` is treated as a cache of exchange state.
+    - **Multi-Profile Dependency Injection**: `bot.py` loads all profiles from the database and injects the same `DataManager` instance into each `Trader`.
+    - **Safety Locks**: Symbol-level async mutexes (`asyncio.Lock`) serialize entry processes per profile.
+    - **Authoritative Sync**: Database-first reality where `pos_key` is the primary identifier for restoring state. The system reconciles DB status with the exchange on every restart.
+    - **Prefixing**: `pos_key` follows the format `P{ID}_{EXCHANGE}_{SYMBOL}_{TF}` where `P{ID}` links the position to a specific user profile in the database.
 
 ---
 
@@ -67,14 +68,14 @@ The system employs a dual-logic approach to manage active positions based on bot
 Philosophy: **The Exchange is the Source of Truth.**
 
 ### Deep Sync Loop
-- **Authoritative Reality**: Telegram `/status` fetches live data from exchanges.
-- **Airtight Phantom Win Protection (NEW)**: 
-    - When a position is missing from the exchange but the bot didn't log a close, it **force-verifies** by calling `fetch_my_trades` (3x retries).
-    - If no closing trade is found, the position enters a **'waiting_sync'** or **'unverified'** state.
-    - It will NEVER log a 'WIN' based on current market price if the position is MIA.
-- **Ghost Removal**: Proactively purges local positions if exchange data shows no contracts.
-- **Order Adoption**: Scans for stray entry orders on the exchange and adopts them using standardized `EXCHANGE_SYMBOL_TF_adopted` keys.
-- **Wait-and-Patience**: Polling mechanism for limit fills (2s intervals) with automatic timeout cancellation.
+- **Authoritative Reality**: The database is the Single Source of Truth for position metadata (SL/TP orders, target weights).
+- **pos_key Synchronization**: Uses standardized keys (`P{ID}_{EXCHANGE}_{SYMBOL}_{TF}`) to map DB rows to memory.
+- **SL/TP Persistence**: Exchange-assigned IDs for Take-Profit and Stop-Loss orders are stored using `sl_id` and `tp_id` in memory, which map to `sl_order_id` and `tp_order_id` in the database.
+- **Airtight Phantom Win Protection**: 
+    - When a position is missing from the exchange but marked ACTIVE in DB, it force-verifies via `fetch_my_trades`.
+- **Ghost Removal**: Proactively purges local records if exchange data shows no contracts.
+- **Order Adoption**: Standardizes orphaned orders on the exchange using `pos_key` logic.
+- **Wait-and-Patience**: Polling mechanism for limit fills with automatic transition from `OPENED` to `ACTIVE` in DB.
 
 ---
 
@@ -107,3 +108,4 @@ await send_telegram_message(telegram_msg)
   - `Probability < 0.3` -> Veto (Block Entry).
   - `Probability > 0.8` -> Boost (+20% Confidence).
 - **Training**: SGD optimizer running on `signal_performance.json` snapshots.
+- **Data Source**: The Brain only trains on **CLOSED** trades that contain a valid market state snapshot at entry. Pending or currently active trades are never used for training.

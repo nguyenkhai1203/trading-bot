@@ -82,4 +82,51 @@ def get_active_exchanges_map():
         except Exception as e:
             print(f"❌ [Factory] Failed to initialize {name}: {e}")
             
+            
     return adapters
+
+async def create_adapter_from_profile(profile_dict):
+    """
+    Creates and initializes an exchange adapter from a profile dictionary.
+    """
+    name = profile_dict.get('exchange', '').upper()
+    api_key = profile_dict.get('api_key')
+    api_secret = profile_dict.get('api_secret')
+    
+    # Validation logic same as get_exchange_adapter but using profile data
+    valid_key = api_key and 'your_' not in api_key
+    valid_secret = api_secret and 'your_' not in api_secret
+    
+    if name == 'BYBIT':
+        exchange_config = {
+            'enableRateLimit': True,
+        }
+        if valid_key and valid_secret:
+            exchange_config['apiKey'] = api_key
+            exchange_config['secret'] = api_secret
+        
+        client = ccxt.bybit(exchange_config)
+        adapter = BybitAdapter(client)
+        adapter.set_permissions(can_trade=valid_key, can_view_balance=valid_key)
+        return adapter
+        
+    elif name == 'BINANCE':
+        options = {
+            'defaultType': 'future',
+            'adjustForTimeDifference': True,
+            'warnOnFetchOpenOrdersWithoutSymbol': False,
+        }
+        exchange_config = {
+            'options': options,
+            'enableRateLimit': True,
+        }
+        if valid_key and valid_secret:
+            exchange_config['apiKey'] = api_key
+            exchange_config['secret'] = api_secret
+            
+        client = ccxt.binance(exchange_config)
+        adapter = BinanceAdapter(client)
+        adapter.set_permissions(can_trade=valid_key, can_view_balance=valid_key)
+        return adapter
+    
+    return None

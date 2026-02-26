@@ -22,7 +22,8 @@ class TestExecutionBasic:
             }
         })
         
-        trader = Trader(mock_exchange, dry_run=False) # Important: dry_run=False to hit real logic
+        mock_db = MagicMock()
+        trader = Trader(mock_exchange, db=mock_db, profile_id=1, dry_run=False) # Important: dry_run=False to hit real logic
         # Mock telegram to avoid spam
         trader.telegram = AsyncMock()
         
