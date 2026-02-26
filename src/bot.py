@@ -195,7 +195,8 @@ class TradingBot:
                         # Simulation mode exit
                         print(f"🔴 [{self.trader.exchange_name}] [{self.symbol}] {exit_reason} hit internally (Dry Run). Closing...")
                         result = 'WIN' if exit_reason == 'TP' else 'LOSS'
-                        pnl_pct = (current_price - entry_price) / entry_price
+                        # Use ROE for dry run reporting consistency
+                        pnl_pct = (current_price - entry_price) / entry_price * leverage
                         if side in ['SELL', 'SHORT']: pnl_pct = -pnl_pct
                         
                         signals_used = existing_pos.get('signals_used', [])
@@ -448,9 +449,9 @@ async def send_periodic_status_report(trader, data_manager):
             
             # Calculate PnL
             if side == 'BUY' or side == 'LONG':
-                pnl_pct = ((current_price - entry) / entry) * 100 if entry > 0 else 0
+                pnl_pct = ((current_price - entry) / entry) * 100 * leverage if entry > 0 else 0
             else:
-                pnl_pct = ((entry - current_price) / entry) * 100 if entry > 0 else 0
+                pnl_pct = ((entry - current_price) / entry) * 100 * leverage if entry > 0 else 0
             
             pnl_usd = (pnl_pct / 100) * qty * entry
             total_pnl_usd += pnl_usd

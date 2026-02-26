@@ -173,8 +173,10 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                         None, 
                         {'category': 'linear'}
                     )
-                    mode = str(res.get('mode', '')).lower()
-                    if mode == 'hedged' or res.get('hedged') is True:
+                    raw_mode = res.get('mode', '')
+                    mode_str = str(raw_mode).lower()
+                    # Bybit V5: 0=MergedSingle, 3=BothSide. CCXT might return 'hedged' or 'one_way'
+                    if 'hedge' in mode_str or 'both' in mode_str or raw_mode == 3 or res.get('hedged') is True:
                         return 'BothSide'
                     return 'MergedSingle'
                 except Exception as e1:
@@ -231,9 +233,9 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                 else:
                     extra_params['positionIdx'] = 1 if s == 'SELL' else 2
             else:
-                # Omit positionIdx for MergedSingle (One-Way) to avoid 10001 errors on some V5 accounts
-                # Bybit defaults to correct behavior in One-Way when idx is not specified.
-                pass
+                # Explicitly set positionIdx: 0 for MergedSingle (One-Way)
+                # Some Bybit V5 accounts require this to avoid 10001 Side invalid errors
+                extra_params['positionIdx'] = 0
 
             # SL/TP Parameter Enrichment
             if 'stopLoss' in params or 'takeProfit' in params:
@@ -402,6 +404,11 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         extra_params.update(params)
         
         try:
+            # For MergedSingle (One-Way), explicitly set positionIdx: 0 to avoid 10001 errors on some endpoints
+            mode = await self._fetch_and_cache_position_mode()
+            if mode == 'MergedSingle' and 'positionIdx' not in extra_params:
+                extra_params['positionIdx'] = 0
+                
             return await self._execute_with_timestamp_retry(
                 self.exchange.fetch_order,
                 order_id,

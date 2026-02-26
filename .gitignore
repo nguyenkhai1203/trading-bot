@@ -39,7 +39,9 @@ Thumbs.db
 
 
 src/positions.json
+src/positions_test.json
 src/signal_performance.json
+src/signal_performance_test.json
 test/__pycache__/
 */__pycache__/
 */__pycache__/*

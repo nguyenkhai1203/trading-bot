@@ -164,13 +164,12 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
 
     async def cancel_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
         """Cancel an order (handles both Standard and Algo orders with automatic fallback)."""
-        is_algo = params.pop('is_algo', False) or params.get('algoType') is not None
         
         # Normalize symbol for Binance API (e.g. BTC/USDT:USDT -> BTCUSDT)
         # Use split(':') and then replace '/' to be safest
         api_symbol = self._get_api_symbol(symbol)
         
-        is_algo = params.get('is_algo', False) or 'stopLoss' in params or 'takeProfit' in params or 'stopPrice' in params
+        is_algo = params.get('is_algo', False) or params.get('algoType') is not None or 'stopLoss' in params or 'takeProfit' in params or 'stopPrice' in params
         
         # Check if it looks like an SL/TP (usually passed as ALGO)
         try:
@@ -188,6 +187,9 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
                 )
             else:
                 self.logger.info(f"[Binance] Cancelling Standard order {order_id} for {api_symbol}")
+                # Map Client ID to origClientOrderId if not numeric
+                if not str(order_id).isdigit() and 'origClientOrderId' not in params:
+                    params['origClientOrderId'] = order_id
                 return await self._execute_with_timestamp_retry(
                     self.exchange.cancel_order,
                     order_id,
@@ -336,6 +338,9 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
     async def fetch_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:
         """Fetch a specific order, checking both standard and algo endpoints."""
         try:
+            # Map Client ID to origClientOrderId if not numeric
+            if not str(order_id).isdigit() and 'origClientOrderId' not in params:
+                params['origClientOrderId'] = order_id
             return await self._execute_with_timestamp_retry(
                 self.exchange.fetch_order,
                 order_id,
@@ -360,6 +365,27 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
                                 return algo
                 except Exception as algo_e:
                     self.logger.warning(f"[Binance] Algo check failed for {order_id}: {algo_e}")
+                    
+                # BUG-02 FIX: Check trade history to see if it was recently filled and dropped from cache
+                try:
+                    self.logger.info(f"[Binance] Checking recent trades for order {order_id}...")
+                    trades = await self._execute_with_timestamp_retry(
+                        self.exchange.fetch_my_trades, symbol, limit=20
+                    )
+                    if isinstance(trades, list):
+                        match = next((t for t in trades if str(t.get('order')) == str(order_id)), None)
+                        if match:
+                            self.logger.info(f"[Binance] Order {order_id} found in trade history! Returning as CLOSED.")
+                            return {
+                                'id': order_id, 
+                                'status': 'closed', 
+                                'filled': match.get('amount', 0), 
+                                'average': match.get('price', 0),
+                                'info': match
+                            }
+                except Exception as trade_e:
+                    self.logger.warning(f"[Binance] Trade history check failed for {order_id}: {trade_e}")
+                    
             raise e
 
     async def place_stop_orders(

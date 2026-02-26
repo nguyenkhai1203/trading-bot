@@ -348,7 +348,7 @@ class Trader:
             
         # 2. Authoritative path: Targeted fetch
         try:
-            o_info = await self._execute_with_timestamp_retry(self.exchange.fetch_order, order_id, symbol)
+            o_info = await self.exchange.fetch_order(order_id, symbol)
             status = o_info.get('status', '').lower()
             if status in ['open', 'untouched', 'new', 'partially_filled']:
                 self._missing_order_counts[order_id] = 0
@@ -361,13 +361,9 @@ class Trader:
             err_str = str(e).lower()
             
             # BYBIT 500-ORDER LIMIT FIX
-            # Error: "can only access an order if it is in last 500 orders"
             if "last 500 orders" in err_str or "acknowledged" in err_str:
                 try:
                     self.logger.info(f"[SYNC] {symbol} order {order_id} not in last 500. Falling back to open order scan.")
-                    
-                    # 1. Try Open Orders (If it's not open, and it's too old for Bybit to fetch recent history, 
-                    # we can usually assume it's closed/filled/cancelled if we don't see it in open orders)
                     open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
                     found_o = next((o for o in open_orders if str(o.get('id')) == str(order_id) or str(o.get('clientOrderId')) == str(order_id)), None)
                     
@@ -375,40 +371,23 @@ class Trader:
                         self._missing_order_counts[order_id] = 0
                         return order_id, found_o
                     else:
-                        # If not in open orders and too old for Bybit's fetchOrder, we "ghost" it
-                        # as it's likely gone. But we do it only if we've seen this error.
                         self.logger.info(f"[SYNC] Order {order_id} not in open orders and too old for Bybit Fetch/History. Clearing.")
                         if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
                         return None, None
                         
                 except Exception as fb_e:
                     self.logger.warning(f"[SYNC] Fallback search failed for {order_id}: {fb_e}")
-            
-            # FALLBACK: If standard fetch failed, try Algo Orders endpoint if it's a conditional order
-            if 'not found' in err_str or 'order does not exist' in err_str:
-                try:
-                    # Check Algo orders directly for this symbol
-                    algo_orders = await self._execute_with_timestamp_retry(self.exchange.fapiPrivateGetOpenAlgoOrders, {'symbol': self._normalize_symbol(symbol)})
-                    found_algo = next((o for o in algo_orders if str(o.get('id')) == str(order_id)), None)
-                    if found_algo:
-                        self._missing_order_counts[order_id] = 0
-                        return order_id, found_algo
-                except Exception: pass # If algo check fails, proceed to grace period
 
-                # 3. Grace Period path: Handle exchange indexing lag
-                count = self._missing_order_counts.get(order_id, 0) + 1
-                self._missing_order_counts[order_id] = count
-                if count < 3:
-                     self.logger.warning(f"[SYNC] {symbol} order {order_id} NOT FOUND (Cycle {count}/3). Keeping in Grace Period...")
-                     return order_id, None # Assume ALIVE during grace period (No data)
-                else:
-                     self.logger.warning(f"[SYNC] {symbol} order {order_id} NOT FOUND after 3 cycles. Wiping ID.")
-                     if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
-                     return None, None
-            else:
-                # Network error or other API issue: Keep for safety
-                self.logger.warning(f"[SYNC] Transient error verifying {order_id} for {symbol}: {e}")
-                return order_id, None 
+            # BUG-01 FIX: Definite missing = đã qua hết fallback của adapter
+            if 'not found' in err_str or 'order does not exist' in err_str or '2013' in err_str:
+                # Immediate wipe, không cần grace period
+                self.logger.warning(f"[SYNC] {symbol}/{order_id}: Definite missing. Wiping ID.")
+                if order_id in self._missing_order_counts: del self._missing_order_counts[order_id]
+                return None, None
+
+            # Transient error (network, rate limit, etc): keep alive
+            self.logger.warning(f"[SYNC] Transient error verifying {order_id} for {symbol}: {e}")
+            return order_id, None 
 
     def _normalize_symbol(self, symbol):
         """Standardize symbol format for reliable comparison (ARBUSDT style)."""
@@ -875,32 +854,15 @@ class Trader:
                 
                 order = None
                 try:
-                    # ---------------------------------------------------------
-                    # [DEBUG] LOG REQUEST FOR USER
-                    # ---------------------------------------------------------
-                    print(f"\n🚀 [API REQUEST] create_order")
-                    print(f"   Symbol: {symbol}")
-                    print(f"   Type:   {order_type}")
-                    print(f"   Side:   {side}")
-                    print(f"   Qty:    {qty}")
-                    print(f"   Price:  {price}")
-                    print(f"   Params: {params}  <-- Check 'category' here")
-                    # ---------------------------------------------------------
+                    self.logger.debug(f"[ORDER REQ] create_order {symbol} {order_type} {side} {qty} {price} {params}")
 
                     order = await self._execute_with_timestamp_retry(
                         self.exchange.create_order, symbol, order_type, side, qty, price, params=params
                     )
-
-                    # ---------------------------------------------------------
-                    # [DEBUG] LOG RESPONSE FOR USER
-                    # ---------------------------------------------------------
-                    print(f"✅ [API RESPONSE] Order ID: {order.get('id')}")
-                    print(f"   Full Response: {order}\n")
-                    # ---------------------------------------------------------
+                    self.logger.debug(f"[ORDER RES] {order.get('id')} -> {order}")
                 except Exception as e:
                     # TIMEOUT RECOVERY: If request timed out, check if order was actually placed using client_id
                     self.logger.warning(f"Order creation failed/timed out for {client_id}. Attempting recovery... Error: {e}")
-                    print(f"⚠️ Order request failed/timed out. verifying {client_id}...")
                     
                     # Wait briefly before verifying
                     await asyncio.sleep(1)
@@ -911,6 +873,7 @@ class Trader:
                         err_str = str(e).lower()
                         is_logic_error = any(x in err_str for x in ["10001", "side invalid", "insufficient", "170131", "403", "401"])
                         if is_logic_error:
+                            self.logger.info(f"[{symbol}] Skipping recovery for logic error: {e}")
                             raise e
 
                         found_order = None
@@ -936,7 +899,7 @@ class Trader:
                             raise e # Re-raise original error if not found (failed for real)
                             
                     except Exception as recovery_error:
-                        self.logger.error(f"Recovery failed for {client_id}: {recovery_error}")
+                        self.logger.error(f"[{symbol}] Recovery failed for {client_id}: {recovery_error}")
                         # If insufficient balance, log current balance to help debug
                         if "insufficient balance" in str(e).lower() or "170131" in str(e):
                             try:
@@ -997,7 +960,7 @@ class Trader:
                 
                 # Generate Client Order ID for recovery (Unique prefix per mode)
                 api_symbol = self._normalize_symbol(symbol)
-                prefix = "dry_" if self.dry_run else "bot_"
+                prefix = "dry_" if self.dry_run else "T_"
                 client_id = f"{prefix}{api_symbol}_{side}_{int(time.time()*1000)}"
                 params['newClientOrderId'] = client_id
                 
@@ -1147,8 +1110,26 @@ class Trader:
                         self.exchange.fetch_order, local_order_id, symbol
                     )
                 except Exception as e:
-                    self.logger.error(f"Error fetching order {local_order_id}: {e}")
-                    continue
+                    err_str = str(e).lower()
+                    # Bybit Specific: If order is outside last 500, scan open orders
+                    if "last 500 orders" in err_str or "acknowledged" in err_str:
+                        try:
+                            self.logger.info(f"[{symbol}] Order {local_order_id} outside last 500 orders history. Checking open orders...")
+                            open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
+                            found_o = next((o for o in open_orders if str(o.get('id')) == str(local_order_id) or str(o.get('clientOrderId')) == str(local_order_id)), None)
+                            if found_o:
+                                order_status = found_o
+                            else:
+                                # Not in open orders, and too old for fetchOrder history -> Treat as filled/closed for safety
+                                # or Mark as 'unknown' to avoid infinite loops
+                                self.logger.warning(f"[{symbol}] Order {local_order_id} not found in open orders and too old for Bybit history. Assuming filled or cancelled.")
+                                break
+                        except Exception as fb_e:
+                            self.logger.warning(f"[{symbol}] Fallback check for {local_order_id} failed: {fb_e}")
+                            continue
+                    else:
+                        self.logger.error(f"[{symbol}] Error fetching order {local_order_id}: {e}")
+                        continue
 
                 # Determine filled qty and compare
                 filled_qty = order_status.get('filled', 0) or order_status.get('amount', 0)
@@ -1377,12 +1358,16 @@ class Trader:
             fee_est = (entry_price + exit_price) * qty * 0.0006  # 0.06% taker fee fallback
         pnl = 0
         pnl_pct = 0
+        leverage = int(pos.get('leverage', 1))
+        
         if isinstance(entry_price, (int, float)) and entry_price > 0:
             if side == 'BUY':
                 pnl = (exit_price - entry_price) * qty - fee_est
             else:
                 pnl = (entry_price - exit_price) * qty - fee_est
-            pnl_pct = (pnl / (entry_price * qty)) * 100
+            
+            # Use ROE (leveraged percentage) for reporting
+            pnl_pct = (pnl / (entry_price * qty)) * 100 * leverage
 
         trade_record = {
             "symbol": symbol,
@@ -2538,9 +2523,38 @@ class Trader:
                                 symbol_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
                             
                             # Check both id and orderId
-                            found_in_open = any(str(o.get('id') or o.get('orderId')) == str(order_id) for o in symbol_orders)
+                            found_in_open = False
+                            try:
+                                found_in_open = any(str(o.get('id') or o.get('orderId')) == str(order_id) for o in symbol_orders)
+                            except Exception as e:
+                                self.logger.debug(f"[SYNC] Error scanning open orders for {order_id}: {e}")
                             
                             if not found_in_open:
+                                # Order is not in open orders. Check if it was filled, cancelled, or just missing (expired)
+                                try:
+                                    # Proactive check before we assume it's filled
+                                    # If fetch_order fails with "Order does not exist", it's likely cancelled/expired and too old for some histories
+                                    order_info = await self.exchange.fetch_order(order_id, symbol)
+                                    status_on_ex = str(order_info.get('status', '')).lower()
+                                    if status_on_ex in ['closed', 'filled']:
+                                        found_in_open = False # proceed to fill logic
+                                    elif status_on_ex in ['canceled', 'cancelled', 'expired', 'rejected']:
+                                        self.logger.warning(f"[SYNC] Pending order {order_id} was {status_on_ex.upper()} on exchange. Clearing.")
+                                        if pos_key in self.pending_orders: del self.pending_orders[pos_key]
+                                        del self.active_positions[pos_key]
+                                        self._save_positions()
+                                        continue
+                                except Exception as e:
+                                    # Catch "Order does not exist" (-2013 on Binance, etc.)
+                                    err_str = str(e).lower()
+                                    if "order does not exist" in err_str or "-2013" in err_str or "30001" in err_str:
+                                        self.logger.warning(f"[SYNC] Pending order {order_id} not found on exchange (expired/deleted). Clearing.")
+                                        if pos_key in self.pending_orders: del self.pending_orders[pos_key]
+                                        del self.active_positions[pos_key]
+                                        self._save_positions()
+                                        continue
+                                    self.logger.debug(f"[SYNC] fetch_order check failed for {order_id}: {e}")
+
                                 # Not open check if filled
                                 if fetch_success and symbol in active_ex_pos:
                                     self.logger.info(f"[SYNC] Pending order {order_id} filled. Updating status.")
@@ -2614,7 +2628,6 @@ class Trader:
                                                     self.set_sl_cooldown(symbol)
                                                 
                                                 await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Fast Fill + SL)")
-                                            
                                     except Exception as e:
                                         self.logger.warning(f"[SYNC] Trade history check failed for {pos_key}: {e}")
                                     
@@ -2722,7 +2735,8 @@ class Trader:
                             self._save_positions()
 
                         # C) AUTO-RECREATE IF TRULY MISSING
-                        if auto_fix and (not found_sl or not found_tp):
+                        # Fix: ONLY repair if the position actually exists on the exchange!
+                        if auto_fix and ex_match and (not found_sl or not found_tp):
                             print(f"🛠️ [REPAIR] {pos_key} is missing SL or TP on exchange. Recreating...")
                             
                             # MARK TIMESTAMP BEFORE ACTION to prevent immediate re-entry
