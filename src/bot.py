@@ -97,6 +97,8 @@ class TradingBot:
         self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe, exchange=trader.exchange_name) 
         self.logger = logging.getLogger(f"Bot.{trader.exchange_name}.{symbol}.{timeframe}")
         self.running = True
+        self.last_eval_timestamp = 0 # Prevent log spam for same candle
+        self.last_cd_log_time = 0 # Prevent log spam for cooldowns
 
     async def run_monitoring_cycle(self):
         """Monitors SL/TP, trailing stops, and signal reversals."""
@@ -189,8 +191,12 @@ class TradingBot:
 
         in_cd = await self.trader.is_in_cooldown(sym)
         if in_cd:
-            rem = self.trader.get_cooldown_remaining(sym)
-            print(f"⏸️ [{exchange}] [{sym}/{tf}] COOLDOWN {rem:.0f}m remaining")
+            import time
+            now = time.time()
+            if now - self.last_cd_log_time > 3600: # Log once per hour
+                rem = self.trader.get_cooldown_remaining(sym)
+                print(f"⏸️ [{exchange}] [{sym}/{tf}] COOLDOWN {rem:.0f}m remaining")
+                self.last_cd_log_time = now
             return None
         if not self.running: return None
 
@@ -207,14 +213,23 @@ class TradingBot:
         signal_data = self.strategy.get_signal(df.iloc[-1], tracker=self.signal_tracker)
         side = signal_data.get('side')
         conf = signal_data.get('confidence', 0.0)
+        current_ts_str = str(df.iloc[-1]['timestamp'])
+        should_log = (current_ts_str != self.last_eval_timestamp)
 
         if side and side != 'SKIP' and conf >= config.MIN_CONFIDENCE_TO_TRADE:
             signal_data['last_row'] = df.iloc[-1]
-            print(f"✅ [{exchange}] [{sym}/{tf}] SIGNAL {side} conf={conf:.2f}")
+            if should_log:
+                print(f"✅ [{exchange}] [{sym}/{tf}] SIGNAL {side} conf={conf:.2f}")
+                self.last_eval_timestamp = current_ts_str
             return signal_data
 
-        if side and side != 'SKIP':
+        if side and side != 'SKIP' and should_log:
             print(f"📉 [{exchange}] [{sym}/{tf}] Signal {side} conf={conf:.2f} below min {config.MIN_CONFIDENCE_TO_TRADE}")
+            self.last_eval_timestamp = current_ts_str
+        
+        # Also update for SKIP to avoid re-evaluating same candle's SKIP logic unnecessarily
+        if should_log:
+            self.last_eval_timestamp = current_ts_str
         return None
 
     async def execute_entry(self, signal_data, equity):
@@ -423,6 +438,9 @@ async def main():
                 # Parallel per symbol
                 tasks = [run_profile_symbol(s, sb, trader, balance_tracker, p['id']) for s, sb in symbol_groups.items()]
                 await asyncio.gather(*tasks)
+
+            # Heartbeat print to show bot is alive and moving
+            print(f"📡 [HEARTBEAT] All {sum(len(pg['bots']) for pg in profile_groups)} bot tasks scanned.")
 
             # C. Sleep
             sleep_time = config.HEARTBEAT_INTERVAL if updated else config.FAST_HEARTBEAT_INTERVAL

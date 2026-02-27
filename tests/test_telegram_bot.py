@@ -129,14 +129,14 @@ class TestTelegramBot:
                 "result": "WIN",
                 "pnl_pct": 5.0,
                 "pnl_usdt": 100.0,
-                "exit_time": "2024-01-01T12:00:00"
+                "exit_time": 1704110400000  # 2024-01-01T12:00:00
             },
             {
                 "symbol": "ETH_USDT",
                 "result": "LOSS",
                 "pnl_pct": -2.0,
                 "pnl_usdt": -40.0,
-                "exit_time": "2024-01-02T12:00:00"
+                "exit_time": 1704196800000  # 2024-01-02T12:00:00
             }
         ]
         

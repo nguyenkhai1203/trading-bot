@@ -81,7 +81,7 @@ class TestTradingBotIntegration:
             bot.risk_manager = RiskManager(db=MagicMock(), profile_id=1)
             
             # Mock data manager to return data
-            df = pd.DataFrame({'close': [50000.0], 'high': [50100.0], 'low': [49900.0]})
+            df = pd.DataFrame({'timestamp': [1704067200000], 'close': [50000.0], 'high': [50100.0], 'low': [49900.0]})
             dm.get_data.return_value = df
             dm.get_data_with_features.return_value = df
             
@@ -164,8 +164,8 @@ class TestTradingBotIntegration:
                 'timestamp': stale_ts
             }
             
-            # Mock data
-            df = pd.DataFrame({'close': [50000.0]})
+            # Mock data manager
+            df = pd.DataFrame({'timestamp': [1704067200000], 'close': [50000.0]})
             dm.get_data.return_value = df
             dm.get_data_with_features.return_value = df
             

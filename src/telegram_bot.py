@@ -136,9 +136,15 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                     if p_qty > 0:
                         sym = ep['symbol']
                         ticker = await data_manager.fetch_ticker(sym, exchange=t.exchange_name)
-                        cur = float(ticker['last']) if ticker else float(ep.get('entryPrice') or ep.get('entry_price') or 0)
-                        entry = float(ep.get('entryPrice') or ep.get('entry_price') or ep.get('avgPrice') or 0)
-                        side = ep['side'].upper()
+                        cur = float(ticker['last']) if ticker else float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
+                        entry = float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
+                        raw_side = ep.get('side', '')
+                        if not raw_side:
+                            raw_side = ep.get('info', {}).get('side', '')
+                        if not raw_side:
+                            pos_amt = float(ep.get('info', {}).get('positionAmt', 0))
+                            raw_side = 'LONG' if pos_amt > 0 else 'SHORT' if pos_amt < 0 else ''
+                        side = raw_side.upper()
                         if side == 'LONG': side = 'BUY'
                         elif side == 'SHORT': side = 'SELL'
                         
@@ -177,7 +183,9 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                         })
                         total_pending += 1
             except Exception as e:
+                err_msg = str(e)
                 logging.error(f"Error fetching fresh status for {p['name']}: {e}")
+                exchanges_payload[label]['error'] = err_msg
         else:
             # DRY RUN: Use memory state
             for pos in t.active_positions.values():
@@ -224,8 +232,14 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
     lines = [f"📊 *BOT STATUS (Multi-Profile)* - {now_str}", ""]
     
     for label, data in exchanges_payload.items():
-        if not data['active'] and not data['pending']: continue
+        if not data['active'] and not data['pending'] and not data.get('error'): continue
         lines.append(f"🏦 {label}")
+        
+        if data.get('error'):
+            lines.append(f"❌ *API Error:* `{data['error']}`")
+            lines.append("")
+            continue
+
         if data['active']:
             lines.append(f"🟢 ACTIVE ({len(data['active'])})")
             for p_msg in data['active']:
@@ -239,16 +253,19 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                 lines.append(format_position_v2(**p_msg, is_pending=is_p))
                 lines.append("")
                 
-    return "\n".join(lines) if len(lines) > 2 else "No active positions."
+    if len(lines) <= 2:
+        return "No active positions found."
+        
+    return "\n".join(lines)
 
 async def get_summary_message(period: str) -> str:
     """Generate summary message using SQLite trade history."""
     now = datetime.now()
     if period == 'month':
-        start_date = now.replace(day=1, hour=0, minute=0, second=0).isoformat()
+        start_date_ms = int(now.replace(day=1, hour=0, minute=0, second=0).timestamp() * 1000)
         title = f"📈 *{now.strftime('%B %Y')} Summary*"
     else:
-        start_date = "2000-01-01T00:00:00"
+        start_date_ms = 0
         title = "📈 *ALL TIME Summary*"
         
     try:
@@ -258,7 +275,8 @@ async def get_summary_message(period: str) -> str:
             p_trades = await db.get_trade_history(p['id'], limit=1000)
             # Filter by date manually or update get_trade_history to support date filtering
             for t in p_trades:
-                if t['exit_time'] >= start_date:
+                exit_time = t.get('exit_time')
+                if exit_time and exit_time >= start_date_ms:
                     all_trades.append(t)
                     
         if not all_trades:
@@ -448,6 +466,10 @@ async def post_init(application: Application) -> None:
                     profile_id=p['id'],
                     signal_tracker=None
                 )
+                # 4.1 Sync time for live profiles to prevent status fetch errors
+                if p.get('environment', 'LIVE').upper() == 'LIVE':
+                    print(f"⏱️ Syncing time for {p['name']}...")
+                    asyncio.create_task(adapter.sync_time())
                 print(f"✅ Profile loaded: {p['name']}")
         except Exception as e:
             print(f"❌ Failed to load profile {p['name']}: {e}")

@@ -2264,12 +2264,21 @@ class Trader:
                         self.logger.warning(f"[ADOPT] Could not fetch leverage for {original_sym}, using fallback: {actual_leverage}x | Error: {lev_err}")
                     
                     # Calculate entry price
-                    entry_price = self._safe_float(p.get('entryPrice'), default=0)
-                    raw_side = p['side'].upper()
+                    entry_price = self._safe_float(p.get('entryPrice') or p.get('avgPrice') or p.get('info', {}).get('entryPrice') or p.get('info', {}).get('avgEntryPrice'), default=0)
+                    
+                    raw_side = p.get('side', '')
+                    if not raw_side:
+                        raw_side = p.get('info', {}).get('side', '')
+                    if not raw_side:
+                        pos_amt = self._safe_float(p.get('info', {}).get('positionAmt', 0))
+                        raw_side = 'LONG' if pos_amt > 0 else 'SHORT' if pos_amt < 0 else ''
+                        
+                    raw_side = raw_side.upper()
                     # Normalize side to BUY/SELL
                     if raw_side == 'LONG': side = 'BUY'
                     elif raw_side == 'SHORT': side = 'SELL'
-                    else: side = raw_side
+                    elif raw_side: side = raw_side
+                    else: side = 'BUY' # Fallback to prevent crash, though qty > 0 should guarantee side
                     
                     # Initialize SL/TP placeholders
                     auto_sl = None
@@ -2324,7 +2333,7 @@ class Trader:
                     self.active_positions[pos_key] = {
                         "symbol": unified_sym,
                         "side": side,
-                        "qty": self._safe_float(p.get('contracts'), default=0),
+                        "qty": self._safe_float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('positionAmt') or 0),
                         "entry_price": entry_price,
                         "status": "filled",
                         "timeframe": "sync",

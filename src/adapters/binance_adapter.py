@@ -34,12 +34,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
 
     async def fetch_balance(self) -> Dict:
         """Fetch account balance."""
-        try:
-            return await self.exchange.fetch_balance()
-        except Exception as e:
-            # Using print for consistency with other error messages in this file
-            print(f"⚠️ [BinanceAdapter] Fetch balance failed: {e}")
-            return {}
+        return await self._execute_with_timestamp_retry(self.exchange.fetch_balance)
 
     async def sync_time(self) -> bool:
         """Sync time and load markets."""
@@ -263,7 +258,8 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         payload = {
             'symbol': self._get_api_symbol(symbol),
             'leverage': int(leverage),
-            'recvWindow': 60000
+            'recvWindow': 60000,
+            'timestamp': self.get_synced_timestamp()
         }
         payload.update(params)
         return await self._binance_signed_post(base + path, payload)
@@ -275,7 +271,8 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         payload = {
             'symbol': self._get_api_symbol(symbol),
             'marginType': mode.upper(), # ISOLATED or CROSSED
-            'recvWindow': 60000
+            'recvWindow': 60000,
+            'timestamp': self.get_synced_timestamp()
         }
         # Merge with passed params if any
         payload.update(params)
@@ -288,7 +285,8 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         # orders is list of dicts
         body = {
             'batchOrders': json.dumps(orders),
-            'recvWindow': 60000
+            'recvWindow': 60000,
+            'timestamp': self.get_synced_timestamp()
         }
         
         # Helper for batch post (different content type)
@@ -311,10 +309,11 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             pass
 
         if 'timestamp' not in params:
-            # Let CCXT handle the timestamp internally if using CCXT's fetch/signed methods
-            # Since we are doing a raw requests.post here, we DO need a timestamp.
-            # However, we should use CCXT's milliseconds() which applies the native timeDifference!
-            params['timestamp'] = self.exchange.milliseconds()
+            # Use our synced timestamp logic specifically for raw signed posts
+            params['timestamp'] = self.get_synced_timestamp()
+        
+        if 'recvWindow' not in params:
+            params['recvWindow'] = 60000
             
         def do_request(u, p):
             query = urlencode(p)
