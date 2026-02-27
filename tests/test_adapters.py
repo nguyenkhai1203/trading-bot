@@ -122,14 +122,21 @@ class TestBybitAdapter:
     @pytest.mark.asyncio
     async def test_fetch_positions_filtering(self, adapter, mock_ccxt_bybit):
         """Verify that positions are filtered for linear category."""
-        mock_ccxt_bybit.fetch_positions.return_value = [
-            {'symbol': 'BTC/USDT', 'contracts': 1.0, 'info': {'category': 'spot'}},
-            {'symbol': 'LTC/USDT:USDT', 'contracts': 10.0, 'info': {'category': 'linear'}}
-        ]
+        mock_ccxt_bybit.privateGetV5PositionList.return_value = {
+            'result': {
+                'list': [
+                    {'symbol': 'BTC/USDT', 'size': '0.0'},  # Zero size skipped
+                    {'symbol': 'LTC/USDT:USDT', 'size': '10.0', 'category': 'linear'}
+                ]
+            }
+        }
         
         positions = await adapter.fetch_positions()
         assert len(positions) == 1
-        assert positions[0]['info']['category'] == 'linear'
+        assert positions[0]['contracts'] == 10.0
+        # Check that proper category was enforced
+        args, kwargs = mock_ccxt_bybit.privateGetV5PositionList.call_args
+        assert kwargs['params']['category'] == 'linear'
 
     @pytest.mark.asyncio
     async def test_cancel_order_trigger_fallback(self, adapter, mock_ccxt_bybit):

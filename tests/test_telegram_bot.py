@@ -39,6 +39,7 @@ class TestTelegramBot:
         self.mock_trader.exchange = MagicMock()
         self.mock_trader.exchange.fetch_positions = AsyncMock(return_value=[])
         self.mock_trader.exchange.fetch_open_orders = AsyncMock(return_value=[])
+        self.mock_trader.exchange.fetch_tickers = AsyncMock(return_value={})
         self.mock_trader.exchange_name = 'BINANCE'
         
         telegram_bot.traders = {1: self.mock_trader}
@@ -75,6 +76,9 @@ class TestTelegramBot:
             }
         }
         self.mock_trader.dry_run = False
+        
+        # Mock fetch_tickers locally just for this test
+        self.mock_trader.exchange.fetch_tickers = AsyncMock(return_value={'BTC/USDT': {'last': 50000.0}})
         
         # 2. Mock DB risk metric to prevent errors
         telegram_bot.db.get_risk_metric = AsyncMock(return_value=1000.0)
@@ -128,14 +132,20 @@ class TestTelegramBot:
                 "symbol": "BTC_USDT",
                 "result": "WIN",
                 "pnl_pct": 5.0,
-                "pnl_usdt": 100.0,
+                "pnl": 100.0,
+                "entry_price": 40000.0,
+                "qty": 0.05,
+                "leverage": 10,
                 "exit_time": 1704110400000  # 2024-01-01T12:00:00
             },
             {
                 "symbol": "ETH_USDT",
                 "result": "LOSS",
                 "pnl_pct": -2.0,
-                "pnl_usdt": -40.0,
+                "pnl": -40.0,
+                "entry_price": 2000.0,
+                "qty": 1.0,
+                "leverage": 10,
                 "exit_time": 1704196800000  # 2024-01-02T12:00:00
             }
         ]
@@ -149,7 +159,7 @@ class TestTelegramBot:
         assert "Wins: 1" in msg
         assert "Loss" in msg
         assert "Win Rate: *50.0%*" in msg
-        assert "Net P&L: *+3.00%* ($+60.00)" in msg
+        assert "Net P&L: *+30.00%* ($+60.00)" in msg
 
     @pytest.mark.asyncio
     async def test_get_summary_message_no_history(self):

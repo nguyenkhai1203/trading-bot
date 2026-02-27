@@ -100,6 +100,10 @@ async def create_adapter_from_profile(profile_dict):
     if name == 'BYBIT':
         exchange_config = {
             'enableRateLimit': True,
+            'options': {
+                'defaultType': 'swap',
+                'adjustForTimeDifference': True
+            }
         }
         if valid_key and valid_secret:
             exchange_config['apiKey'] = api_key

@@ -130,13 +130,32 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
         # For DRY_RUN, we still rely on memory as there is no remote exchange state.
         if not t.dry_run:
             try:
-                ex_pos = await t.exchange.fetch_positions()
+                # Add overall timeout to prevent complete bot hang
+                ex_pos = await asyncio.wait_for(t.adapter.fetch_positions(), timeout=10)
+                ex_orders = await asyncio.wait_for(t.adapter.fetch_open_orders(), timeout=10)
+                
+                # Pre-fetch all needed tickers for THIS exchange efficiently
+                all_symbols = set()
+                for ep in ex_pos:
+                    if abs(float(ep.get('contracts') or ep.get('amount') or ep.get('qty') or 0)) > 0:
+                        all_symbols.add(ep['symbol'])
+                for eo in ex_orders:
+                    all_symbols.add(eo['symbol'])
+                    
+                tickers = {}
+                if all_symbols:
+                    try:
+                        tickers = await asyncio.wait_for(t.adapter.fetch_tickers(list(all_symbols)), timeout=10)
+                    except Exception as e:
+                        logging.warning(f"Batch ticker fetch failed for {label}: {e}. Falling back to cached data.")
+                        
                 for ep in ex_pos:
                     p_qty = abs(float(ep.get('contracts') or ep.get('amount') or ep.get('qty') or 0))
                     if p_qty > 0:
                         sym = ep['symbol']
-                        ticker = await data_manager.fetch_ticker(sym, exchange=t.exchange_name)
-                        cur = float(ticker['last']) if ticker else float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
+                        # Use batched tickers instead of single fetch
+                        ticker = tickers.get(sym)
+                        cur = float(ticker['last']) if ticker and ticker.get('last') else float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
                         entry = float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
                         raw_side = ep.get('side', '')
                         if not raw_side:
@@ -164,16 +183,17 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                             'tp': local_match.get('tp', 0), 'sl': local_match.get('sl', 0)
                         })
                         total_active += 1
+                        print(f"[DEBUG {label}] ACTIVE POS added: {sym}")
                         
                 # Also fetch pending orders for full visibility
-                ex_orders = await t.exchange.fetch_open_orders()
                 for eo in ex_orders:
                     # Logic to identify ENTRY orders (not SL/TP)
                     o_type = str(eo.get('type') or '').upper()
                     is_reduce = eo.get('reduceOnly') or eo.get('info', {}).get('reduceOnly') == 'true'
                     if 'STOP' not in o_type and 'TAKE' not in o_type and not is_reduce:
-                        ticker = await data_manager.fetch_ticker(eo['symbol'], exchange=t.exchange_name)
-                        cur = float(ticker['last']) if ticker else 0
+                        sym = eo['symbol']
+                        ticker = tickers.get(sym)
+                        cur = float(ticker['last']) if ticker and ticker.get('last') else 0
                         exchanges_payload[label]['pending'].append({
                             'symbol': eo['symbol'], 'side': eo['side'].upper(), 'leverage': 1, # leverage unknown for order
                             'entry_price': eo.get('price') or eo.get('stopPrice') or 0, 
@@ -283,10 +303,27 @@ async def get_summary_message(period: str) -> str:
             return f"{title}\n_No trades found in this period._"
             
         total = len(all_trades)
-        wins = sum(1 for t in all_trades if t.get('pnl_pct', 0) > 0)
+        wins = 0
+        total_pnl = 0.0
+        total_usd = 0.0
+        
+        for t in all_trades:
+            t_pnl = float(t.get('pnl') or 0)
+            t_entry = float(t.get('entry_price') or 0)
+            t_qty = float(t.get('qty') or 0)
+            t_leverage = float(t.get('leverage') or 1)
+            
+            # PnL percentage based on margin
+            margin = (t_entry * t_qty) / t_leverage if (t_entry and t_qty and t_leverage) else 0
+            t_pnl_pct = (t_pnl / margin * 100) if margin > 0 else 0.0
+            
+            if t_pnl > 0:
+                wins += 1
+                
+            total_usd += t_pnl
+            total_pnl += t_pnl_pct
+
         win_rate = (wins / total * 100) if total > 0 else 0
-        total_pnl = sum(float(t.get('pnl_pct', 0)) for t in all_trades)
-        total_usd = sum(float(t.get('pnl_usdt', 0) or 0) for t in all_trades)
         
         lines = [
             title, "─" * 20,
@@ -460,16 +497,22 @@ async def post_init(application: Application) -> None:
         try:
             adapter = await create_adapter_from_profile(p)
             if adapter:
-                traders[p['id']] = Trader(
+                is_live = str(p.get('environment', 'LIVE')).upper() == 'LIVE'
+                trader = Trader(
                     adapter,
                     db=db,
                     profile_id=p['id'],
-                    signal_tracker=None
+                    profile_name=p['name'],
+                    signal_tracker=None,
+                    dry_run=not is_live
                 )
+                traders[p['id']] = trader
+                await trader.sync_from_db()
+                
                 # 4.1 Sync time for live profiles to prevent status fetch errors
                 if p.get('environment', 'LIVE').upper() == 'LIVE':
                     print(f"⏱️ Syncing time for {p['name']}...")
-                    asyncio.create_task(adapter.sync_time())
+                    await adapter.sync_time()
                 print(f"✅ Profile loaded: {p['name']}")
         except Exception as e:
             print(f"❌ Failed to load profile {p['name']}: {e}")

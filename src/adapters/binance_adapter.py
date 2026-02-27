@@ -40,7 +40,6 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         """Sync time and load markets."""
         try:
             await self.sync_server_time()
-            await self.exchange.load_markets()
             return True
         except Exception as e:
             print(f"⚠️ [BinanceAdapter] Failed to sync time or markets: {e}")

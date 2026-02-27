@@ -1503,8 +1503,12 @@ class Trader:
                     signals_used=pos.get('signals_used', []),
                     result='WIN' if pnl > 0 else 'LOSS',
                     pnl_pct=pnl_pct / 100,  # record_trade expects decimal
+                    pnl_usdt=round(pnl, 3), # NEW
+                    exit_price=exit_price,  # NEW
                     btc_change=0, # Optional or fetch
-                    snapshot=pos.get('snapshot')
+                    snapshot=pos.get('snapshot'),
+                    pos_key=pos_key,
+                    leverage=leverage
                 )
 
             # Notify Telegram for ALL closed positions

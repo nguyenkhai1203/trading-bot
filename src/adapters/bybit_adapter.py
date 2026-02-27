@@ -65,12 +65,11 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         try:
             # BaseExchangeClient.sync_server_time handles the heavy lifting
             await self.sync_server_time()
-            await self.exchange.load_markets()
             # Force detect mode at startup
             await self._fetch_and_cache_position_mode(force=True)
             return True
         except Exception as e:
-            self.logger.error(f"[Bybit] Sync time/markets failed: {e}")
+            print(f"⚠️ [BybitAdapter] Sync time/markets failed: {e}")
             return False
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> List[list]:
@@ -139,18 +138,32 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
 
     async def fetch_positions(self, params: Dict = {}) -> List[Dict]:
         """
-        Fetch active positions.
-        Normalizes Bybit response to standard CCXT structure.
+        Fetch active positions using direct V5 API to bypass CCXT load_markets hanging.
         """
         try:
-            # For Bybit V5, category is crucial. Linear = USDT Perp.
-            merged_params = {'category': 'linear'}
+            merged_params = {'category': 'linear', 'settleCoin': 'USDT'}
             merged_params.update(params)
-            positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions, params=merged_params)
-            # CCXT usually normalizes this well, but we ensure 'contracts' > 0
-            active_positions = [p for p in positions if float(p.get('contracts', 0) or p.get('info', {}).get('size', 0)) > 0]
-            # Double check category if info is available to prevent Spot contamination
-            return [p for p in active_positions if p.get('info', {}).get('category', 'linear') == 'linear']
+            
+            # Use raw implicit API instead of self.exchange.fetch_positions
+            res = await self._execute_with_timestamp_retry(self.exchange.privateGetV5PositionList, params=merged_params)
+            raw_list = res.get('result', {}).get('list', [])
+            
+            active_positions = []
+            for p in raw_list:
+                size = float(p.get('size', 0))
+                if size > 0:
+                    normalized = {
+                        'symbol': p.get('symbol'),
+                        'contracts': size,
+                        'side': p.get('side', '').upper(), # 'BUY' or 'SELL'
+                        'entryPrice': float(p.get('avgPrice', 0)),
+                        'leverage': float(p.get('leverage', 1)),
+                        'unrealizedPnl': float(p.get('unrealisedPnl', 0)),
+                        'info': p
+                    }
+                    active_positions.append(normalized)
+                    
+            return active_positions
         except Exception as e:
             self.logger.error(f"[Bybit] Fetch positions failed: {e}")
             return []
