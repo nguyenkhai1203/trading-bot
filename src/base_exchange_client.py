@@ -147,8 +147,8 @@ class BaseExchangeClient:
 
                         # Silence known "informational" or handled errors to avoid user confusion
                         silence_errors = [
-                            "-4067", "-4046", "-4061", "no change", "side cannot be changed",
-                            "last 500 orders", "acknowledged", "already", "not modified"
+                            "side cannot be changed",
+                            "last 500 orders", "acknowledged", "already", "not modified",
                         ]
                         if not any(s.lower() in error_msg for s in silence_errors):
                             print(f"[API ERROR] Non-timestamp error, not retrying: {str(e)[:100]}")

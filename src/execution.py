@@ -205,10 +205,22 @@ class Trader:
         except Exception as e:
             self.logger.error(f"Failed to sync from DB: {e}")
 
+    async def _cancel_stale_position_in_db(self, pos_key: str, reason: str = "expired"):
+        """Mark a position as CANCELLED in DB when it no longer exists on the exchange.
+        Must be called BEFORE deleting from active_positions so we have the trade_id."""
+        pos = self.active_positions.get(pos_key)
+        trade_id = pos.get('id') if pos else None
+        if trade_id:
+            try:
+                await self.db.update_position_status(trade_id, 'CANCELLED', exit_reason=reason)
+                self.logger.info(f"[DB] Marked {pos_key} (id={trade_id}) as CANCELLED ({reason})")
+            except Exception as e:
+                self.logger.error(f"[DB] Failed to cancel {pos_key} in DB: {e}")
+
     async def _update_db_position(self, pos_key):
         """Persist a single position change to the database."""
         pos = self.active_positions.get(pos_key)
-        if not pos: 
+        if not pos:
             return
 
         # Map internal status to DB status
@@ -221,15 +233,15 @@ class Trader:
 
         try:
             trade_data = {
-                'id': pos.get('id'),             # Pass ID if we already have it
+                'id': pos.get('id'),
                 'profile_id': self.profile_id,
-                'pos_key': pos_key,               # Critical: Slot ID
+                'pos_key': pos_key,
                 'exchange_order_id': pos.get('order_id'),
                 'exchange': self.exchange_name,
-                'symbol': pos['symbol'],
-                'side': pos['side'],
-                'entry_price': pos['entry_price'],
-                'qty': pos['qty'],
+                'symbol': pos.get('symbol'),
+                'side': pos.get('side'),
+                'entry_price': pos.get('entry_price'),  # None for pending/adopted orders
+                'qty': pos.get('qty', 0),
                 'leverage': pos.get('leverage', self.default_leverage),
                 'status': db_status,
                 'sl_price': pos.get('sl'),
@@ -245,10 +257,7 @@ class Trader:
                 }
             }
             trade_id = await self.db.save_position(trade_data)
-            print(f"X_SYNC_X Saved {pos_key} to DB with ID: {trade_id}")
-            # Store back the ID to avoid redundant lookups
             pos['id'] = trade_id
-            print(f"X_SYNC_X Post-save ID in memory: {pos.get('id')}")
         except Exception as e:
             self.logger.error(f"Failed to update DB for {pos_key}: {e}")
 
@@ -1102,6 +1111,20 @@ class Trader:
                             self.logger.warning(f"[{symbol}] Fallback check for {local_order_id} failed: {fb_e}")
                             continue
                     else:
+                        # Check if order simply doesn't exist (expired/cancelled)
+                        is_not_found = (
+                            "-2013" in err_str or "-2011" in err_str or
+                            "order does not exist" in err_str or
+                            "orderdoesnotexist" in err_str or
+                            "ordernotfound" in err_str
+                        )
+                        if is_not_found:
+                            print(f"🗑️ [{self.exchange_name}] [{symbol}] Order {local_order_id} no longer exists (expired/cancelled). Clearing position.")
+                            if pos_key in self.pending_orders: del self.pending_orders[pos_key]
+                            if pos_key in self.active_positions:
+                                await self._cancel_stale_position_in_db(pos_key, reason="order_not_found")
+                                del self.active_positions[pos_key]
+                            break  # Stop monitor loop — position cleaned up
                         self.logger.error(f"[{symbol}] Error fetching order {local_order_id}: {e}")
                         continue
 
@@ -2555,6 +2578,7 @@ class Trader:
                                     if "order does not exist" in err_str or "-2013" in err_str or "30001" in err_str:
                                         self.logger.warning(f"[SYNC] Pending order {order_id} not found on exchange (expired/deleted). Clearing.")
                                         if pos_key in self.pending_orders: del self.pending_orders[pos_key]
+                                        await self._cancel_stale_position_in_db(pos_key, reason="order_not_found_on_exchange")
                                         del self.active_positions[pos_key]
                                         await self._update_db_position(pos_key)
                                         continue
