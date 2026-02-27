@@ -263,8 +263,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         payload = {
             'symbol': self._get_api_symbol(symbol),
             'leverage': int(leverage),
-            'recvWindow': 60000,
-            'timestamp': self.get_synced_timestamp()
+            'recvWindow': 60000
         }
         payload.update(params)
         return await self._binance_signed_post(base + path, payload)
@@ -276,8 +275,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         payload = {
             'symbol': self._get_api_symbol(symbol),
             'marginType': mode.upper(), # ISOLATED or CROSSED
-            'recvWindow': 60000,
-            'timestamp': self.get_synced_timestamp()
+            'recvWindow': 60000
         }
         # Merge with passed params if any
         payload.update(params)
@@ -290,8 +288,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         # orders is list of dicts
         body = {
             'batchOrders': json.dumps(orders),
-            'recvWindow': 60000,
-            'timestamp': self.get_synced_timestamp()
+            'recvWindow': 60000
         }
         
         # Helper for batch post (different content type)
@@ -314,7 +311,10 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             pass
 
         if 'timestamp' not in params:
-            params['timestamp'] = self.get_synced_timestamp()
+            # Let CCXT handle the timestamp internally if using CCXT's fetch/signed methods
+            # Since we are doing a raw requests.post here, we DO need a timestamp.
+            # However, we should use CCXT's milliseconds() which applies the native timeDifference!
+            params['timestamp'] = self.exchange.milliseconds()
             
         def do_request(u, p):
             query = urlencode(p)
@@ -357,41 +357,55 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         except Exception as e:
             err_str = str(e).lower()
             if "not found" in err_str or "does not exist" in err_str or "2013" in err_str or "orderid" in err_str:
-                self.logger.info(f"[Binance] Order {order_id} not found in standard queue. Checking Algo orders...")
-                try:
-                    algo_params = {'symbol': self._get_api_symbol(symbol)} if symbol else {}
-                    open_algos = await self._execute_with_timestamp_retry(
-                        self.exchange.fapiPrivateGetOpenAlgoOrders, algo_params
-                    )
-                    if isinstance(open_algos, list):
-                        for algo in open_algos:
-                            if str(algo.get('algoId')) == str(order_id) or str(algo.get('clientOrderId')) == str(order_id):
-                                algo['is_algo'] = True
-                                algo['id'] = str(algo.get('algoId', order_id))
-                                algo['status'] = self.normalize_status(algo.get('algoStatus') or 'open')
-                                return algo
-                except Exception as algo_e:
-                    self.logger.warning(f"[Binance] Algo check failed for {order_id}: {algo_e}")
-                    
+                # OPTIMIZATION: If we already know the order is likely standard or not algo,
+                # querying fapiPrivateGetOpenAlgoOrders and fetch_my_trades EVERY single monitor cycle
+                # for EVERY missing order causes massive rate limiting and API spam, leading to 
+                # Timestamp errors (due to Binance rejecting our rate limit overhead).
+                # We will only do the Algo check if the order might realistically be an ALGO order.
+                
+                is_algo_hint = params.get('is_algo', False) or params.get('type', '').upper() in ['STOP', 'STOP_MARKET', 'TAKE_PROFIT', 'TAKE_PROFIT_MARKET']
+                
+                if is_algo_hint:
+                    self.logger.info(f"[Binance] Order {order_id} not found in standard queue. Checking Algo orders...")
+                    try:
+                        algo_params = {'symbol': self._get_api_symbol(symbol)} if symbol else {}
+                        open_algos = await self._execute_with_timestamp_retry(
+                            self.exchange.fapiPrivateGetOpenAlgoOrders, algo_params
+                        )
+                        if isinstance(open_algos, list):
+                            for algo in open_algos:
+                                if str(algo.get('algoId')) == str(order_id) or str(algo.get('clientOrderId')) == str(order_id):
+                                    algo['is_algo'] = True
+                                    algo['id'] = str(algo.get('algoId', order_id))
+                                    algo['status'] = self.normalize_status(algo.get('algoStatus') or 'open')
+                                    return algo
+                    except Exception as algo_e:
+                        self.logger.warning(f"[Binance] Algo check failed for {order_id}: {algo_e}")
+                        
                 # BUG-02 FIX: Check trade history to see if it was recently filled and dropped from cache
-                try:
-                    self.logger.info(f"[Binance] Checking recent trades for order {order_id}...")
-                    trades = await self._execute_with_timestamp_retry(
-                        self.exchange.fetch_my_trades, symbol, limit=20
-                    )
-                    if isinstance(trades, list):
-                        match = next((t for t in trades if str(t.get('order')) == str(order_id)), None)
-                        if match:
-                            self.logger.info(f"[Binance] Order {order_id} found in trade history! Returning as CLOSED.")
-                            return {
-                                'id': order_id, 
-                                'status': 'CLOSED', 
-                                'filled': match.get('amount', 0), 
-                                'average': match.get('price', 0),
-                                'info': match
-                            }
-                except Exception as trade_e:
-                    self.logger.warning(f"[Binance] Trade history check failed for {order_id}: {trade_e}")
+                # ONLY occasionally, or we rely on the broader reconcile_positions() sync loop
+                # Since fetch_order is called every monitor tick (e.g. 5x a second), fetching trade history
+                # here is disastrous for rate limits. We will ONLY check trade history IF this is a specific retry
+                check_history = params.get('force_history_check', False)
+                if check_history:
+                    try:
+                        self.logger.info(f"[Binance] Checking recent trades for order {order_id}...")
+                        trades = await self._execute_with_timestamp_retry(
+                            self.exchange.fetch_my_trades, symbol, limit=20
+                        )
+                        if isinstance(trades, list):
+                            match = next((t for t in trades if str(t.get('order')) == str(order_id)), None)
+                            if match:
+                                self.logger.info(f"[Binance] Order {order_id} found in trade history! Returning as CLOSED.")
+                                return {
+                                    'id': order_id, 
+                                    'status': 'CLOSED', 
+                                    'filled': match.get('amount', 0), 
+                                    'average': match.get('price', 0),
+                                    'info': match
+                                }
+                    except Exception as trade_e:
+                        self.logger.warning(f"[Binance] Trade history check failed for {order_id}: {trade_e}")
                     
             raise e
 

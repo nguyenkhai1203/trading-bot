@@ -36,6 +36,11 @@ class TestTelegramBot:
         self.mock_trader.db.get_risk_metric = AsyncMock(return_value=1000.0)
         self.mock_trader._normalize_symbol.side_effect = lambda x: x # pass through
         self.mock_trader._get_pos_key.side_effect = lambda sym, tf: f"BINANCE_{sym.replace('/', '_')}_{tf}"
+        self.mock_trader.exchange = MagicMock()
+        self.mock_trader.exchange.fetch_positions = AsyncMock(return_value=[])
+        self.mock_trader.exchange.fetch_open_orders = AsyncMock(return_value=[])
+        self.mock_trader.exchange_name = 'BINANCE'
+        
         telegram_bot.traders = {1: self.mock_trader}
         telegram_bot.profiles = [{'id': 1, 'name': 'BINANCE', 'environment': 'LIVE'}]
         telegram_bot.get_total_equity = AsyncMock(return_value=1500.0)
@@ -51,17 +56,22 @@ class TestTelegramBot:
     async def test_get_status_message_live_positions(self, mock_getsize, mock_exists):
         """Test the /status formatter with live mocked positions from the exchange adapter."""
         
-        # 1. Provide live mock positions via Trader's memory dictionary
+        # 1. Provide live mock positions via fresh exchange fetch
+        self.mock_trader.exchange.fetch_positions.return_value = [
+            {
+                'symbol': 'BTC/USDT',
+                'contracts': 1.0,
+                'side': 'LONG',
+                'entryPrice': 40000.0,
+                'leverage': 10
+            }
+        ]
+        # Keep local memory for SL/TP lookup
         self.mock_trader.active_positions = {
             'BINANCE_BTC_USDT_1h': {
                 'symbol': 'BTC/USDT',
-                'status': 'filled',
-                'qty': 1.0,
-                'side': 'BUY',
-                'entry_price': 40000.0,
-                'leverage': 10,
-                'sl': 39000.0,
-                'tp': 45000.0
+                'tp': 45000.0,
+                'sl': 39000.0
             }
         }
         self.mock_trader.dry_run = False
@@ -86,16 +96,17 @@ class TestTelegramBot:
     async def test_get_status_message_pending_orders(self, mock_getsize, mock_exists):
         """Test the /status formatter handles pending limit orders correctly."""
         
-        # Live positions empty, but pending orders exist
-        self.mock_trader.active_positions = {
-            'BINANCE_ETH_USDT_1h': {
+        # Live positions empty, but pending orders exist on exchange
+        self.mock_trader.exchange.fetch_positions.return_value = []
+        self.mock_trader.exchange.fetch_open_orders.return_value = [
+            {
                 'symbol': 'ETH/USDT',
                 'side': 'BUY',
-                'qty': 2.0,
-                'entry_price': 2000.0,
-                'status': 'pending'
+                'amount': 2.0,
+                'price': 2000.0,
+                'type': 'limit'
             }
-        }
+        ]
         self.mock_trader.dry_run = False
         
         # No local data reading needed, just mock DB again

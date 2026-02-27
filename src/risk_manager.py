@@ -70,10 +70,13 @@ class RiskManager:
         changes = False
         # 1. Daily Tracker Reset
         if self._last_reset_date != today:
-            self.starting_balance_day = current_balance
-            self._last_reset_date = today
-            changes = True
-            self.logger.info(f"[{self.exchange_name}] Day reset. Starting balance: {self.starting_balance_day:.2f}")
+            if current_balance > 0:
+                self.starting_balance_day = current_balance
+                self._last_reset_date = today
+                changes = True
+                self.logger.info(f"[{self.exchange_name}] Day reset. Starting balance: {self.starting_balance_day:.2f}")
+            else:
+                self.logger.warning(f"[{self.exchange_name}] Skip day reset: invalid balance {current_balance}")
         
         # 2. Peak Tracker Init
         if self.peak_balance == 0 and current_balance > 0:

@@ -37,8 +37,8 @@ class Backtester:
         # Mock Risk Manager for backtest sizing logic
         self.risk_manager = RiskManager(db=mock_db, profile_id=0, risk_per_trade=RISK_PER_TRADE)
 
-        # Data dir: absolute path to src/data where CSVs are stored
-        self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+        # Data dir: absolute path to root/data where CSVs are stored
+        self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
         os.makedirs(self.data_dir, exist_ok=True)
 
     async def run(self):

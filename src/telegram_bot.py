@@ -51,33 +51,49 @@ async def close():
 # ============== STATUS MESSAGE ==============
 # ============== STATUS MESSAGE ==============
 async def get_total_equity() -> float:
-    """Calculate total equity across all active profiles using SQLite data."""
+    """Calculate total equity across all active profiles using fresh exchange data."""
     total = 0.0
     for p in profiles:
         t = traders.get(p['id'])
         if not t: continue
         
         try:
-            # 1. Get current balance (sim or live)
+            # 1. Get fresh balance from exchange (or DB metric if dry-run)
             bal = 0.0
             if t.dry_run:
-                metric = await t.db.get_risk_metric(p['id'], 'starting_balance_day')
+                metric = await t.db.get_risk_metric(p['id'], 'starting_balance_day', p.get('environment', 'LIVE'))
                 bal = float(metric) if metric else 1000.0
             else:
+                # Fetch fresh balance from the exchange
                 bal_data = await t.exchange.fetch_balance()
                 bal = float(bal_data.get('total', {}).get('USDT', 0))
             
-            # 2. Add Unrealized PnL from active positions
+            # 2. Get fresh positions from exchange
             unrealized = 0.0
-            for pos in t.active_positions.values():
-                if pos.get('status') == 'filled':
-                    ticker = await data_manager.fetch_ticker(pos['symbol'], exchange=t.exchange_name)
+            ex_positions = []
+            if t.dry_run:
+                # For dry run, use memory state as source of truth
+                ex_positions = list(t.active_positions.values())
+            else:
+                # For live, fetch directly from exchange for truth
+                ex_positions = await t.exchange.fetch_positions()
+            
+            for pos in ex_positions:
+                p_qty = abs(float(pos.get('contracts') or pos.get('amount') or pos.get('qty') or 0))
+                if p_qty > 0:
+                    symbol = pos.get('symbol')
+                    # Find ticker for unrealized pnl
+                    ticker = await data_manager.fetch_ticker(symbol, exchange=t.exchange_name)
                     if ticker:
                         cur = float(ticker['last'])
-                        entry = float(pos['entry_price'])
-                        qty = float(pos['qty'])
-                        side = pos['side'].upper()
-                        unrealized += (cur - entry) * qty if side in ['BUY', 'LONG'] else (entry - cur) * qty
+                        entry = float(pos.get('entryPrice') or pos.get('entry_price') or pos.get('avgPrice') or 0)
+                        side = (pos.get('side') or '').upper()
+                        # Normalize side
+                        if side in ['LONG', 'BUY']:
+                            unrealized += (cur - entry) * p_qty
+                        elif side in ['SHORT', 'SELL']:
+                            unrealized += (entry - cur) * p_qty
+                            
             total += (bal + unrealized)
         except Exception as e:
             logging.error(f"Equity calc error for {p['name']}: {e}")
@@ -92,7 +108,7 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
     for p in profiles:
         t = traders.get(p['id'])
         if t:
-            metric = await t.db.get_risk_metric(p['id'], 'starting_balance_day')
+            metric = await t.db.get_risk_metric(p['id'], 'starting_balance_day', p.get('environment', 'LIVE'))
             total_start += float(metric) if metric else 1000.0
             
     daily_pnl_pct = ((total_balance - total_start) / total_start * 100) if total_start > 0 else 0.0
@@ -110,36 +126,89 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
         label = f"{p['name']} ({p['environment']})"
         exchanges_payload[label] = {'active': [], 'pending': []}
         
-        # Load active positions from memory (synced with DB)
-        for pos in t.active_positions.values():
-            if pos.get('status') == 'filled':
-                ticker = await data_manager.fetch_ticker(pos['symbol'], exchange=t.exchange_name)
-                cur = float(ticker['last']) if ticker else float(pos['entry_price'])
-                entry = float(pos['entry_price'])
-                qty = float(pos['qty'])
-                side = pos['side'].upper()
-                lev = pos.get('leverage', 1)
-                
-                pnl_usd = (cur - entry) * qty if side in ['BUY', 'LONG'] else (entry - cur) * qty
-                roe = ((cur - entry) / entry * 100 * lev) if entry > 0 else 0
-                if side in ['SELL', 'SHORT']: roe = -roe
-                
-                exchanges_payload[label]['active'].append({
-                    'symbol': pos['symbol'], 'side': side, 'leverage': lev,
-                    'entry_price': entry, 'current_price': cur,
-                    'roe': roe, 'pnl_usd': pnl_usd, 'tp': pos.get('tp', 0), 'sl': pos.get('sl', 0)
-                })
-                total_active += 1
-            elif pos.get('status') == 'pending':
-                ticker = await data_manager.fetch_ticker(pos['symbol'], exchange=t.exchange_name)
-                cur = float(ticker['last']) if ticker else float(pos['entry_price'])
-                exchanges_payload[label]['pending'].append({
-                    'symbol': pos['symbol'], 'side': pos['side'].upper(), 'leverage': pos.get('leverage', 1),
-                    'entry_price': pos['entry_price'], 'current_price': cur,
-                    'roe': 0, 'pnl_usd': 0, 'tp': pos.get('tp', 0), 'sl': pos.get('sl', 0),
-                    'is_pending': True
-                })
-                total_pending += 1
+        # 1. Fetch FRESH positions from exchange for LIVE profiles
+        # For DRY_RUN, we still rely on memory as there is no remote exchange state.
+        if not t.dry_run:
+            try:
+                ex_pos = await t.exchange.fetch_positions()
+                for ep in ex_pos:
+                    p_qty = abs(float(ep.get('contracts') or ep.get('amount') or ep.get('qty') or 0))
+                    if p_qty > 0:
+                        sym = ep['symbol']
+                        ticker = await data_manager.fetch_ticker(sym, exchange=t.exchange_name)
+                        cur = float(ticker['last']) if ticker else float(ep.get('entryPrice') or ep.get('entry_price') or 0)
+                        entry = float(ep.get('entryPrice') or ep.get('entry_price') or ep.get('avgPrice') or 0)
+                        side = ep['side'].upper()
+                        if side == 'LONG': side = 'BUY'
+                        elif side == 'SHORT': side = 'SELL'
+                        
+                        lev = ep.get('leverage') or ep.get('info', {}).get('leverage', 1)
+                        
+                        pnl_usd = (cur - entry) * p_qty if side == 'BUY' else (entry - cur) * p_qty
+                        roe = ((cur - entry) / entry * 100 * float(lev)) if entry > 0 else 0
+                        if side == 'SELL': roe = -roe
+                        
+                        # Find corresponding local pos for SL/TP if available
+                        local_match = next((lp for lp in t.active_positions.values() if t._normalize_symbol(lp['symbol']) == t._normalize_symbol(sym)), {})
+                        
+                        exchanges_payload[label]['active'].append({
+                            'symbol': sym, 'side': side, 'leverage': lev,
+                            'entry_price': entry, 'current_price': cur,
+                            'roe': roe, 'pnl_usd': pnl_usd, 
+                            'tp': local_match.get('tp', 0), 'sl': local_match.get('sl', 0)
+                        })
+                        total_active += 1
+                        
+                # Also fetch pending orders for full visibility
+                ex_orders = await t.exchange.fetch_open_orders()
+                for eo in ex_orders:
+                    # Logic to identify ENTRY orders (not SL/TP)
+                    o_type = str(eo.get('type') or '').upper()
+                    is_reduce = eo.get('reduceOnly') or eo.get('info', {}).get('reduceOnly') == 'true'
+                    if 'STOP' not in o_type and 'TAKE' not in o_type and not is_reduce:
+                        ticker = await data_manager.fetch_ticker(eo['symbol'], exchange=t.exchange_name)
+                        cur = float(ticker['last']) if ticker else 0
+                        exchanges_payload[label]['pending'].append({
+                            'symbol': eo['symbol'], 'side': eo['side'].upper(), 'leverage': 1, # leverage unknown for order
+                            'entry_price': eo.get('price') or eo.get('stopPrice') or 0, 
+                            'current_price': cur,
+                            'roe': 0, 'pnl_usd': 0, 'tp': 0, 'sl': 0,
+                            'is_pending': True
+                        })
+                        total_pending += 1
+            except Exception as e:
+                logging.error(f"Error fetching fresh status for {p['name']}: {e}")
+        else:
+            # DRY RUN: Use memory state
+            for pos in t.active_positions.values():
+                if pos.get('status') == 'filled':
+                    ticker = await data_manager.fetch_ticker(pos['symbol'], exchange=t.exchange_name)
+                    cur = float(ticker['last']) if ticker else float(pos['entry_price'])
+                    entry = float(pos['entry_price'])
+                    qty = float(pos['qty'])
+                    side = pos['side'].upper()
+                    lev = pos.get('leverage', 1)
+                    
+                    pnl_usd = (cur - entry) * qty if side in ['BUY', 'LONG'] else (entry - cur) * qty
+                    roe = ((cur - entry) / entry * 100 * lev) if entry > 0 else 0
+                    if side in ['SELL', 'SHORT']: roe = -roe
+                    
+                    exchanges_payload[label]['active'].append({
+                        'symbol': pos['symbol'], 'side': side, 'leverage': lev,
+                        'entry_price': entry, 'current_price': cur,
+                        'roe': roe, 'pnl_usd': pnl_usd, 'tp': pos.get('tp', 0), 'sl': pos.get('sl', 0)
+                    })
+                    total_active += 1
+                elif pos.get('status') == 'pending':
+                    ticker = await data_manager.fetch_ticker(pos['symbol'], exchange=t.exchange_name)
+                    cur = float(ticker['last']) if ticker else float(pos['entry_price'])
+                    exchanges_payload[label]['pending'].append({
+                        'symbol': pos['symbol'], 'side': pos['side'].upper(), 'leverage': pos.get('leverage', 1),
+                        'entry_price': pos['entry_price'], 'current_price': cur,
+                        'roe': 0, 'pnl_usd': 0, 'tp': pos.get('tp', 0), 'sl': pos.get('sl', 0),
+                        'is_pending': True
+                    })
+                    total_pending += 1
                 
     if is_portfolio:
         return format_portfolio_update_v2(
@@ -257,7 +326,7 @@ async def profiles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         
         t = traders.get(p['id'])
         if t:
-            metric = await t.db.get_risk_metric(p['id'], 'starting_balance_day')
+            metric = await t.db.get_risk_metric(p['id'], 'starting_balance_day', p.get('environment', 'LIVE'))
             bal = float(metric) if metric else 1000.0
             lines.append(f"   Day Start: ${bal:.2f}")
         lines.append("")

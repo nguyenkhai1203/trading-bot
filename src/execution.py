@@ -191,7 +191,9 @@ class Trader:
             
             # 3. SL Cooldowns
             try:
-                raw_data = await self.db.get_risk_metric(self.profile_id, 'sl_cooldowns_json', env=self.env)
+                import os
+                env = os.getenv('ENV', 'test').upper()
+                raw_data = await self.db.get_risk_metric(self.profile_id, 'sl_cooldowns_json', env=env)
                 if raw_data:
                     cooldowns = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
                     now = time.time()
@@ -259,7 +261,9 @@ class Trader:
             trade_id = await self.db.save_position(trade_data)
             pos['id'] = trade_id
         except Exception as e:
-            self.logger.error(f"Failed to update DB for {pos_key}: {e}")
+            import traceback
+            err_trace = traceback.format_exc()
+            self.logger.error(f"Failed to update DB for {pos_key}: {e}\n{err_trace}")
 
     async def _clear_db_position(self, pos_key, exit_price=None, exit_reason=None):
         """Mark a position as CLOSED or CANCELLED in the database."""
@@ -290,8 +294,10 @@ class Trader:
             
             # 3. Notification (only for CLOSED real trades)
             if status == 'CLOSED' and pos and exit_price:
-                roe = (exit_price - pos['entry_price']) / pos['entry_price'] * pos.get('leverage', 1) * 100
-                if pos['side'] == 'SELL': roe = -roe
+                roe = 0.0
+                if pos.get('entry_price'):
+                    roe = (exit_price - pos['entry_price']) / pos['entry_price'] * pos.get('leverage', 1) * 100
+                    if pos['side'] == 'SELL': roe = -roe
                 
                 # Convert timestamps to datetime
                 entry_dt = None
@@ -302,9 +308,8 @@ class Trader:
                     symbol=pos['symbol'],
                     timeframe=pos.get('timeframe', '1h'),
                     side=pos['side'],
-                    entry_price=pos['entry_price'],
+                    entry_price=pos.get('entry_price') or exit_price,
                     exit_price=exit_price,
-                    size=pos['qty'],
                     pnl=pnl,
                     pnl_pct=roe,
                     reason=exit_reason or 'Exit',
@@ -314,7 +319,9 @@ class Trader:
                     exchange_name=self.exchange_name,
                     profile_label=self.profile_name
                 )
-                await send_telegram_message(tg_msg)
+                import asyncio
+                from notification import send_telegram_message
+                asyncio.create_task(send_telegram_message(tg_msg))
         except Exception as e:
             self.logger.error(f"Failed to clear DB position {pos_key}: {e}")
 
@@ -498,15 +505,16 @@ class Trader:
         except Exception as e:
             self.logger.warning(f"Failed to save cooldowns to DB: {e}")
 
-    async def set_sl_cooldown(self, symbol):
-        """Set cooldown after a stop loss hit for this symbol."""
-        expiry = time.time() + SL_COOLDOWN_SECONDS
+    async def set_sl_cooldown(self, symbol, custom_duration: Optional[int] = None):
+        """Set cooldown after a stop loss hit or other rejection for this symbol."""
+        duration = custom_duration if custom_duration is not None else SL_COOLDOWN_SECONDS
+        expiry = time.time() + duration
         key = f"{self.exchange_name}:{symbol}"
         self._sl_cooldowns[key] = expiry
         await self._async_save_cooldowns()
-        hours = SL_COOLDOWN_SECONDS / 3600
-        self.logger.info(f"[COOLDOWN] {key} blocked for {hours:.1f} hours after SL")
-        print(f"⏸️ [{self.exchange_name}] [{symbol}] Cooldown activated for {hours:.1f} hours after SL")
+        hours = duration / 3600
+        self.logger.info(f"[COOLDOWN] {key} blocked for {hours:.1f} hours")
+        print(f"⏸️ [{self.exchange_name}] [{symbol}] Cooldown activated for {hours:.1f} hours")
 
     async def is_in_cooldown(self, symbol):
         """Check if symbol is in cooldown period after SL."""
@@ -742,8 +750,13 @@ class Trader:
         if price_to_check and price_to_check > 0:
             is_valid, reason, notional = self._check_min_notional(symbol, price_to_check, qty)
             if not is_valid:
-                self.logger.warning(f"Rejected order {symbol}: {reason}")
+                msg = f"Rejected order {symbol}: {reason}"
+                self.logger.warning(msg)
                 print(f"⚠️ [{self.exchange_name}] [{symbol}] Order rejected: {reason} (Notional: ${notional:.2f})")
+                
+                # Apply SL cooldown to prevent continuous loop rejections for the same signal
+                asyncio.create_task(self.set_sl_cooldown(symbol, custom_duration=86400))
+                
                 return None
         
         exchange_name = getattr(self.exchange, 'name', self.exchange_name)
@@ -937,6 +950,15 @@ class Trader:
                         self.logger.warning(f"Failed to auto-create SL/TP for market entry {pos_key}: {e}")
                 else:
                     self.logger.info(f"[{symbol}] TP/SL already attached to primary order, skipping secondary creation.")
+                
+                # Send telegram notification for filled market order
+                from notification import send_telegram_message, format_position_filled
+                _, tg_msg = format_position_filled(
+                    symbol, timeframe, side, order.get('average', price), qty, 
+                    order.get('average', price) * qty, sl, tp, confidence, use_leverage, False,
+                    exchange_name=self.exchange_name, profile_label=self.profile_name
+                )
+                asyncio.create_task(send_telegram_message(tg_msg))
 
             else:
                 # Limit order - place and track as pending
@@ -1041,7 +1063,15 @@ class Trader:
                 await self._update_db_position(pos_key)
                 print(f"📋 [{self.exchange_name}] Limit order placed: {order_id} | {side} {symbol} @ {price:.3f} (waiting for fill...)")
                 self.logger.info(f"Limit order {order_id} placed, monitoring for fill")
-
+                
+                # Send telegram notification
+                from notification import send_telegram_message, format_pending_order
+                _, tg_msg = format_pending_order(
+                    symbol, timeframe, side, price, sl, tp, confidence, use_leverage, False,
+                    exchange_name=self.exchange_name, profile_label=self.profile_name
+                )
+                asyncio.create_task(send_telegram_message(tg_msg))
+                
                 # Start background task to monitor fill
                 asyncio.create_task(self._monitor_limit_order_fill(pos_key, order_id, symbol))
                 
@@ -1103,10 +1133,62 @@ class Trader:
                             if found_o:
                                 order_status = found_o
                             else:
-                                # Not in open orders, and too old for fetchOrder history -> Treat as filled/closed for safety
-                                # or Mark as 'unknown' to avoid infinite loops
-                                self.logger.warning(f"[{symbol}] Order {local_order_id} not found in open orders and too old for Bybit history. Assuming filled or cancelled.")
-                                break
+                                # Not in open orders, and too old for fetchOrder history -> Verify against reality
+                                self.logger.warning(f"[{symbol}] Order {local_order_id} not found in open orders and too old for Bybit history. Verifying Position/History...")
+                                
+                                # 1. Check if position exists
+                                found_pos = False
+                                try:
+                                    ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
+                                    # Normalize symbol for lookup
+                                    norm_symbol = self._normalize_symbol(symbol)
+                                    for p in ex_positions:
+                                        if self._normalize_symbol(p.get('symbol')) == norm_symbol:
+                                            p_qty = abs(self._safe_float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('positionAmt'), 0))
+                                            if p_qty > 0:
+                                                self.logger.info(f"[{symbol}] Found position for missing order {local_order_id}. Treating as FILLED.")
+                                                # Create a fake order_status to trigger the fill logic below
+                                                order_status = {
+                                                    'status': 'filled',
+                                                    'filled': p_qty,
+                                                    'average': self._safe_float(p.get('entryPrice')),
+                                                    'id': local_order_id,
+                                                    'timestamp': self.exchange.milliseconds()
+                                                }
+                                                found_pos = True
+                                                break
+                                except Exception as pos_err:
+                                    self.logger.warning(f"[{symbol}] Position verify failed: {pos_err}")
+
+                                if not found_pos:
+                                    # 2. Check Trade History (Fast SL case)
+                                    try:
+                                        self.logger.info(f"[{symbol}] No position found. Checking trade history for fast closure...")
+                                        since = active.get('timestamp') if 'active' in locals() else None
+                                        if not since:
+                                            since = int((time.time() - 3600) * 1000) # 1 hour back
+                                        
+                                        recent_trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
+                                        order_trades = [t for t in recent_trades if str(t.get('order') or t.get('orderId')) == str(local_order_id)]
+                                        
+                                        if order_trades:
+                                            self.logger.info(f"[{symbol}] Detected fill for {local_order_id} in history. Checking for fast SL...")
+                                            # If we are here, it means entry was filled but position is gone -> SL/TP hit
+                                            # We let reconcile_positions or further logic handle the formal logging
+                                            # For now, we clear the local state to stay clean
+                                            if pos_key in self.pending_orders: del self.pending_orders[pos_key]
+                                            if pos_key in self.active_positions: del self.active_positions[pos_key]
+                                            break
+                                    except Exception as hist_err:
+                                        self.logger.warning(f"[{symbol}] History verify failed: {hist_err}")
+
+                                    # 3. Last Resort: Assume Cancelled/Expired
+                                    self.logger.warning(f"[{symbol}] Order {local_order_id} definitively gone. Purging state.")
+                                    if pos_key in self.pending_orders: del self.pending_orders[pos_key]
+                                    if pos_key in self.active_positions: 
+                                        await self._cancel_stale_position_in_db(pos_key, reason="order_history_exhausted")
+                                        del self.active_positions[pos_key]
+                                    break
                         except Exception as fb_e:
                             self.logger.warning(f"[{symbol}] Fallback check for {local_order_id} failed: {fb_e}")
                             continue
@@ -1425,8 +1507,8 @@ class Trader:
                     snapshot=pos.get('snapshot')
                 )
 
-            # Notify Telegram if closed outside bot (Sync)
-            if exit_reason and "Sync" in exit_reason:
+            # Notify Telegram for ALL closed positions
+            if exit_reason:
                 from notification import send_telegram_message, format_position_closed
                 
                 # Use format_position_closed for consistent formatting
@@ -1438,12 +1520,12 @@ class Trader:
                     exit_price=exit_price,
                     pnl=pnl,
                     pnl_pct=pnl_pct,
-                    reason="EXCHANGE SYNC (CLOSED)",
+                    reason=exit_reason,
                     entry_time=pos.get('timestamp'),
                     profile_label=self.profile_name
                 )
                 print(terminal_msg)
-                await send_telegram_message(telegram_msg)
+                asyncio.create_task(send_telegram_message(telegram_msg))
             
             self.logger.info(f"Trade logged: {symbol} {side} | PnL: {pnl:.2f} ({pnl_pct:.2f}%) | Reason: {exit_reason}")
 
@@ -2457,7 +2539,7 @@ class Trader:
                                         exit_price = weighted_sum / total_qty
                                         # Fix 3: Extract actual exchange fees for accurate P&L
                                         actual_fees = sum(
-                                            self._safe_float((t.get('fee') or {}).get('cost', 0))
+                                            float((t.get('fee') or {}).get('cost') or 0)
                                             for t in close_trades
                                         )
                                         if actual_fees > 0:
@@ -2640,7 +2722,10 @@ class Trader:
                                                         exit_price = weighted_close_sum / total_close_qty
                                                         
                                                         # Extract actual fees
-                                                        actual_fees = sum(self._safe_float((t.get('fee') or {}).get('cost', 0)) for t in order_trades + close_trades)
+                                                        actual_fees = sum(
+                                                            float((t.get('fee') or {}).get('cost') or 0)
+                                                            for t in order_trades + close_trades
+                                                        )
                                                         if actual_fees > 0:
                                                             pos['_exit_fees'] = actual_fees
                                                 
@@ -2723,14 +2808,14 @@ class Trader:
                         # SYNC PRICES FROM EXCHANGE (If verified)
                         prices_changed = False
                         if sl_order:
-                            new_sl = float(sl_order.get('stopPrice') or sl_order.get('triggerPrice') or 0)
+                            new_sl = self._safe_float(sl_order.get('stopPrice') or sl_order.get('triggerPrice') or 0)
                             if new_sl > 0 and new_sl != pos.get('sl'):
                                 self.logger.info(f"[SYNC] Updating SL price for {pos_key}: {pos.get('sl')} -> {new_sl}")
                                 pos['sl'] = new_sl
                                 prices_changed = True
 
                         if tp_order:
-                            new_tp = float(tp_order.get('stopPrice') or tp_order.get('triggerPrice') or tp_order.get('price') or 0)
+                            new_tp = self._safe_float(tp_order.get('stopPrice') or tp_order.get('triggerPrice') or tp_order.get('price') or 0)
                             if new_tp > 0 and new_tp != pos.get('tp'):
                                 self.logger.info(f"[SYNC] Updating TP price for {pos_key}: {pos.get('tp')} -> {new_tp}")
                                 pos['tp'] = new_tp

@@ -119,6 +119,44 @@ class MarketDataManager:
         from config import BINANCE_SYMBOLS, BYBIT_SYMBOLS
         exchange_symbol_map = {'BINANCE': BINANCE_SYMBOLS, 'BYBIT': BYBIT_SYMBOLS}
         
+        semaphore = asyncio.Semaphore(5)
+        
+        async def fetch_and_store(name, adapter, symbol, tf):
+            async with semaphore:
+                key = f"{name}_{symbol}_{tf}"
+                try:
+                    # Fetch last 50 candles
+                    ohlcv = await adapter.fetch_ohlcv(symbol, tf, limit=50)
+                    if not ohlcv: return
+                        
+                    new_df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
+                    
+                    # Merge with in-memory
+                    old_df = self.data_store.get(key)
+                    if old_df is None:
+                        combined = new_df
+                    else:
+                        combined = pd.concat([old_df, new_df]).drop_duplicates(subset='timestamp', keep='last').reset_index(drop=True)
+                        combined = combined.sort_values('timestamp').reset_index(drop=True).tail(MAX_CANDLES)
+                    
+                    # Validate before storing
+                    is_valid, reason = self.validate_data(combined, symbol, tf)
+                    if is_valid:
+                        self.data_store[key] = combined
+                        # ASYNC PERSIST TO SQLite
+                        candles_list = []
+                        for _, row in new_df.iterrows():
+                            ts = int(row['timestamp'].timestamp() * 1000)
+                            candles_list.append([ts, row['open'], row['high'], row['low'], row['close'], row['volume']])
+                        
+                        await self.db.upsert_candles(symbol, tf, candles_list)
+                    else:
+                        self.logger.warning(f"[{name}] Skipped update for {symbol} {tf}: {reason}")
+                except Exception as e:
+                    self.logger.error(f"[{name}] Error updating {symbol} {tf}: {e}")
+
+        tasks = []
         for name, adapter in self.adapters.items():
             self.logger.info(f"📡 [{name}] Updating market data...")
             allowed = exchange_symbol_map.get(name, symbols)
@@ -126,42 +164,11 @@ class MarketDataManager:
             
             for symbol in current:
                 for tf in timeframes:
-                    key = f"{name}_{symbol}_{tf}"
-                    try:
-                        # Fetch last 50 candles
-                        ohlcv = await adapter.fetch_ohlcv(symbol, tf, limit=50)
-                        if not ohlcv: continue
-                            
-                        new_df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                        new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
-                        
-                        # Merge with in-memory
-                        old_df = self.data_store.get(key)
-                        if old_df is None:
-                            # If not in memory, we could try to load from DB here
-                            # but usually backtester/launcher handles initial load
-                            combined = new_df
-                        else:
-                            combined = pd.concat([old_df, new_df]).drop_duplicates(subset='timestamp', keep='last').reset_index(drop=True)
-                            combined = combined.sort_values('timestamp').reset_index(drop=True).tail(MAX_CANDLES)
-                        
-                        # Validate before storing
-                        is_valid, reason = self.validate_data(combined, symbol, tf)
-                        if is_valid:
-                            self.data_store[key] = combined
-                            # ASYNC PERSIST TO SQLite
-                            # Convert DF back to list for DB upsert
-                            candles_list = []
-                            for _, row in new_df.iterrows():
-                                # convert timestamp to ms int
-                                ts = int(row['timestamp'].timestamp() * 1000)
-                                candles_list.append([ts, row['open'], row['high'], row['low'], row['close'], row['volume']])
-                            
-                            await self.db.upsert_candles(symbol, tf, candles_list)
-                        else:
-                            self.logger.warning(f"[{name}] Skipped update for {symbol} {tf}: {reason}")
-                    except Exception as e:
-                        self.logger.error(f"[{name}] Error updating {symbol} {tf}: {e}")
+                    tasks.append(fetch_and_store(name, adapter, symbol, tf))
+        
+        if tasks:
+            await asyncio.gather(*tasks)
+            
         return True
 
     async def load_historical_data(self, symbols, timeframes, limit=500):

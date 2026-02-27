@@ -117,7 +117,8 @@ class TradingBot:
                 # FIX-A: Minimum pending time — give the order at least 2 minutes before
                 # considering a cancel. Prevents churn from fast noise on short timeframes.
                 MIN_PENDING_SECS = 120
-                pending_age = time.time() - (pending_pos.get('timestamp', 0) / 1000)
+                safe_timestamp = pending_pos.get('timestamp') or 0
+                pending_age = time.time() - (safe_timestamp / 1000)
                 if pending_age >= MIN_PENDING_SECS:
                     df_scan = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
                     if df_scan is not None:
@@ -137,7 +138,10 @@ class TradingBot:
             pos = self.trader.active_positions.get(pos_key)
             if pos and pos.get('status') == 'filled':
                 side = pos['side']
-                entry_price = pos['entry_price']
+                entry_price_raw = pos.get('entry_price')
+                if entry_price_raw is None:
+                    return False  # Missing entry price, skip PnL calc
+                entry_price = float(entry_price_raw)
                 leverage = pos.get('leverage', 1)
                 
                 # Signal Reversal for Active Position

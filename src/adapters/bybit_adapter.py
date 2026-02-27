@@ -116,14 +116,23 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             return {}
 
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
-        """Fetch open orders (all or specific symbol)."""
+        """Fetch open orders (Standard + Conditional) for Bybit V5 Linear."""
         try:
             # For Bybit V5, category is crucial.
-            params = {'category': 'linear'}
-            orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol, params=params)
-            for o in orders:
+            # 1. Fetch Standard Orders
+            params = {'category': 'linear', 'orderFilter': 'Order'}
+            std_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol, params=params)
+            
+            # 2. Fetch Conditional Orders (Stop/SL/TP)
+            cond_params = {'category': 'linear', 'orderFilter': 'StopOrder'}
+            cond_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol, params=cond_params)
+            
+            # Combine and normalize
+            all_orders = std_orders + cond_orders
+            for o in all_orders:
                 o['status'] = self.normalize_status(o.get('status'))
-            return orders
+                
+            return all_orders
         except Exception as e:
             self.logger.error(f"[Bybit] Fetch open orders failed: {e}")
             return []

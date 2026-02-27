@@ -21,6 +21,8 @@ class BaseExchangeClient:
         self.logger = logging.getLogger(self.__class__.__name__)
         self._time_synced = False
         self._server_offset_ms = 0 # Manual offset: serverTime - localTime
+        self._sync_lock = asyncio.Lock()
+        self._last_sync_time = 0
         
         # Permissions / Capabilities System
         # Default to restricted until explicitly promoted by Factory
@@ -46,29 +48,41 @@ class BaseExchangeClient:
         
     async def sync_server_time(self) -> bool:
         """Sync local time with exchange server manually to ensure absolute accuracy."""
-        try:
-            print(f"[TIME SYNC] Fetching raw server time from exchange...")
-            server_time = await self.exchange.fetch_time()
-            local_time = int(time.time() * 1000)
-            
-            # Calculate manual offset
-            self._server_offset_ms = server_time - local_time
-            
-            # Also sync CCXT for its internal methods
-            await self.exchange.load_time_difference()
-            
-            # Ensure recvWindow is large (60s is Binance max)
-            self.exchange.options['recvWindow'] = 60000 
-            
-            print(f"[OK] Time Sync Complete!")
-            print(f"     Manual Offset: {self._server_offset_ms}ms | CCXT Offset: {self.exchange.options.get('timeDifference', 0)}ms")
-            print(f"     Safety Window (recvWindow): 60000ms")
-            
-            self._time_synced = True
-            return True
-        except Exception as e:
-            print(f"[WARN] Time sync failed: {str(e)[:100]}")
-            return False
+        if self._sync_lock.locked():
+            print(f"[TIME SYNC] Time sync already in progress by another task. Yielding...")
+            async with self._sync_lock:
+                return True
+                
+        async with self._sync_lock:
+            # Prevent rapid back-to-back synchronization
+            if time.time() - self._last_sync_time < 5:
+                return True
+                
+            try:
+                print(f"[TIME SYNC] Fetching raw server time from exchange...")
+                server_time = await asyncio.wait_for(self.exchange.fetch_time(), timeout=15)
+                local_time = int(time.time() * 1000)
+                
+                # Calculate manual offset
+                self._server_offset_ms = server_time - local_time
+                
+                # Also sync CCXT for its internal methods
+                await asyncio.wait_for(self.exchange.load_time_difference(), timeout=15)
+                
+                # Ensure recvWindow is large (60s is Binance max)
+                self.exchange.options['recvWindow'] = 60000 
+                
+                print(f"[OK] Time Sync Complete!")
+                print(f"     Manual Offset: {self._server_offset_ms}ms | CCXT Offset: {self.exchange.options.get('timeDifference', 0)}ms")
+                print(f"     Safety Window (recvWindow): 60000ms")
+                
+                self._time_synced = True
+                return True
+            except Exception as e:
+                print(f"[WARN] Time sync failed: {str(e)[:100]}")
+                return False
+            finally:
+                self._last_sync_time = time.time()
 
     def get_synced_timestamp(self) -> int:
         """Get current timestamp synchronized with exchange with safety padding."""
@@ -136,10 +150,10 @@ class BaseExchangeClient:
                 else:
                     # Log non-timestamp errors or max retries reached
                     if not is_timestamp_error:
-                        # Handle Rate Limit (429) / 418 or Bybit 10006 specifically
-                        if "429" in error_msg or "418" in error_msg or "too many requests" in error_msg or "10006" in error_msg:
-                            wait_s = (attempt + 1) * 2 # Exponential backoff: 2s, 4s, 6s
-                            print(f"⚠️ [RATE LIMIT] backing off for {wait_s}s...")
+                        # Handle Rate Limit (429) / 418 / 403 or Bybit 10006 specifically
+                        if any(x in error_msg for x in ["429", "418", "403", "too many requests", "10006"]):
+                            wait_s = (attempt + 1) * 3 # Backoff: 3s, 6s, 9s
+                            print(f"⚠️ [RATE LIMIT/403] logic: backing off for {wait_s}s... Error: {error_msg[:100]}")
                             await asyncio.sleep(wait_s)
                             # Retry if we have retries left
                             if attempt < max_retries - 1:
@@ -149,10 +163,12 @@ class BaseExchangeClient:
                         silence_errors = [
                             "side cannot be changed",
                             "last 500 orders", "acknowledged", "already", "not modified",
+                            "-2011", "-2013", "order does not exist",
+                            "fetchpositionmode", "is not supported", "missing some parameters"
                         ]
                         if not any(s.lower() in error_msg for s in silence_errors):
-                            print(f"[API ERROR] Non-timestamp error, not retrying: {str(e)[:100]}")
+                            print(f"[API ERROR] {type(e).__name__} in {api_call.__name__} for {args}: {str(e)[:250]}")
                     else:
-                        print(f"[TIMESTAMP ERROR] Max retries reached, giving up: {str(e)[:100]}")
+                        print(f"[TIMESTAMP ERROR] {api_call.__name__} for {args} Max retries reached: {str(e)[:250]}")
                     # Re-raise the error
                     raise e

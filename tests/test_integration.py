@@ -28,7 +28,7 @@ class TestTradingBotIntegration:
         # Mock internal helpers
         trader._get_pos_key = MagicMock(return_value='BINANCE_BTC_USDT_1h')
         trader.has_any_symbol_position = AsyncMock(return_value=False)
-        trader.is_in_cooldown = MagicMock(return_value=False)
+        trader.is_in_cooldown = AsyncMock(return_value=False)
         trader.place_order = AsyncMock(return_value={'id': 'order_1', 'status': 'open'})
         trader.cancel_pending_order = AsyncMock(return_value=True)
         trader.verify_symbol_state = AsyncMock(return_value=None)

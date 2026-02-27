@@ -95,8 +95,12 @@ class DataFetcher:
         df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
         
-        # Save to CSV
-        filename = f"data_{self.symbol.replace('/', '_').replace(':', '_')}_{self.timeframe}.csv"
+        # Save to CSV in project root 'data' folder
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        data_dir = os.path.join(project_root, 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        
+        filename = os.path.join(data_dir, f"data_{self.symbol.replace('/', '_').replace(':', '_')}_{self.timeframe}.csv")
         df.to_csv(filename, index=False)
         print(f"Saved {len(df)} rows to {filename}")
         return df
