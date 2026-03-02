@@ -83,6 +83,7 @@ class SignalTracker:
             'signals': signals_used, # Will be JSON stringified in meta or handled by insert_trade_history
             'result': result,
             'pnl_pct': pnl_pct,
+            'pnl': pnl_usdt,
             'pnl_usdt': pnl_usdt,
             'entry_price': entry_price,
             'exit_price': exit_price,

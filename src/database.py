@@ -190,14 +190,17 @@ class DataManager:
                 UPDATE trades SET 
                     exchange_order_id=?, symbol=?, side=?, qty=?, entry_price=?, 
                     sl_price=?, tp_price=?, sl_order_id=?, tp_order_id=?, 
-                    pos_key=?, status=?, timeframe=?, pnl=?, meta_json=?, leverage=?
+                    pos_key=?, status=?, timeframe=?, pnl=?, meta_json=?, leverage=?,
+                    exit_price=?, exit_reason=?, exit_time=?
                 WHERE id=?
             """, (
                 pos_data.get('exchange_order_id'), pos_data.get('symbol'), pos_data.get('side'),
                 pos_data.get('qty', 0), pos_data.get('entry_price'), pos_data.get('sl_price'), pos_data.get('tp_price'),
                 pos_data.get('sl_order_id'), pos_data.get('tp_order_id'), pos_key,
                 pos_data.get('status', 'OPENED'), pos_data.get('timeframe'), pos_data.get('pnl', 0), 
-                meta_json, pos_data.get('leverage'), trade_id
+                meta_json, pos_data.get('leverage'),
+                pos_data.get('exit_price'), pos_data.get('exit_reason'), pos_data.get('exit_time'),
+                trade_id
             ))
             return trade_id
         else:
@@ -207,15 +210,17 @@ class DataManager:
                 INSERT INTO trades (
                     profile_id, exchange_order_id, exchange, symbol, side, qty, 
                     entry_price, sl_price, tp_price, sl_order_id, tp_order_id, 
-                    pos_key, status, timeframe, entry_time, pnl, meta_json, leverage
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    pos_key, status, timeframe, entry_time, pnl, meta_json, leverage,
+                    exit_price, exit_reason, exit_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pos_data.get('profile_id'), pos_data.get('exchange_order_id'), pos_data.get('exchange'), 
                 pos_data.get('symbol'), pos_data.get('side'), pos_data.get('qty', 0),
                 pos_data.get('entry_price'), pos_data.get('sl_price'), pos_data.get('tp_price'),
                 pos_data.get('sl_order_id'), pos_data.get('tp_order_id'), pos_key,
                 pos_data.get('status', 'OPENED'), pos_data.get('timeframe'), entry_time, 
-                pos_data.get('pnl', 0), meta_json, pos_data.get('leverage')
+                pos_data.get('pnl', 0), meta_json, pos_data.get('leverage'),
+                pos_data.get('exit_price'), pos_data.get('exit_reason'), pos_data.get('exit_time')
             ))
             return cursor.lastrowid
 

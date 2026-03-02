@@ -8,6 +8,15 @@ import json
 import logging
 import os
 import sys
+
+if sys.platform == 'win32':
+    import warnings
+    # Suppress deprecation warning for WindowsSelectorEventLoopPolicy in Python 3.13+
+    # We still need it to avoid aiohttp/SSL hangs on Windows with large payloads.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import time
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -130,9 +139,14 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
         # For DRY_RUN, we still rely on memory as there is no remote exchange state.
         if not t.dry_run:
             try:
+                print(f"[DEBUG {label}] Fetching positions...")
                 # Add overall timeout to prevent complete bot hang
-                ex_pos = await asyncio.wait_for(t.adapter.fetch_positions(), timeout=10)
-                ex_orders = await asyncio.wait_for(t.adapter.fetch_open_orders(), timeout=10)
+                ex_pos = await asyncio.wait_for(t.exchange.fetch_positions(), timeout=10)
+                print(f"[DEBUG {label}] Positions fetched: {len(ex_pos)}")
+                
+                print(f"[DEBUG {label}] Fetching open orders...")
+                ex_orders = await asyncio.wait_for(t.exchange.fetch_open_orders(), timeout=10)
+                print(f"[DEBUG {label}] Open orders fetched: {len(ex_orders)}")
                 
                 # Pre-fetch all needed tickers for THIS exchange efficiently
                 all_symbols = set()
@@ -145,7 +159,9 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                 tickers = {}
                 if all_symbols:
                     try:
-                        tickers = await asyncio.wait_for(t.adapter.fetch_tickers(list(all_symbols)), timeout=10)
+                        print(f"[DEBUG {label}] Fetching {len(all_symbols)} tickers...")
+                        tickers = await asyncio.wait_for(t.exchange.fetch_tickers(list(all_symbols)), timeout=10)
+                        print(f"[DEBUG {label}] Tickers fetched.")
                     except Exception as e:
                         logging.warning(f"Batch ticker fetch failed for {label}: {e}. Falling back to cached data.")
                         
@@ -167,14 +183,16 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                         if side == 'LONG': side = 'BUY'
                         elif side == 'SHORT': side = 'SELL'
                         
-                        lev = ep.get('leverage') or ep.get('info', {}).get('leverage', 1)
+                        # Find corresponding local pos for SL/TP and leverage fallback
+                        # Prioritize a local match that actually has a TP or SL configured
+                        matches = [lp for lp in t.active_positions.values() if t._normalize_symbol(lp['symbol']) == t._normalize_symbol(sym)]
+                        local_match = next((lp for lp in matches if lp.get('tp') or lp.get('sl')), matches[0] if matches else {})
+                        
+                        lev = ep.get('leverage') or ep.get('info', {}).get('leverage') or local_match.get('leverage', 1)
                         
                         pnl_usd = (cur - entry) * p_qty if side == 'BUY' else (entry - cur) * p_qty
                         roe = ((cur - entry) / entry * 100 * float(lev)) if entry > 0 else 0
                         if side == 'SELL': roe = -roe
-                        
-                        # Find corresponding local pos for SL/TP if available
-                        local_match = next((lp for lp in t.active_positions.values() if t._normalize_symbol(lp['symbol']) == t._normalize_symbol(sym)), {})
                         
                         exchanges_payload[label]['active'].append({
                             'symbol': sym, 'side': side, 'leverage': lev,

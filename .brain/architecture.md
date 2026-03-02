@@ -67,15 +67,12 @@ The system employs a dual-logic approach to manage active positions based on bot
 ## 3. Position & Order Synchronization
 Philosophy: **The Exchange is the Source of Truth.**
 
-### Deep Sync Loop
-- **Authoritative Reality**: The database is the Single Source of Truth for position metadata (SL/TP orders, target weights).
-- **pos_key Synchronization**: Uses standardized keys (`P{ID}_{EXCHANGE}_{SYMBOL}_{TF}`) to map DB rows to memory.
-- **SL/TP Persistence**: Exchange-assigned IDs for Take-Profit and Stop-Loss orders are stored using `sl_id` and `tp_id` in memory, which map to `sl_order_id` and `tp_order_id` in the database.
-- **Airtight Phantom Win Protection**: 
-    - When a position is missing from the exchange but marked ACTIVE in DB, it force-verifies via `fetch_my_trades`.
-- **Ghost Removal**: Proactively purges local records if exchange data shows no contracts.
-- **Order Adoption**: Standardizes orphaned orders on the exchange using `pos_key` logic.
-- **Wait-and-Patience**: Polling mechanism for limit fills with automatic transition from `OPENED` to `ACTIVE` in DB.
+### Deep Sync Heartbeat
+- **sync_with_exchange()**: A lightweight, high-frequency reconciliation loop running every bot cycle. It proactively detects "Ghost" positions (ACTIVE in DB but Size=0 on exchange) and resolves them immediately.
+- **Price-Crossed Heuristic**: If a TP/SL order is missing and the market price has crossed the target level, the bot prioritizes fill-verification via `fetch_my_trades`.
+- **Authoritative Reality**: The database remains the Single Source of Truth for metadata. The standardized `sl_order_id` and `tp_order_id` keys in memory and DB ensure 1:1 mapping with exchange orders.
+- **Airtight Finalization**: Uses `log_trade` + `_clear_db_position` for atomic state transitions to `CLOSED` or `CANCELLED`.
+- **History Sync Script**: `scripts/sync_history.py` allows for manual or batch reconciliation of the last 24-48 hours to fix legacy data discrepancies.
 
 ---
 

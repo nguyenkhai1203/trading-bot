@@ -150,7 +150,8 @@ class TestExecutionBasic:
             'side': 'BUY',
             'qty': 0.5,
             'sl_order_id': 'sl1',
-            'tp_order_id': 'tp1'
+            'tp_order_id': 'tp1',
+            'entry_price': 50000.0
         }
         
         # Mock Pending Order

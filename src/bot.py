@@ -167,15 +167,7 @@ class TradingBot:
                     
                     if exit_reason:
                         if not entry_price: return False  # pending fill, no entry price yet
-                        pnl_pct = (current_price - entry_price) / entry_price * leverage
-                        if side == 'SELL': pnl_pct = -pnl_pct
                         
-                        await self.signal_tracker.record_trade(
-                            self.symbol, self.timeframe, side, pos.get('signals_used', []), 
-                            'WIN' if exit_reason == 'TP' else 'LOSS', pnl_pct,
-                            exit_price=current_price, exit_reason=exit_reason, 
-                            entry_price=entry_price, qty=pos['qty']
-                        )
                         await self.trader.remove_position(self.symbol, self.timeframe, exit_price=current_price, exit_reason=exit_reason)
                         return True
             return False
@@ -389,6 +381,11 @@ async def main():
                 p_color = COLOR_MAP.get(p.get('color', 'white').lower(), Fore.WHITE)
                 p_label = f"{p_color}[{p['name']}]{Style.RESET_ALL}"
                 
+                # 0. Periodic State Sync (Resolve external closures/ghosts)
+                if not trader.dry_run:
+                    # Run sync every cycle for high accuracy, it handles rate limits via _execute_with_timestamp_retry
+                    await trader.sync_with_exchange()
+
                 # 1. Update Balance & Check Circuit Breaker
                 bal = 0.0
                 if trader.dry_run:

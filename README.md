@@ -27,6 +27,7 @@ python3 src/self_test.py
 ```bash
 python3 scripts/download_data.py
 python3 src/analyzer.py
+python3 scripts/sync_history.py     # Reconile last 24h trade history from exchange to DB
 python3 scripts/clean_positions.py  # Fix corrupted positions (NaN values)
 ```
 

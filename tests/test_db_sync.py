@@ -84,8 +84,8 @@ async def test_trader_recovery_fidelity(db):
         "status": "filled",
         "leverage": 10.0,
         "order_id": "order_123",
-        "sl_id": "sl_456",
-        "tp_id": "tp_789",
+        "sl_order_id": "sl_456",
+        "tp_order_id": "tp_789",
         "timestamp": int(time.time() * 1000),
         "signals_used": ["RSI", "MACD"],
         "entry_confidence": 0.85,
@@ -133,8 +133,8 @@ async def test_trader_recovery_fidelity(db):
     assert restored['leverage'] == original_pos['leverage']
     assert restored['status'] == original_pos['status']
     assert restored['order_id'] == original_pos['order_id']
-    assert restored['sl_id'] == original_pos['sl_id']
-    assert restored['tp_id'] == original_pos['tp_id']
+    assert restored['sl_order_id'] == original_pos['sl_order_id']
+    assert restored['tp_order_id'] == original_pos['tp_order_id']
     assert restored['signals_used'] == original_pos['signals_used']
     assert restored['entry_confidence'] == original_pos['entry_confidence']
     assert restored['snapshot'] == original_pos['snapshot']

@@ -68,7 +68,7 @@ When a signal is approved:
     *   **Market**: Immediate fill, then SL/TP orders are created.
     *   **Limit**: Background task monitors fill status via adapter.
     *   **Churn Prevention**: Pending orders have a mandatory `MIN_PENDING_SECS` guard (default 120s) before they can be cancelled to allow exchange latency and liquidity to work. Orders are only cancelled early if a **Strong Reversal** signal (confidence > 0.4) is detected.
-4.  **TP/SL Management**: For fills, the bot creates "Reduce-Only" orders (or attaches them directly if using Bybit V5). The bot tracks these using `sl_id` and `tp_id` keys to ensure database synchronization.
+4.  **TP/SL Management**: For fills, the bot creates "Reduce-Only" orders (or attaches them directly if using Bybit V5). The bot tracks these using `sl_order_id` and `tp_order_id` keys (standardized across memory and database) to ensure permanent synchronization.
 
 ---
 
@@ -190,8 +190,11 @@ Allows remote interaction with the bot instance.
 *   **Lesson**: If the `order_id` is lost during transition, the bot loses the ability to reconcile that specific trade with exchange history accurately.
 
 ### 14. TP-SL Key Mismatch (The `sl_order_id` vs `sl_id` trap)
-*   **Discovery**: Logic in `execution.py` used `sl_order_id` while the database updater looked for `sl_id`.
-*   **Lesson**: **Standardize Keys Early.** All position-related dicts must use the shortest consistent keys (`sl_id`, `tp_id`) to match the DB mapper's expectations.
+*   **Discovery**: Logic in `execution.py` used `sl_id` while the database updater looked for `sl_order_id` (or vice versa), leading to null IDs in DB and losing track of orders.
+*   **Lesson**: **Standardize Keys Early.** All position-related dicts and database calls must use the explicit `sl_order_id` and `tp_order_id` keys.
+15. Ghost Detection Heuristic
+*   **Discovery**: Relying purely on `fetch_my_trades` can be slow or fail if the history is deep.
+*   **Lesson**: Combine **Price-Crossing + Missing Order ID**. If an order is gone and price has passed its target, it's a 99% probability fill. Confirm via history immediately to keep the DB "clean".
 
 
 ---
