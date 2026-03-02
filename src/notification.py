@@ -142,8 +142,8 @@ def get_mode_label(dry_run: bool) -> str:
 
 # Direction emojis
 def get_direction_emoji(side: str) -> str:
-    """Get direction emoji for trade side (Removed per User request)."""
-    return ""
+    """Get direction emoji for trade side (⬆️ for BUY, ⬇️ for SELL)."""
+    return "⬆️" if side.upper() in ['BUY', 'LONG'] else "⬇️"
 
 def get_direction_label(side: str) -> str:
     """Get direction label for trade side (BUY/SELL per User request)."""
@@ -234,7 +234,7 @@ def format_pending_order(
     
     telegram = (
         f"{mode}{ex_tag} | ⚪ PENDING\n"
-        f"{safe_symbol} | {timeframe} | {dir_label} x{leverage}\n"
+        f"{safe_symbol} | {timeframe} | {dir_label} {dir_emoji} x{leverage}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}\n"
         f"Score: {score:.1f} ({int(score*100):d}%)"
@@ -279,7 +279,7 @@ def format_position_filled(
     
     telegram = (
         f"{mode}{ex_tag} | ⚪ FILLED\n"
-        f"{safe_symbol} | {timeframe} | {dir_label} ({int(score*100) if score else 0}%)\n"
+        f"{safe_symbol} | {timeframe} | {dir_label} {dir_emoji} ({int(score*100) if score else 0}%)\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Size: {format_size(size, symbol)} {base_currency} (${notional:.0f})\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}"
@@ -335,7 +335,7 @@ def format_position_closed(
     ex_tag = f" | {profile_label if profile_label else exchange_name.upper() if exchange_name else ''}"
     telegram_parts = [
         f"{mode}{ex_tag} | {status_emoji} {reason_label}",
-        f"{safe_symbol} | {timeframe} | {dir_label}",
+        f"{safe_symbol} | {timeframe} | {dir_label} {dir_emoji}",
         f"Entry: {format_price(entry_price)} → Exit: {format_price(exit_price)}",
         f"PnL: {format_pnl(pnl, pnl_pct)}"
     ]
@@ -375,7 +375,7 @@ def format_order_cancelled(
     ex_tag = f" | {exchange_name.upper()}" if exchange_name else ""
     telegram = (
         f"{mode}{ex_tag} | ❌ CANCELLED\n"
-        f"{safe_symbol} | {timeframe} | {dir_label}\n"
+        f"{safe_symbol} | {timeframe} | {dir_label} {dir_emoji}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Reason: {reason}"
     )
@@ -462,7 +462,7 @@ def format_position_v2(
 ) -> str:
     """Format a single position in BOT STATUS v2 style."""
     side_label = "BUY" if side.upper() in ['BUY', 'LONG'] else "SELL"
-    side_emoji = "📈" if side_label == "BUY" else "📉"
+    side_emoji = "⬆️" if side_label == "BUY" else "⬇️"
     
     from notification import format_price # ensure available if called externally
     
