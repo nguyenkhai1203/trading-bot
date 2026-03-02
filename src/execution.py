@@ -713,7 +713,7 @@ class Trader:
 
 
 
-    async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None, reduce_only=False, params=None):
+    async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None, reduce_only=False, shadow_mode=False, params=None):
         """Places an order and updates persistent storage. For limit orders, monitors fill in background."""
         
         # Determine if TP/SL are attached (for scope safety)
@@ -768,14 +768,9 @@ class Trader:
         if price_to_check and price_to_check > 0:
             is_valid, reason, notional = self._check_min_notional(symbol, price_to_check, qty)
             if not is_valid:
-                msg = f"Rejected order {symbol}: {reason}"
-                self.logger.warning(msg)
-                print(f"⚠️ [{self.exchange_name}] [{symbol}] Order rejected: {reason} (Notional: ${notional:.2f})")
-                
-                # Apply SL cooldown to prevent continuous loop rejections for the same signal
-                asyncio.create_task(self.set_sl_cooldown(symbol, custom_duration=86400))
-                
-                return None
+                self.logger.info(f"[{symbol}] Notional ${notional:.2f} too low for exchange. Switching to SHADOW MODE.")
+                print(f"⚠️ [{self.exchange_name}] [{symbol}] Notional ${notional:.2f} < Min requirement. Switching to SHADOW MODE.")
+                shadow_mode = True
         
         exchange_name = getattr(self.exchange, 'name', self.exchange_name)
         pos_key = self._get_pos_key(symbol, timeframe)
@@ -787,11 +782,13 @@ class Trader:
         api_qty = qty_str if 'qty_str' in locals() and qty_str else qty
         print(f"🔧 [{exchange_name}] Sending Order: {side} {symbol} Qty={api_qty} (Type={api_qty.__class__.__name__}) @ {price or 'MARKET'}")
 
-        if self.dry_run or not self.exchange.can_trade:
-            if not self.exchange.can_trade:
+        if self.dry_run or shadow_mode or not self.exchange.can_trade:
+            if shadow_mode:
+                print(f"👻 [SHADOW MODE] {side} {symbol} ({timeframe}) - Insufficient balance simulation.")
+            elif not self.exchange.can_trade:
                 print(f"🛡️ [PUBLIC MODE] Simulating {side} {symbol} ({timeframe}) - Simulation Active.")
             
-            self.logger.info(f"[SIMULATION] {side} {symbol} ({timeframe}): Qty={qty}, SL={sl}, TP={tp}")
+            self.logger.info(f"[SIMULATION] {side} {symbol} ({timeframe}): Qty={qty}, SL={sl}, TP={tp} (Shadow={shadow_mode})")
             
             # Determine status based on order type
             is_limit = order_type == 'limit'
@@ -814,21 +811,28 @@ class Trader:
                 "signals_used": signals,
                 "entry_confidence": confidence,
                 "snapshot": snapshot,
+                "shadow": 1 if shadow_mode else 0,
                 "timestamp": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
             }
             await self._update_db_position(pos_key)
             
             # Send notification
+            label = "[SIGNAL ONLY]" if shadow_mode else None
             _, tg_msg = format_pending_order(
-                symbol, timeframe, side, price, sl, tp, confidence, leverage, self.dry_run,
+                symbol, timeframe, side, price, sl, tp, confidence, leverage, self.dry_run or shadow_mode,
                 exchange_name=self.exchange_name, profile_label=self.profile_name
             ) if is_limit else format_position_filled(
-                symbol, timeframe, side, price, qty_rounded, price * qty_rounded, sl, tp, confidence, leverage, self.dry_run,
+                symbol, timeframe, side, price, qty_rounded, price * qty_rounded, sl, tp, confidence, leverage, self.dry_run or shadow_mode,
                 exchange_name=self.exchange_name, profile_label=self.profile_name
             )
+            
+            # Prepend Signal Only label if shadow
+            if shadow_mode:
+                tg_msg = f"🔔 *[SIGNAL ONLY]*\n{tg_msg}"
+                
             await send_telegram_message(tg_msg)
             
-            return {'id': 'dry_run_id', 'status': 'closed' if not is_limit else 'open', 'filled': qty if not is_limit else 0}
+            return {'id': 'dry_run_id' if not shadow_mode else 'shadow_id', 'status': 'closed' if not is_limit else 'open', 'filled': qty if not is_limit else 0}
 
         # LIVE LOGIC
         # Prepare params
@@ -1507,6 +1511,7 @@ class Trader:
             # Use ROE (leveraged percentage) for reporting
             pnl_pct = (pnl / (entry_price * qty)) * 100 * leverage
 
+        is_shadow = pos.get('shadow', 0)
         trade_record = {
             "symbol": symbol,
             "side": side,
@@ -1517,7 +1522,8 @@ class Trader:
             "pnl_pct": round(pnl_pct, 2),
             "exit_reason": exit_reason,
             "entry_time": pos.get('timestamp'),
-            "exit_time": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
+            "exit_time": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0,
+            "shadow": is_shadow
         }
 
         # Fix 9 (Unified Store): Write all data to signal_performance.json via tracker.
@@ -1539,7 +1545,8 @@ class Trader:
                     btc_change=0, # Optional or fetch
                     snapshot=pos.get('snapshot'),
                     pos_key=pos_key,
-                    leverage=leverage
+                    leverage=leverage,
+                    shadow=is_shadow
                 )
 
             # Notify Telegram for ALL closed positions

@@ -3,6 +3,7 @@ import logging
 import asyncio
 import aiosqlite
 import json
+import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 
@@ -78,6 +79,9 @@ class DataManager:
                     if 'leverage' not in columns:
                         self.logger.info("Pre-migration: Adding leverage to trades table")
                         await self._db.execute("ALTER TABLE trades ADD COLUMN leverage REAL")
+                    if 'shadow' not in columns:
+                        self.logger.info("Pre-migration: Adding shadow flag to trades table")
+                        await self._db.execute("ALTER TABLE trades ADD COLUMN shadow INTEGER DEFAULT 0")
                     await self._db.commit()
             except Exception as e:
                 self.logger.error(f"Pre-migration error: {e}")
@@ -191,7 +195,7 @@ class DataManager:
                     exchange_order_id=?, symbol=?, side=?, qty=?, entry_price=?, 
                     sl_price=?, tp_price=?, sl_order_id=?, tp_order_id=?, 
                     pos_key=?, status=?, timeframe=?, pnl=?, meta_json=?, leverage=?,
-                    exit_price=?, exit_reason=?, exit_time=?
+                    exit_price=?, exit_reason=?, exit_time=?, shadow=?
                 WHERE id=?
             """, (
                 pos_data.get('exchange_order_id'), pos_data.get('symbol'), pos_data.get('side'),
@@ -200,6 +204,7 @@ class DataManager:
                 pos_data.get('status', 'OPENED'), pos_data.get('timeframe'), pos_data.get('pnl', 0), 
                 meta_json, pos_data.get('leverage'),
                 pos_data.get('exit_price'), pos_data.get('exit_reason'), pos_data.get('exit_time'),
+                pos_data.get('shadow', 0),
                 trade_id
             ))
             return trade_id
@@ -211,8 +216,8 @@ class DataManager:
                     profile_id, exchange_order_id, exchange, symbol, side, qty, 
                     entry_price, sl_price, tp_price, sl_order_id, tp_order_id, 
                     pos_key, status, timeframe, entry_time, pnl, meta_json, leverage,
-                    exit_price, exit_reason, exit_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    exit_price, exit_reason, exit_time, shadow
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pos_data.get('profile_id'), pos_data.get('exchange_order_id'), pos_data.get('exchange'), 
                 pos_data.get('symbol'), pos_data.get('side'), pos_data.get('qty', 0),
@@ -220,7 +225,8 @@ class DataManager:
                 pos_data.get('sl_order_id'), pos_data.get('tp_order_id'), pos_key,
                 pos_data.get('status', 'OPENED'), pos_data.get('timeframe'), entry_time, 
                 pos_data.get('pnl', 0), meta_json, pos_data.get('leverage'),
-                pos_data.get('exit_price'), pos_data.get('exit_reason'), pos_data.get('exit_time')
+                pos_data.get('exit_price'), pos_data.get('exit_reason'), pos_data.get('exit_time'),
+                pos_data.get('shadow', 0)
             ))
             return cursor.lastrowid
 
@@ -351,3 +357,25 @@ class DataManager:
             INSERT OR REPLACE INTO risk_metrics (profile_id, environment, metric_name, value, updated_at)
             VALUES (?, ?, ?, ?, ?)
         """, (profile_id, env, metric_name, value, now))
+    # ------------------------------------------------------------------------
+    # MARKET SENTIMENT
+    # ------------------------------------------------------------------------
+    async def upsert_market_sentiment(self, symbol: str, bms: float, zone: str, trend: float, momentum: float, volatility: float, dominance: float):
+        """Update or insert composite market sentiment score."""
+        now = int(time.time())
+        await self._execute_write("""
+            INSERT OR REPLACE INTO market_sentiment 
+            (symbol, bms, sentiment_zone, trend_score, momentum_score, volatility_score, dominance_score, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (symbol, bms, zone, trend, momentum, volatility, dominance, now))
+
+    async def get_latest_market_sentiment(self, symbol: str = 'BTC/USDT') -> Optional[dict]:
+        """Fetch the latest sentiment for a specific index or symbol."""
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT * FROM market_sentiment WHERE symbol = ?
+            ORDER BY updated_at DESC LIMIT 1
+        """, (symbol,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None

@@ -112,3 +112,21 @@ await send_telegram_message(telegram_msg)
   - `Probability > 0.8` -> Boost (+20% Confidence).
 - **Training**: SGD optimizer running on `signal_performance.json` snapshots.
 - **Data Source**: The Brain only trains on **CLOSED** trades that contain a valid market state snapshot at entry. Pending or currently active trades are never used for training.
+## 6. BTC Macro Signal (BMS) Integration
+The BMS acts as a "Supreme Filter," providing global market context to all trading profiles.
+
+### Architecture Layer
+- **Module**: `BTCAnalyzer` - Independent singleton providing composite sentiment.
+- **Normalization**: Scales everything to **0.0 - 1.0** (0.5 = Neutral) for seamless mathematical integration.
+- **Multi-Timeframe (MTF)**: Aggregates sentiment from **1h (30%)**, **4h (40%)**, and **1d (30%)** to provide a robust macro perspective.
+- **Persistence**: `market_sentiment` table in SQLite (1h resolution).
+- **Execution**: "BTC-First" loop in `bot.py` ensures BMS is updated before Altcoin analysis.
+
+### Supreme Filter & Active Shield
+1.  **Symmetrical Veto**:
+    *   **RED Zone (< 0.3)**: Vetoes ALL Long positions; Prioritizes Shorts.
+    *   **GREEN Zone (> 0.7)**: Vetoes ALL Short positions; Prioritizes Longs.
+2.  **Active Shield (Auto-Exit)**: Proactively closes open positions if the market sentiment shifts against them (e.g., closing Longs if BTC entering RED zone).
+3.  **Two-Tier Optimization**:
+    *   **Loop A (Internal BTC)**: Optimizes sub-weights (Trend, Momentum, Vol, Dom) by maximizing future return correlation.
+    *   **Loop B (Global Strategy)**: Integrates $W_{BTC}$ into the Altcoin Grid Search for optimal signal balancing.

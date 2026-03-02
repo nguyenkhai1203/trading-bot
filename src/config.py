@@ -37,7 +37,8 @@ BINANCE_SYMBOLS = [
     'BCH/USDT:USDT', 'ADA/USDT:USDT', 'SUI/USDT:USDT', 'LINK/USDT:USDT', 'AVAX/USDT:USDT', 
     'LTC/USDT:USDT', 'NEAR/USDT:USDT', 'FET/USDT:USDT', 'DOT/USDT:USDT', 'STX/USDT:USDT', 
     'TAO/USDT:USDT', 'FTM/USDT:USDT', 'OP/USDT:USDT', 'ARB/USDT:USDT', 'INJ/USDT:USDT', 
-    'TIA/USDT:USDT', 'JUP/USDT:USDT', 'SEI/USDT:USDT', 'FIL/USDT:USDT'
+    'TIA/USDT:USDT', 'JUP/USDT:USDT', 'SEI/USDT:USDT', 'FIL/USDT:USDT',
+    'BTC/USDT:USDT', 'BTCDOM/USDT:USDT'
 ]
 
 # Bybit supports unique gems like HYPE (Updated User Request: Top 20 Stable High-Vol)
@@ -45,7 +46,8 @@ BYBIT_SYMBOLS = [
     'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT',
     'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'TRX/USDT:USDT', 'AVAX/USDT:USDT', 'LINK/USDT:USDT',
     'DOT/USDT:USDT', 'POL/USDT:USDT', 'LTC/USDT:USDT', 'BCH/USDT:USDT', 'UNI/USDT:USDT',
-    'XLM/USDT:USDT', 'NEAR/USDT:USDT', 'ATOM/USDT:USDT', 'APT/USDT:USDT', 'ARB/USDT:USDT'
+    'XLM/USDT:USDT', 'NEAR/USDT:USDT', 'ATOM/USDT:USDT', 'APT/USDT:USDT', 'ARB/USDT:USDT',
+    'BTC/USDT:USDT'
 ]
 
 # Unified list for general manager usage (union of both)
@@ -127,3 +129,6 @@ MIN_WIN_RATE_TRAIN = 0.55      # Minimum win rate on training set to enable (55%
 MIN_WIN_RATE_TEST = 0.55       # Minimum win rate on test set to enable (55%)
 MAX_CONSISTENCY = 0.25         # Maximum consistency (train/test difference)
 MIN_CROSS_TF_SUPPORT = 1       # Minimum number of other timeframes that must be profitable
+
+# Optimization Settings
+OPTIMIZATION_INTERVAL = 43200  # 12 hours (seconds)

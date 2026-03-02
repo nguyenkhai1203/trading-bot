@@ -51,7 +51,7 @@ class TestWeightedScoringStrategy:
         # Expected Score = 4.0 + 3.0 = 7.0
         signal = strategy.get_signal(row, use_adaptive=False, use_brain=False)
         assert signal['side'] == 'BUY'
-        assert signal['confidence'] == 7.0
+        assert signal['confidence'] == 0.7
 
         row_sell = {
             'signal_EMA_9_cross_21_down': True,
@@ -60,7 +60,7 @@ class TestWeightedScoringStrategy:
         # Expected Score = 4.0 + 3.0 = 7.0
         signal_sell = strategy.get_signal(row_sell, use_adaptive=False, use_brain=False)
         assert signal_sell['side'] == 'SELL'
-        assert signal_sell['confidence'] == 7.0
+        assert signal_sell['confidence'] == 0.7
 
     def test_get_signal_adaptive_weights(self, strategy):
         """Verify adaptive weight adjustments via SignalTracker."""
@@ -72,7 +72,7 @@ class TestWeightedScoringStrategy:
         mock_tracker.adjust_weights.return_value = {'EMA_9_cross_21_up': 6.0}
         
         signal = strategy.get_signal(row, use_adaptive=True, use_brain=False, tracker=mock_tracker)
-        assert signal['confidence'] == 6.0
+        assert signal['confidence'] == 0.6
         mock_tracker.adjust_weights.assert_called_once()
 
     def test_get_signal_brain_veto(self, strategy):

@@ -36,6 +36,7 @@ from database import DataManager
 from data_manager import MarketDataManager
 from exchange_factory import create_adapter_from_profile
 from execution import Trader
+from analyzer import run_global_optimization
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -399,9 +400,8 @@ async def profiles_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         
     lines = ["👥 *Active Trading Profiles*", ""]
     for p in profiles:
-        status_emoji = "🟢" if p['is_active'] else "🔴"
         env_emoji = "🧪" if p['environment'].upper() == 'TEST' else "💰"
-        lines.append(f"{status_emoji} *{p['name']}* {env_emoji}")
+        lines.append(f"*{p['name']}* {env_emoji}")
         lines.append(f"   ID: `{p['id']}` | Exchange: {p['exchange']}")
         lines.append(f"   Strategy: {p['strategy_name']}")
         
@@ -483,9 +483,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     await query.edit_message_text(msg, parse_mode='Markdown')
 
-import asyncio
-
-# ... (imports) ...
 
 # ============== AUTO REPORT ==============
 async def periodic_report_loop(application: Application):

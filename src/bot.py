@@ -39,6 +39,7 @@ from data_manager import MarketDataManager
 from strategy import WeightedScoringStrategy 
 from risk_manager import RiskManager
 from execution import Trader
+from btc_analyzer import BTCAnalyzer
 from notification import (
     send_telegram_message,
     format_pending_order,
@@ -94,14 +95,14 @@ class TradingBot:
         self.signal_tracker = signal_tracker
         self.balance_tracker = balance_tracker
         
-        self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe, exchange=trader.exchange_name) 
+        self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe, exchange=trader.exchange_name, db=data_manager.db) 
         self.logger = logging.getLogger(f"Bot.{trader.exchange_name}.{symbol}.{timeframe}")
         self.running = True
         self.last_eval_timestamp = 0 # Prevent log spam for same candle
         self.last_cd_log_time = 0 # Prevent log spam for cooldowns
 
-    async def run_monitoring_cycle(self):
-        """Monitors SL/TP, trailing stops, and signal reversals."""
+    async def run_monitoring_cycle(self, bms_score: Optional[float] = None, bms_zone: Optional[str] = None):
+        """Monitors SL/TP, trailing stops, and signal reversals + BMS Active Shield."""
         try:
             df = self.data_manager.get_data(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
             if df is None or df.empty: return False
@@ -110,10 +111,77 @@ class TradingBot:
             current_price = float(last_row['close'])
             pos_key = self.trader._get_pos_key(self.symbol, self.timeframe)
             
-            # Use Trader's dedicated monitoring logic where possible
-            # Here we provide high-level glue code
-            
-            # 1. Check Pending Invalidation (Signal Reversal)
+            # --- 0. BMS Intelligent Shield (Macro-Micro Confirmation) ---
+            pos = self.trader.active_positions.get(pos_key)
+            if pos and pos.get('status') == 'filled':
+                side = pos['side']
+                is_shadow = pos.get('shadow') == 1
+                is_veto = (bms_zone == 'RED' and side == 'BUY') or (bms_zone == 'GREEN' and side == 'SELL')
+                
+                if is_veto:
+                    # Get Neural Brain score for confirmation
+                    df_scan = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
+                    neural_score = 0.5
+                    if df_scan is not None:
+                        sig = self.strategy.get_signal(df_scan.iloc[-1], tracker=self.signal_tracker, bms_score=bms_score, bms_zone=bms_zone)
+                        neural_score = sig.get('neural_score', 0.5)
+
+                    # TIER 1: Hard Exit (Macro Veto + Brain Confirmation < 0.4)
+                    if neural_score < 0.4:
+                        prefix = "👻 [SHADOW]" if is_shadow else "🛡️ [HARD SHIELD]"
+                        msg = f"{prefix} {self.symbol} {side} closed. BMS: {bms_zone}, Brain: {neural_score:.2f} (CONFIRMED)"
+                        print(f"🚨 {msg}")
+                        await self.trader.force_close_position(pos_key, reason=f"BMS_{bms_zone} + Brain_Confirmation")
+                        await send_telegram_message(msg)
+                        return True
+                    
+                    # TIER 2: Soft Shield (Macro Veto BUT Brain > 0.4 -> Tighten SL)
+                    else:
+                        entry_price = float(pos['entry_price'])
+                        current_sl = float(pos.get('sl', 0))
+                        
+                        # Logic: Move SL to 50% closer to current price, but at least to Break-even if in profit
+                        if side == 'BUY':
+                            # If in profit: Entry + 0.3%
+                            be_sl = entry_price * 1.003
+                            # If in loss: Move SL halfway to current price
+                            tight_sl = current_price - (abs(current_price - current_sl) * 0.5)
+                            new_sl = max(be_sl, tight_sl) if current_price > entry_price else tight_sl
+                        else:
+                            be_sl = entry_price * 0.997
+                            tight_sl = current_price + (abs(current_price - current_sl) * 0.5)
+                            new_sl = min(be_sl, tight_sl) if current_price < entry_price else tight_sl
+                        
+                        # Only update if new SL is "tighter" than current
+                        is_tighter = (side == 'BUY' and new_sl > current_sl) or (side == 'SELL' and (new_sl < current_sl or current_sl == 0))
+                        if is_tighter:
+                            prefix = "👻 [SHADOW]" if is_shadow else "🛡️ [SOFT SHIELD]"
+                            msg = f"{prefix} {self.symbol} {side} SL tightened. BMS: {bms_zone}, Brain: {neural_score:.2f} (HOLDING)"
+                            print(f"⚠️ {msg}")
+                            await self.trader.modify_sl_tp(self.symbol, self.timeframe, new_sl=new_sl)
+                            await send_telegram_message(msg)
+                            # We don't return True here because the position is still open
+                
+            # --- 1. SL/TP Simulation for Shadow Trades ---
+            if pos and pos.get('status') == 'filled' and pos.get('shadow') == 1:
+                sl = pos.get('sl')
+                tp = pos.get('tp')
+                exit_reason = None
+                if side == 'BUY' and ((sl and current_price <= sl) or (tp and current_price >= tp)):
+                    exit_reason = 'SL' if current_price <= sl else 'TP'
+                elif side == 'SELL' and ((sl and current_price >= sl) or (tp and current_price <= tp)):
+                    exit_reason = 'SL' if current_price >= sl else 'TP'
+                
+                if exit_reason:
+                    from notification import send_telegram_message
+                    pnl = (current_price - float(pos['entry_price'])) * float(pos['qty']) * (1 if side == 'BUY' else -1)
+                    msg = f"👻 [SHADOW EXIT] {self.symbol} {side} closed via {exit_reason} @ {current_price:.4f}. PnL: ${pnl:.2f}"
+                    print(f"👻 {msg}")
+                    await self.trader.remove_position(self.symbol, self.timeframe, exit_price=current_price, exit_reason=exit_reason)
+                    await send_telegram_message(msg)
+                    return True
+
+            # --- 2. Check Pending Invalidation (Signal Reversal) ---
             pending_pos = self.trader.active_positions.get(pos_key)
             if pending_pos and pending_pos.get('status') == 'pending':
                 # FIX-A: Minimum pending time — give the order at least 2 minutes before
@@ -124,7 +192,7 @@ class TradingBot:
                 if pending_age >= MIN_PENDING_SECS:
                     df_scan = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
                     if df_scan is not None:
-                        sig = self.strategy.get_signal(df_scan.iloc[-1], tracker=self.signal_tracker)
+                        sig = self.strategy.get_signal(df_scan.iloc[-1], tracker=self.signal_tracker, bms_score=bms_score, bms_zone=bms_zone)
                         opp_side = 'SELL' if pending_pos['side'] == 'BUY' else 'BUY'
                         # FIX-C: Only cancel on STRONG reversal (opposite side + confidence >= 0.4).
                         # Do NOT cancel just because signal turned neutral/None — that's normal noise.
@@ -136,20 +204,18 @@ class TradingBot:
                             await self.trader.cancel_pending_order(pos_key, reason="Strong signal reversal")
                             return True
 
-            # 2. Check Active Position
-            pos = self.trader.active_positions.get(pos_key)
+            # --- 2. Check Active Position (Signal Reversal) ---
             if pos and pos.get('status') == 'filled':
                 side = pos['side']
                 entry_price_raw = pos.get('entry_price')
                 if entry_price_raw is None:
                     return False  # Missing entry price, skip PnL calc
                 entry_price = float(entry_price_raw)
-                leverage = pos.get('leverage', 1)
                 
                 # Signal Reversal for Active Position
                 df_scan = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
                 if df_scan is not None:
-                    sig = self.strategy.get_signal(df_scan.iloc[-1], tracker=self.signal_tracker)
+                    sig = self.strategy.get_signal(df_scan.iloc[-1], tracker=self.signal_tracker, bms_score=bms_score, bms_zone=bms_zone)
                     opp_side = 'SELL' if side == 'BUY' else 'BUY'
                     if sig['side'] == opp_side and sig['confidence'] * 10 >= 3.0: # Hardcoded exit score 3.0
                         await self.trader.force_close_position(pos_key, reason="Signal flipped")
@@ -171,11 +237,12 @@ class TradingBot:
                         await self.trader.remove_position(self.symbol, self.timeframe, exit_price=current_price, exit_reason=exit_reason)
                         return True
             return False
+            return False
         except Exception as e:
             self.logger.error(f"Error in monitor cycle: {e}")
             return False
 
-    async def get_new_entry_signal(self):
+    async def get_new_entry_signal(self, bms_score=None, bms_zone=None):
         """Evaluate strategy for entry."""
         exchange = self.trader.exchange_name
         sym = self.symbol
@@ -202,7 +269,7 @@ class TradingBot:
             print(f"📭 [{exchange}] [{sym}/{tf}] No feature data available")
             return None
 
-        signal_data = self.strategy.get_signal(df.iloc[-1], tracker=self.signal_tracker)
+        signal_data = self.strategy.get_signal(df.iloc[-1], tracker=self.signal_tracker, bms_score=bms_score, bms_zone=bms_zone)
         side = signal_data.get('side')
         conf = signal_data.get('confidence', 0.0)
         current_ts_str = str(df.iloc[-1]['timestamp'])
@@ -224,7 +291,7 @@ class TradingBot:
             self.last_eval_timestamp = current_ts_str
         return None
 
-    async def execute_entry(self, signal_data, equity):
+    async def execute_entry(self, signal_data, equity, shadow_mode=False):
         """Execute trade based on signal."""
         try:
             side = signal_data['side']
@@ -258,7 +325,7 @@ class TradingBot:
                 order_type='limit' if config.USE_LIMIT_ORDERS else 'market',
                 price=price * (1 - config.PATIENCE_ENTRY_PCT) if side == 'BUY' and config.USE_LIMIT_ORDERS else price * (1 + config.PATIENCE_ENTRY_PCT) if side == 'SELL' and config.USE_LIMIT_ORDERS else None,
                 sl=sl_price, tp=tp_price, leverage=target_lev, signals_used=signal_data.get('comment', ''),
-                entry_confidence=conf, snapshot=snapshot
+                entry_confidence=conf, snapshot=snapshot, shadow_mode=shadow_mode
             )
         except Exception as e:
             self.logger.error(f"Execution error: {e}")
@@ -350,10 +417,30 @@ async def main():
 
     # 3. Main Loop
     last_purge_time = 0
+    last_bms_zone = None
+    
+    # Initialize optimization timer from DB
+    last_opt_val = await db.get_risk_metric(0, 'last_optimization_time', env_str)
+    last_optimization_time = float(last_opt_val) if last_opt_val else 0
+    
     try:
         while True:
             curr_time = time.time()
             
+            # Periodic Global Optimization (Loop A + Loop B) - Every 12h
+            if curr_time - last_optimization_time > getattr(config, 'OPTIMIZATION_INTERVAL', 43200):
+                print(f"\n🔄 [{env_str}] Starting periodic global optimization (12h cycle)...")
+                try:
+                    from analyzer import run_global_optimization
+                    # Trigger full optimization including data download
+                    await run_global_optimization(download=True)
+                    
+                    last_optimization_time = curr_time
+                    await db.set_risk_metric(0, 'last_optimization_time', curr_time, env_str)
+                    print(f"✨ [{env_str}] Global optimization complete and timestamp updated.")
+                except Exception as e:
+                    print(f"⚠️ Optimization error: {e}")
+
             # Periodic Database Maintenance (Once per 24h)
             if curr_time - last_purge_time > 86400:
                 print("🧹 Running periodic database maintenance...")
@@ -365,11 +452,37 @@ async def main():
             
             balance_tracker.reset_reservations()
             
-            # A. Update Market Data
+            # A. BTC-First Sequence: Update Market Sentiment
+            await manager.update_data(['BTC/USDT:USDT', 'BTCDOM/USDT:USDT'], ['1h'], force=False)
+            
+            btc_analyzer = BTCAnalyzer(manager, db)
+            bms_data = await btc_analyzer.update_sentiment('BTC/USDT:USDT')
+            
+            # --- BMS Zone Change Notification ---
+            if bms_data:
+                new_zone = bms_data['zone']
+                if last_bms_zone and new_zone != last_bms_zone:
+                    zone_emoji = {"RED": "🔴 RED (VETO)", "YELLOW": "🟡 YELLOW (NEUTRAL)", "GREEN": "🟢 GREEN (BULLISH)"}.get(new_zone, new_zone)
+                    msg = (
+                        f"📊 *BTC Market Sentiment Change*\n"
+                        f"Zone: {zone_emoji}\n"
+                        f"Score: `{bms_data['bms']:.1f}/100`\n"
+                        f"Trend: `{bms_data['trend']:.2f}` | Mom: `{bms_data['momentum']:.2f}`"
+                    )
+                    await send_telegram_message(msg)
+                    print(f"🔔 [BMS] Zone changed to {new_zone}")
+                last_bms_zone = new_zone
+
+            # Fetch the sentiment for use in Altcoin scoring
+            latest_sentiment = await db.get_latest_market_sentiment('BTC/USDT:USDT')
+            bms_score = latest_sentiment.get('bms') if latest_sentiment else None
+            bms_zone = latest_sentiment.get('sentiment_zone') if latest_sentiment else None
+            
+            # B. Update Altcoin Market Data
             await manager.update_tickers(config.TRADING_SYMBOLS)
             updated = await manager.update_data(config.TRADING_SYMBOLS, config.TRADING_TIMEFRAMES)
             
-            # B. Process each profile
+            # C. Process each profile
             for pg in profile_groups:
                 p = pg['profile']
                 trader = pg['trader']
@@ -427,15 +540,15 @@ async def main():
                 symbol_groups = defaultdict(list)
                 for b in bots: symbol_groups[b.symbol].append(b)
                 
-                async def run_profile_symbol(symbol, s_bots, t, b_track, p_id):
-                    # Monitoring All
-                    await asyncio.gather(*[sb.run_monitoring_cycle() for sb in s_bots])
+                async def run_profile_symbol(symbol, s_bots, t, b_track, p_id, bms_s=None, bms_z=None):
+                    # Monitoring All (BMS Active Shield)
+                    await asyncio.gather(*[sb.run_monitoring_cycle(bms_score=bms_s, bms_zone=bms_z) for sb in s_bots])
                     
                     # Entry competition
                     async with t._get_lock(symbol):
                         if await t.has_any_symbol_position(symbol): return
                         
-                        signals = await asyncio.gather(*[sb.get_new_entry_signal() for sb in s_bots])
+                        signals = await asyncio.gather(*[sb.get_new_entry_signal(bms_score=bms_s, bms_zone=bms_z) for sb in s_bots])
                         valid = [(s_bots[i], sig) for i, sig in enumerate(signals) if sig]
                         if not valid: return
                         
@@ -443,9 +556,12 @@ async def main():
                         avail = b_track.get_available(t.exchange_name, p_id)
                         if avail > 10: # Min trade equity
                             await best_bot.execute_entry(best_sig, avail)
+                        else:
+                            # Shadow/Signal-only mode when insufficient balance
+                            await best_bot.execute_entry(best_sig, avail, shadow_mode=True)
 
                 # Parallel per symbol
-                tasks = [run_profile_symbol(s, sb, trader, balance_tracker, p['id']) for s, sb in symbol_groups.items()]
+                tasks = [run_profile_symbol(s, sb, trader, balance_tracker, p['id'], bms_score, bms_zone) for s, sb in symbol_groups.items()]
                 await asyncio.gather(*tasks)
 
             # Heartbeat print to show bot is alive and moving

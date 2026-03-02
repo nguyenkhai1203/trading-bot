@@ -40,17 +40,22 @@ SHORT_KEYWORDS = {
 
 
 class WeightedScoringStrategy(Strategy):
-    def __init__(self, symbol="default", timeframe="1h", exchange=None):
+    def __init__(self, symbol="default", timeframe="1h", exchange=None, db=None):
         super().__init__(name=f"WeightedScoringStrategy_{symbol}_{timeframe}")
         self.symbol = symbol
         self.timeframe = timeframe
         self.exchange = exchange
-        import logging
+        self.db = db
         self.logger = logging.getLogger(__name__)
         self.config_mtime = 0  # Track config file modification time
         self.config_version = 0  # Version number for positions to reference
         self.config_data = {}  # Initialize early to prevent AttributeError in analyzer
         self.weights = self.load_weights(symbol, timeframe, exchange)
+        
+        # BMS Global Weights (Default 60/40)
+        global_risk = self.config_data.get('risk', {})
+        self.w_btc = global_risk.get('w_btc', 0.6)
+        self.w_alt = global_risk.get('w_alt', 0.4)
         
         # RL BRAIN (Input Size = 17 Normalized Features v4.0)
         try:
@@ -245,7 +250,7 @@ class WeightedScoringStrategy(Strategy):
             "breakout_below_support":1.1,   # signal_breakout_below_support
         }
 
-    def get_signal(self, row, tracker=None, use_adaptive=True, use_brain=True):
+    def get_signal(self, row, tracker=None, use_adaptive=True, use_brain=True, bms_score: Optional[float] = None, bms_zone: Optional[str] = None):
         """
         Calculates LONG/SHORT score based on DYNAMIC signals from config.
         Checks if 'signal_{key}' exists in row and is True.
@@ -254,6 +259,8 @@ class WeightedScoringStrategy(Strategy):
             row: Single row of features (pandas Series or dict)
             use_adaptive: If True, apply adaptive weight adjustments from signal tracker
             use_brain: If True, include Neural Brain scores
+            bms_score: Proactive BTC Macro Signal score (0-100)
+            bms_zone: Sentiment zone ('RED', 'YELLOW', 'GREEN')
         """
         # Skip if explicitly disabled in config
         if not self.config_data.get('enabled', True):
@@ -294,18 +301,45 @@ class WeightedScoringStrategy(Strategy):
         thresholds = self.config_data.get('thresholds', {'entry_score': 5.0, 'exit_score': 2.5})
         entry_thresh = thresholds['entry_score']
         
+        # 3. Combine with BMS (BTC Macro Signal)
+        final_score_long = score_long
+        final_score_short = score_short
+        
+        if bms_score is not None:
+            # Formula: Final_Score = (Alt_Signal_Score * W_Alt) + (BMS * W_BTC)
+            # Heuristic scale: 0-10+, BMS scale: 0.0-1.0. Scale BMS to 0-10.
+            bms_scaled_long = bms_score * 10.0
+            bms_scaled_short = (1.0 - bms_score) * 10.0
+            
+            # Adjustment weights (Dynamic in Vùng Xanh)
+            w_btc_adj = self.w_btc
+            if bms_zone == 'GREEN':
+                w_btc_adj *= 1.2 # Bullish Confirmed boost
+            
+            w_alt_adj = 1.0 - w_btc_adj
+            
+            # Combined scores
+            final_score_long = (score_long * w_alt_adj) + (bms_scaled_long * w_btc_adj)
+            final_score_short = (score_short * w_alt_adj) + (bms_scaled_short * w_btc_adj)
+            
+            # --- TRAFFIC LIGHT VETO ---
+            if bms_zone == 'RED':
+                # Region RED: Strong Veto on LONGs, Prioritize SHORTs
+                final_score_long = 0.0
+                reasons_long.append("BMS_VETO_RED")
+            elif bms_zone == 'GREEN':
+                # Region GREEN: Strong Veto on SHORTs, Prioritize LONGs
+                final_score_short = 0.0
+                reasons_short.append("BMS_VETO_GREEN")
+
+        # Update scores used for final trigger
+        score_long = final_score_long
+        score_short = final_score_short
+
         confidence = 0.0
         signal = {'side': 'SKIP', 'confidence': 0.0, 'comment': 'Wait', 'snapshot': None}
         
         # === NEURAL BRAIN INTEGRATION ===
-        # Skip brain inference during backtests for maximum speed
-        if not use_brain:
-            if score_long >= entry_thresh:
-                signal = {'side': 'BUY', 'confidence': score_long, 'comment': f'Score {score_long:.1f}', 'snapshot': None}
-            elif score_short >= entry_thresh:
-                signal = {'side': 'SELL', 'confidence': score_short, 'comment': f'Score {score_short:.1f}', 'snapshot': None}
-            return signal
-
         # Extract features for brain (must match NeuralBrain input size = 17)
         # Handle missing keys safely with defaults
         snapshot = {
@@ -327,23 +361,26 @@ class WeightedScoringStrategy(Strategy):
         feature_vector = list(snapshot.values())
         
         # Add 5 dynamic context placeholders for v4.0 (Defaults for NEW trades)
-
-        # Case: New trade - SL original = current target SL, moves = 0, pnl = 0
-        sl_orig = row.get('sl', row.get('close', 0))
-        entry = row.get('close', 1)
-        side_mult = 1 # We don't know side yet in this logic block, but we can assume BUY for scaling
-        # Actually, it's better to just use neutral 0.5 for placeholders at entry
         feature_vector.extend([0.5, 0.5, 0.0, 0.0, 0.0]) # [dist_orig, dist_final, moves, tightened, max_pnl]
         
         neural_score = 0.5
         if self.use_brain and use_brain:
-
             try:
                 # Replace NaNs with defaults just in case
                 clean_vector = [0.5 if (pd.isna(x) if hasattr(pd, 'isna') else x is None) else x for x in feature_vector]
                 neural_score = self.brain.predict(clean_vector)
             except Exception as e:
                 print(f"⚠️ Brain error: {e}")
+
+        # Skip brain inference during backtests for maximum speed (Neural score 0.5 default)
+        if not use_brain:
+            if score_long >= entry_thresh:
+                conf = min(score_long / 10.0, 1.0)
+                signal = {'side': 'BUY', 'confidence': conf, 'comment': f'Score {score_long:.1f}', 'snapshot': None, 'neural_score': 0.5}
+            elif score_short >= entry_thresh:
+                conf = min(score_short / 10.0, 1.0)
+                signal = {'side': 'SELL', 'confidence': conf, 'comment': f'Score {score_short:.1f}', 'snapshot': None, 'neural_score': 0.5}
+            return signal
         
         # Merge Heuristic Score + Neural Score
         # Strategy: Brain acts as a Validator (Filter)

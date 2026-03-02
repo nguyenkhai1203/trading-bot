@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS trades (
     exit_reason TEXT,
     meta_json TEXT,
     leverage REAL,
+    shadow INTEGER DEFAULT 0,
     FOREIGN KEY(profile_id) REFERENCES profiles(id)
 );
 CREATE INDEX IF NOT EXISTS idx_trades_active ON trades(status, exchange);
@@ -71,4 +72,15 @@ CREATE TABLE IF NOT EXISTS risk_metrics (
     updated_at INTEGER,
     PRIMARY KEY (profile_id, environment, metric_name),
     FOREIGN KEY(profile_id) REFERENCES profiles(id)
+);
+
+CREATE TABLE IF NOT EXISTS market_sentiment (
+    symbol TEXT PRIMARY KEY,
+    bms REAL NOT NULL,               -- Composite BTC Macro Signal (0-100)
+    sentiment_zone TEXT,             -- 'RED', 'YELLOW', 'GREEN'
+    trend_score REAL,                -- Sn: Trend
+    momentum_score REAL,             -- Sn: Momentum
+    volatility_score REAL,           -- Sn: Volatility
+    dominance_score REAL,            -- Sn: Dominance
+    updated_at INTEGER NOT NULL      -- Timestamp (seconds)
 );

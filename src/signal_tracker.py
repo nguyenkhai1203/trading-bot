@@ -71,7 +71,7 @@ class SignalTracker:
                  pnl_usdt=None, entry_price=None, exit_price=None,
                  qty=None, exit_reason=None, entry_time=None, exit_time=None,
                  sl_original=None, sl_final=None, sl_move_count=0,
-                 sl_tightened=False, max_pnl_pct=0, pos_key=None, leverage=None):
+                 sl_tightened=False, max_pnl_pct=0, pos_key=None, leverage=None, shadow=0):
         """
         Record a completed trade for learning and persistence.
         """
@@ -94,6 +94,7 @@ class SignalTracker:
             'status': 'CLOSED',
             'pos_key': pos_key,
             'leverage': leverage,
+            'shadow': shadow,
             'meta': {
                 'sl_original': sl_original,
                 'sl_final': sl_final,
