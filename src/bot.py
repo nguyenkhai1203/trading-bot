@@ -383,8 +383,20 @@ async def main():
                 
                 # 0. Periodic State Sync (Resolve external closures/ghosts)
                 if not trader.dry_run:
-                    # Run sync every cycle for high accuracy, it handles rate limits via _execute_with_timestamp_retry
+                    # 0.1 Basic Sync (Fast ghost detection) - Every cycle (throttled to 30s internally)
                     await trader.sync_with_exchange()
+                    
+                    # 0.2 Full Reconciliation (Fix missing SL/TP, adopt orphans) - Every 10 minutes
+                    if curr_time - trader._last_reconcile_time > 600:
+                        trader.logger.info("📡 [PERIODIC] Starting full reconciliation...")
+                        await trader.reconcile_positions(auto_fix=True)
+                        trader._last_reconcile_time = curr_time
+                        
+                    # 0.3 Deep History Sync (Scan for missed exits) - Every 1 hour
+                    if curr_time - trader._last_history_sync_time > 3600:
+                        trader.logger.info("🔄 [PERIODIC] Starting deep history sync...")
+                        await trader.deep_history_sync(lookback_hours=24)
+                        trader._last_history_sync_time = curr_time
 
                 # 1. Update Balance & Check Circuit Breaker
                 bal = 0.0
@@ -446,9 +458,14 @@ async def main():
     except KeyboardInterrupt:
          print("Stopping bots...")
     finally:
-        await manager.close()
+        print("🔌 Closing system resources...")
+        if manager:
+            await manager.close()
         for pg in profile_groups:
              await pg['trader'].close()
+        # Close the global DB connections
+        await DataManager.clear_instances()
+        print("✅ All resources released.")
 
 if __name__ == "__main__":
     asyncio.run(main())

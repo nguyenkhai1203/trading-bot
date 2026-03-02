@@ -67,11 +67,17 @@ The system employs a dual-logic approach to manage active positions based on bot
 ## 3. Position & Order Synchronization
 Philosophy: **The Exchange is the Source of Truth.**
 
-### Deep Sync Heartbeat
-- **sync_with_exchange()**: A lightweight, high-frequency reconciliation loop running every bot cycle. It proactively detects "Ghost" positions (ACTIVE in DB but Size=0 on exchange) and resolves them immediately.
-- **Price-Crossed Heuristic**: If a TP/SL order is missing and the market price has crossed the target level, the bot prioritizes fill-verification via `fetch_my_trades`.
-- **Authoritative Reality**: The database remains the Single Source of Truth for metadata. The standardized `sl_order_id` and `tp_order_id` keys in memory and DB ensure 1:1 mapping with exchange orders.
-- **Airtight Finalization**: Uses `log_trade` + `_clear_db_position` for atomic state transitions to `CLOSED` or `CANCELLED`.
+### Tiered State Reconciliation
+The system employs a three-tier defense against state drift and historical inconsistency:
+1.  **Ghost Detection (60s)**: `sync_with_exchange()` runs every minute to detect positions that were closed externally (TP/SL). It uses a price-crossing heuristic and `fetch_positions` to resolve positions immediately.
+2.  **Full Reconciliation (10m)**: `reconcile_positions()` runs every 10 minutes to fix missing SL/TP orders, adopt orphans, and ensure 1:1 parity between DB and Exchange.
+3.  **Deep History Sync (1h)**: `deep_history_sync()` scans the last 24-48 hours of actual trade history on the exchange to find any exits that were missed by the real-time loops.
+
+### Performance & Multi-Profile Safety
+- **Shared Account Cache**: `Trader` uses a class-level `_shared_account_cache` to track account-wide positions and orders across all profiles. This prevents "blind spots" where Profile B enters a trade because it hasn't yet synced Profile A's new entry.
+- **Request Throttling**: Readiness checks (`has_any_symbol_position`) now use the 60s local/shared cache instead of redundant API calls, reducing total requests by ~80%.
+- **Authoritative Reality**: The database is the primary source of truth for metadata, but the Exchange is the absolute source for state. Standardized `sl_order_id` and `tp_order_id` keys ensure 1:1 mapping.
+- **Airtight Finalization**: Uses `log_trade` + `_clear_db_position` for atomic state transitions.
 - **History Sync Script**: `scripts/sync_history.py` allows for manual or batch reconciliation of the last 24-48 hours to fix legacy data discrepancies.
 
 ---

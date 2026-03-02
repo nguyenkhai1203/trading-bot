@@ -49,13 +49,21 @@ traders = {} # {profile_id: Trader}
 profiles = [] # List of profile dicts
 
 
-async def close():
+async def close_resources():
     """Close module-level DB and data manager connectors."""
+    global data_manager, db, traders
+    logging.info("🔌 Closing Telegram Bot resources...")
     try:
         if data_manager:
             await data_manager.close()
-    except Exception:
-        pass
+        
+        for p_id, t in traders.items():
+            await t.close()
+            
+        await DataManager.clear_instances()
+        logging.info("✅ Telegram resources released.")
+    except Exception as e:
+        logging.error(f"Error during close: {e}")
 
 # ============== STATUS MESSAGE ==============
 # ============== STATUS MESSAGE ==============
@@ -571,9 +579,22 @@ def main():
     except telegram.error.Conflict:
         print("⚠️ Another bot instance running! Stop it or create new token.")
         sys.exit(1)
+    except KeyboardInterrupt:
+        print("Stopping Telegram bot...")
     except Exception as e:
         print(f"Error: {e}")
-        sys.exit(1)
+    finally:
+        # Run async cleanup
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If loop is still running (though run_polling usually stops it)
+                loop.run_until_complete(close_resources())
+            else:
+                asyncio.run(close_resources())
+        except Exception:
+            pass
+        sys.exit(0)
 
 if __name__ == '__main__':
     main()

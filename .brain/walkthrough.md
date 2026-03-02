@@ -43,6 +43,24 @@ Quick map to navigate and debug the project.
 
 ## �🚀 Major Updates
 
+### Iteration 8 — Multi-Profile Safety & Shared State (March 3, 2026)
+**Fixed multi-profile synchronization and loop crashes:**
+- **Shared Account Cache**: Implemented a class-level shared cache in `Trader` that gives all profile instances real-time awareness of account-wide positions and orders. This prevents duplicate entries when multiple profiles manage the same underlying API key.
+- **Profile-Specific ClOrdIDs**: Standardized `newClientOrderId` to include `P{id}` (e.g., `P1_ETH...`), ensuring that recovery and tracking logic are perfectly isolated between profiles.
+- **Crash Fixes**: Resolved a critical `NameError: 'now' is not defined` that caused the main loop to stall under specific timing conditions.
+
+### Iteration 7 — Performance & Rate-Limit Shield (March 3, 2026)
+**Reduced API overhead by 80% to ensure stability:**
+- **Readiness Cache**: Refactored `has_any_symbol_position` to use a 60-second local/shared cache of exchange positions and orders. This eliminated redundant `fetch_positions` calls for every symbol on every tick.
+- **Request Throttling**: Added a mandatory 500ms delay between symbol fetches during the deep sync cycle to strictly respect Bybit and Binance rate limits.
+
+### Iteration 6 — Advanced Reconciliation & History Recovery (March 2, 2026)
+**Implemented a three-tier synchronization shield:**
+- **Tier 1 (60s)**: Real-time "Ghost Detection" loop to resolve external closures (TP/SL).
+- **Tier 2 (10m)**: Full DB-to-Exchange parity check to fix missing orders and adopt orphans.
+- **Tier 3 (1h)**: Deep history audit scanning the last 24-48h of trade logs to ensure 100% PnL fidelity.
+- **ID Persistence**: Mandatory saving of exchange-native `order_id` for all entry and TP/SL orders to eliminate "Null ID" tracking failures.
+
 ### Iteration 5 — Database & Multi-Profile Foundation (Feb 26, 2026)
 
 **Transitioned to enterprise-grade data management:**

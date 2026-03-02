@@ -58,6 +58,10 @@ class ExchangeLoggerAdapter(logging.LoggerAdapter):
 SL_COOLDOWN_SECONDS = 2 * 3600  # 2 hours cooldown after stop loss
 
 class Trader:
+    # Class-level shared cache for account-wide status to prevent multi-profile order duplication
+    # Format: {account_key: {'pos_symbols': set(), 'open_order_symbols': set(), 'timestamp': 0}}
+    _shared_account_cache = {}
+
     def __init__(self, exchange, db, profile_id, profile_name="Unknown", signal_tracker=None, dry_run=True, data_manager=None):
         self.exchange = exchange
         self.db = db
@@ -98,14 +102,28 @@ class Trader:
         self.default_leverage = LEVERAGE
         self._missing_order_counts = {} # { order_id: missing_cycle_count }
         self._pos_action_timestamps = {} # { pos_key_action: timestamp_ms } to prevent rapid spam
+        self._last_sync_time = 0       # Throttling for sync_with_exchange (60s)
+        self._last_reconcile_time = 0  # Throttling for reconcile_positions (10m)
+        self._last_history_sync_time = 0 # Throttling for history_sync (1h)
         
+        # Performance Cache for account-level state (populated by sync_with_exchange)
+        self._last_ex_pos_map = {}            # {norm_symbol: position_data}
+        self._last_ex_open_order_ids = set()      # {order_id_string}
+        self._last_ex_open_order_symbols = set()  # {norm_symbol}
         
-        # Public Mode detection now handled by adapter.permissions
-        # self.is_public_binance = ... (Removed, use self.exchange.is_public_only)
+        # Unique identifier for this exchange account (shared across profiles)
+        self.account_key = self._get_account_key()
         
-        # ...
-
-        # Removed buggy legacy migration block that was stripping prefixes and causing infinite zombie loops
+    def _get_account_key(self):
+        """Uniquely identify the account to share state across multiple profiles."""
+        api_key = "DRY"
+        if not self.dry_run:
+            try:
+                # adapter.exchange.exchange is the underlying CCXT instance
+                api_key = getattr(self.exchange.exchange, 'apiKey', str(self.profile_id))
+            except:
+                api_key = str(self.profile_id)
+        return f"{self.exchange_name}_{api_key}"
 
 
     def _get_lock(self, symbol):
@@ -178,8 +196,8 @@ class Trader:
                     "status": mapped_status,
                     "leverage": p.get('leverage', self.default_leverage),
                     "order_id": p.get('exchange_order_id'),
-                "sl_order_id": p.get('sl_order_id'),
-                "tp_order_id": p.get('tp_order_id'),
+                    "sl_order_id": p.get('sl_order_id'),
+                    "tp_order_id": p.get('tp_order_id'),
                     "timestamp": p.get('entry_time', 0),
                     "signals_used": meta.get('signals_used', []),
                     "entry_confidence": meta.get('entry_confidence', 0.5),
@@ -350,7 +368,7 @@ class Trader:
             
         # 2. Authoritative path: Targeted fetch
         try:
-            o_info = await self.exchange.fetch_order(order_id, symbol)
+            o_info = await self._execute_with_timestamp_retry(self.exchange.fetch_order, order_id, symbol)
             status = o_info.get('status', '').lower()
             if status in ['open', 'untouched', 'new', 'partially_filled']:
                 self._missing_order_counts[order_id] = 0
@@ -591,36 +609,36 @@ class Trader:
         """
         Checks if ANY position or order for the symbol exists (across any timeframe).
         This is a 'Readiness Check' used to prevent dual-orders and timeframe conflicts.
+        Now optimized to use cached exchange state from sync_with_exchange.
         """
         norm_target = self._normalize_symbol(symbol)
         
-        # 1. Check local storage (Active Positions)
+        # 1. Check local memory storage (Most authoritative for bot's own trades)
         for p in self.active_positions.values():
             if self._normalize_symbol(p.get('symbol', '')) == norm_target:
                 return True
         
-        # 2. Check local storage (Pending Orders)
-        for p in self.pending_orders.values():
-            if self._normalize_symbol(p.get('symbol', '')) == norm_target:
+        for o in self.pending_orders.values():
+            if self._normalize_symbol(o.get('symbol', '')) == norm_target:
                 return True
         
-        # 3. Check Exchange (Account Level) - Only if live
-        if not self.dry_run and self.exchange.can_trade:
-             try:
-                 # Check Positions
-                 live_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
-                 for pos in live_positions:
-                     if self._normalize_symbol(pos.get('symbol', '')) == norm_target and float(pos.get('contracts', 0)) > 0:
-                         return True
-                 
-                 # Check Open Orders
-                 live_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
-                 if live_orders:
-                     return True
-                     
-             except Exception as e:
-                self.logger.error(f"Error checking exchange state for {symbol}: {e}")
-        
+        # 2. Check cached Exchange State (populated every ~60s by sync_with_exchange)
+        # This catches manual trades or orphaned orders without spamming the API for every symbol.
+        if not self.dry_run:
+            # Check profile-local cache (fastest)
+            if norm_target in self._last_ex_pos_map:
+                return True
+            if norm_target in self._last_ex_open_order_symbols:
+                return True
+                
+            # Check SHARED Class-Level Cache (covers other profiles on same account)
+            shared = self.__class__._shared_account_cache.get(self.account_key)
+            if shared:
+                if norm_target in shared.get('pos_symbols', set()):
+                    return True
+                if norm_target in shared.get('open_order_symbols', set()):
+                    return True
+
         return False
 
     async def get_open_position(self, symbol, timeframe=None):
@@ -836,15 +854,15 @@ class Trader:
 
         try:
             if order_type == 'market':
-                # Generate Client Order ID for recovery (Unique prefix per mode)
+                # Generate Client Order ID for recovery (Unique format: P{id}_{symbol}_{side}_{ms})
                 api_symbol = self._normalize_symbol(symbol)
-                prefix = "dry_" if self.dry_run else "bot_"
-                client_id = f"{prefix}{api_symbol}_{side}_{int(time.time()*1000)}"
+                prefix = f"P{self.profile_id}_"
+                client_id = f"{prefix}{api_symbol}_{side.upper()}_{int(time.time()*1000)}"
                 params['newClientOrderId'] = client_id
                 
                 # Debug log: attempting market order
                 try:
-                    self._debug_log('place_order:market', {'symbol': symbol, 'side': side, 'qty': qty, 'params': params, 'leverage': use_leverage})
+                    self._debug_log('place_order:market', {'symbol': symbol, 'side': side, 'qty': qty, 'params': params, 'leverage': use_leverage, 'client_id': client_id})
                 except Exception:
                     pass
                 
@@ -941,6 +959,12 @@ class Trader:
                     "order_id": order.get('id') # Ensure order_id is saved
                 }
                 await self._update_db_position(pos_key)
+                
+                # Proactively update SHARED Class-Level Cache for multi-profile immediate awareness
+                shared = self.__class__._shared_account_cache.get(self.account_key, {'pos_symbols': set(), 'open_order_symbols': set()})
+                shared['pos_symbols'].add(api_symbol)
+                shared['timestamp'] = time.time()
+                self.__class__._shared_account_cache[self.account_key] = shared
                 # Create SL/TP reduce-only orders for the freshly opened position
                 # SKIP if already attached (Bybit V5)
                 if not tpsl_attached:
@@ -963,14 +987,14 @@ class Trader:
             else:
                 # Limit order - place and track as pending
                 
-                # Generate Client Order ID for recovery (Unique prefix per mode)
+                # Generate Client Order ID for recovery (Unique format: P{id}_{symbol}_{side}_{ms})
                 api_symbol = self._normalize_symbol(symbol)
-                prefix = "dry_" if self.dry_run else "T_"
-                client_id = f"{prefix}{api_symbol}_{side}_{int(time.time()*1000)}"
+                prefix = f"P{self.profile_id}_"
+                client_id = f"{prefix}{api_symbol}_{side.upper()}_{int(time.time()*1000)}"
                 params['newClientOrderId'] = client_id
                 
                 try:
-                    self._debug_log('place_order:limit', {'symbol': symbol, 'side': side, 'qty': qty, 'price': price, 'params': params, 'leverage': use_leverage})
+                    self._debug_log('place_order:limit', {'symbol': symbol, 'side': side, 'qty': qty, 'price': price, 'params': params, 'leverage': use_leverage, 'client_id': client_id})
                 except Exception:
                     pass
                     
@@ -1061,6 +1085,13 @@ class Trader:
                     "timestamp": order.get('timestamp', 0)
                 }
                 await self._update_db_position(pos_key)
+                
+                # Proactively update SHARED Class-Level Cache for multi-profile immediate awareness
+                shared = self.__class__._shared_account_cache.get(self.account_key, {'pos_symbols': set(), 'open_order_symbols': set()})
+                shared['open_order_symbols'].add(api_symbol)
+                shared['timestamp'] = time.time()
+                self.__class__._shared_account_cache[self.account_key] = shared
+
                 print(f"📋 [{self.exchange_name}] Limit order placed: {order_id} | {side} {symbol} @ {price:.3f} (waiting for fill...)")
                 self.logger.info(f"Limit order {order_id} placed, monitoring for fill")
                 
@@ -1429,7 +1460,7 @@ class Trader:
 
         try:
             self._debug_log('cancel_order', {'id': order_id, 'symbol': symbol, 'params': params})
-            res = await self.exchange.cancel_order(order_id, symbol, params)
+            res = await self._execute_with_timestamp_retry(self.exchange.cancel_order, order_id, symbol, params)
             self._debug_log('cancel_order:response', res)
             return res
         except Exception as e:
@@ -2177,38 +2208,67 @@ class Trader:
         Integrated into the main bot loop for persistent accuracy.
         """
         if self.dry_run: return
+    
+        # 0. Throttling: only sync once every 60 seconds to avoid rate limits
+        now = time.time()
+        if now - self._last_sync_time < 60:
+            return
+        self._last_sync_time = now
+        
+        self.logger.info(f"📡 [SYNC] Starting authoritative sync with {self.exchange_name}...")
         
         # 1. Fetch current positions and open orders from exchange
         try:
-            exchange_positions = await self.exchange.fetch_positions()
+            exchange_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
             # Normalize: only non-zero positions
             ex_pos_map = {self._normalize_symbol(p['symbol']): p 
                           for p in exchange_positions 
                           if self._safe_float(p.get('contracts', 0) or p.get('qty', 0)) != 0}
             
             # Fetch all open orders once to check for TP/SL presence
-            open_orders = await self.exchange.fetch_open_orders()
+            open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders)
             open_order_ids = {str(o.get('id') or o.get('orderId')) for o in open_orders}
+            
+            # Update caches for has_any_symbol_position logic
+            self._last_ex_pos_map = ex_pos_map
+            self._last_ex_open_order_ids = open_order_ids
+            self._last_ex_open_order_symbols = {self._normalize_symbol(o.get('symbol', '')) for o in open_orders}
+            
+            # Update SHARED Class-Level Cache for multi-profile safety
+            self.__class__._shared_account_cache[self.account_key] = {
+                'pos_symbols': set(ex_pos_map.keys()),
+                'open_order_symbols': self._last_ex_open_order_symbols,
+                'timestamp': time.time()
+            }
         except Exception as e:
             self.logger.error(f"Sync failed to fetch exchange data: {e}")
             return
 
         # 2. Iterate through local active positions
         for pos_key, pos in list(self.active_positions.items()):
-            # Skip if not for this exchange/profile
-            if self.exchange_name and not pos_key.startswith(self.exchange_name):
+            # Corrected Prefix Check: pos_key format "P1_BINANCE_BTC_USDT_1h"
+            # We must verify this key belongs to OUR profile and exchange
+            prefix = f"P{self.profile_id}_{self.exchange_name}_"
+            if not pos_key.startswith(prefix):
                 continue
                 
             symbol = pos.get('symbol')
             norm_symbol = self._normalize_symbol(symbol)
             status = pos.get('status') # 'filled' or 'pending'
+            timeframe = pos.get('timeframe', '1h')
             
-            # Heuristic: Get current price for crossing check
+            # Heuristic: Get current price for crossing check from CACHE (no API call)
             current_price = 0.0
             try:
-                # Direct fetch for accuracy in sync loop
-                ticker = await self._execute_with_timestamp_retry(self.exchange.fetch_ticker, symbol)
-                current_price = self._safe_float(ticker.get('last') or ticker.get('close'))
+                # Try to get from MarketDataManager data_store (updated by bot loop)
+                # data_store keys are like "BINANCE_BTC/USDT_1h"
+                cache_key = f"{self.exchange_name}_{symbol}_{timeframe}"
+                df = self.data_manager.data_store.get(cache_key)
+                if df is not None and not df.empty:
+                    current_price = float(df.iloc[-1]['close'])
+                else:
+                    # Fallback: if not in cache, we just don't have price for crossing check (ignore check)
+                    pass
             except: pass
 
             # CASE 1: ACTIVE POSITION
@@ -2307,6 +2367,67 @@ class Trader:
         except Exception as e:
             self.logger.error(f"Error resolving ghost {pos_key}: {e}")
 
+    async def deep_history_sync(self, lookback_hours=24):
+        """
+        Exhaustive sync scanning history for all active positions to catch missed closures.
+        Runs periodically (e.g., every 1 hour).
+        """
+        self.logger.info(f"🔄 [SYNC] Starting deep history sync (lookback {lookback_hours}h)...")
+        
+        # 1. Fetch all active positions in DB
+        db_active = await self.db.get_active_positions(self.profile_id)
+        if not db_active:
+            self.logger.debug("[SYNC] No active positions in DB for deep sync.")
+            return
+            
+        active_map = {f"{trade['symbol']}_{trade['side']}": trade for trade in db_active}
+        since = int((time.time() - (lookback_hours * 3600)) * 1000)
+        
+        total_fixed = 0
+        symbols_to_check = {t['symbol'] for t in db_active}
+        
+        # 2. Check history for each active symbol
+        for symbol in symbols_to_check:
+            try:
+                # Use retry wrapper for stability
+                trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
+                if not trades: 
+                    await asyncio.sleep(0.5)
+                    continue
+                
+                trades.sort(key=lambda x: x['timestamp'])
+                
+                for t in trades:
+                    # ... (logic remains same)
+                    side = t['side'].upper() 
+                    price = self._safe_float(t['price'])
+                    qty = self._safe_float(t['amount'])
+                    ts = t['timestamp']
+                    
+                    opp_side = 'SELL' if side == 'BUY' else 'BUY'
+                    key = f"{symbol}_{opp_side}"
+                    
+                    if key in active_map:
+                        active_trade = active_map[key]
+                        if ts > (active_trade.get('entry_time') or 0):
+                            self.logger.info(f"✅ [SYNC] Found deep EXIT for {symbol} {opp_side}: Price {price}")
+                            p_key = active_trade.get('pos_key')
+                            await self._clear_db_position(p_key, exit_price=price, exit_reason="SYNC(Deep History)")
+                            await self.remove_position(symbol, active_trade.get('timeframe', 'sync'), exit_price=price, exit_reason="SYNC(Deep)")
+                            total_fixed += 1
+                            del active_map[key]
+                
+                # Add delay after each symbol fetch to prevent rate limit spikes
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                self.logger.error(f"Error in deep sync for {symbol}: {e}")
+                await asyncio.sleep(1)
+                
+        if total_fixed > 0:
+            self.logger.info(f"✨ [SYNC] Deep sync completed. Fixed {total_fixed} positions.")
+        else:
+            self.logger.debug("[SYNC] Deep sync completed. No issues found.")
+
     async def reconcile_positions(self, auto_fix=True, force_verify=False):
         """
         Synchronizes local state with exchange reality.
@@ -2367,6 +2488,18 @@ class Trader:
             except Exception as e:
                 self.logger.warning(f"[SYNC] Total visibility fetch failed: {e}. Falling back to per-symbol fetch later.")
                 all_exchange_orders = None
+
+            # Populate local and shared caches for high-performance readiness checks
+            self._last_ex_pos_map = {self._normalize_symbol(s): p for s, p in active_ex_pos.items()}
+            self._last_ex_open_order_ids = {str(o.get('id') or o.get('orderId')) for o in all_exchange_orders} if all_exchange_orders else set()
+            self._last_ex_open_order_symbols = {self._normalize_symbol(o.get('symbol', '')) for o in all_exchange_orders} if all_exchange_orders else set()
+            
+            # Shared cache update
+            self.__class__._shared_account_cache[self.account_key] = {
+                'pos_symbols': set(self._last_ex_pos_map.keys()),
+                'open_order_symbols': self._last_ex_open_order_symbols,
+                'timestamp': time.time()
+            }
 
             fetch_success = True
             # Fix 4: Removed duplicate adoption block here.

@@ -196,6 +196,14 @@ Allows remote interaction with the bot instance.
 *   **Discovery**: Relying purely on `fetch_my_trades` can be slow or fail if the history is deep.
 *   **Lesson**: Combine **Price-Crossing + Missing Order ID**. If an order is gone and price has passed its target, it's a 99% probability fill. Confirm via history immediately to keep the DB "clean".
 
+16. Cross-Profile Accountability Lock
+*   **Discovery**: In multi-profile setups sharing one account, Profile B could enter a trade if it checks readiness *before* its next 60s sync, even if Profile A just entered.
+*   **Lesson**: Implement a **Shared Class-Level Cache**. Proactively update a centralized account state immediately upon order placement so all profile instances have instant awareness.
+
+17. The Multi-Tier Sync Shield
+*   **Discovery**: A single sync frequency is either too heavy for the API or too slow for state reconciliation.
+*   **Lesson**: Use **Tiered Frequency**. 60s for ghost detection, 10m for full order/position parity, and 1h for deep historical audit. This balances API safety with high-fidelity state tracking.
+
 
 ---
 
@@ -211,9 +219,10 @@ State-tracking files in `src/` use a suffix-based isolation strategy:
 
 ### 2. Client Order ID (ClOrdID) Prefixes
 Every order placed on an exchange is tagged with a unique Client ID for recovery and mode identification:
-- **Live Prefix**: `bot_` (e.g., `bot_BTCUSDT_BUY_123456789`)
+- **Live Prefix**: `P{profile_id}_` (e.g., `P1_BTCUSDT_BUY_123456789`)
 - **Dry-Run Prefix**: `dry_` (e.g., `dry_BTCUSDT_BUY_123456789`)
-- **Structure**: `{prefix}{symbol}_{side}_{timestamp_ms}`
+- **Structure**: `{prefix}{normalized_symbol}_{side}_{timestamp_ms}`
+- **Rationale**: Including the `profile_id` ensures that each `Trader` instance only interacts with codes that belong to its specific database profile, enabling reliable recovery and multi-profile co-existence.
 
 ### 3. Symbol & Database Isolation
 Wait-and-Patience and metadata tracking use a standardized symbol format to avoid discrepancy between Spot and Swap naming:

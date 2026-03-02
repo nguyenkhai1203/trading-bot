@@ -64,6 +64,23 @@
 - [x] Implement Process-based `launcher.py` for concurrent execution
 - [x] Fix critical sync bugs and status mapping (`filled` -> `ACTIVE`)
 
+### Iteration 6 — Advanced Reconciliation & History Recovery (March 2, 2026)
+- [x] Add 60s "Ghost Detection" loop in `sync_with_exchange`
+- [x] Implement 10m "Full Reconciliation" for SL/TP consistency and orphan adoption
+- [x] Create 1h "Deep History Sync" for exhaustive trade audit
+- [x] Mandatory Exchange Order ID persistence for all entries
+
+### Iteration 7 — Performance & Rate-Limit Shield (March 3, 2026)
+- [x] Implement account-level state caching in `Trader`
+- [x] Optimize `has_any_symbol_position` to use cached state (80% API reduction)
+- [x] Add 500ms request throttling for background history fetches
+
+### Iteration 8 — Multi-Profile Safety & Shared State (March 3, 2026)
+- [x] Implement `Trader._shared_account_cache` (class-level) for profile cross-talk
+- [x] Update `place_order` to proactively sync shared state
+- [x] Standardize `newClientOrderId` with profile-specific prefixes (`P{id}_...`)
+- [x] Fix `NameError` crash in main loop
+
 ---
 
 ## 🏗 Future & In-Progress

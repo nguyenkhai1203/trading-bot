@@ -32,11 +32,15 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         self.trader.remove_position = AsyncMock()
         self.trader._update_db_position = AsyncMock()
         self.trader._execute_with_timestamp_retry = AsyncMock()
+        
+        async def mock_execute(func, *args, **kwargs):
+            return await func(*args, **kwargs)
+        self.trader._execute_with_timestamp_retry.side_effect = mock_execute
 
     async def test_sync_detects_and_resolves_ghost(self):
         """Test that sync_with_exchange identifies a missing position and resolves it."""
         symbol = 'BTC/USDT'
-        pos_key = f"BYBIT_{symbol.replace('/', '_')}_1h"
+        pos_key = f"P{self.trader.profile_id}_{self.mock_exchange.name}_{symbol.replace('/', '_')}"
         
         # 1. Setup Active Position in memory
         sl_order_id = 'sl_123'
@@ -75,10 +79,6 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         }
         self.mock_exchange.fetch_my_trades = AsyncMock(return_value=[exit_trade])
 
-        # Helper for retry wrapper
-        async def mock_execute(func, *args, **kwargs):
-            return await func(*args, **kwargs)
-        self.trader._execute_with_timestamp_retry.side_effect = mock_execute
 
         # 3. Run Sync
         await self.trader.sync_with_exchange()
@@ -98,7 +98,7 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
     async def test_sync_updates_pending_to_filled(self):
         """Test that sync updates an externally filled pending order to ACTIVE."""
         symbol = 'BTC/USDT'
-        pos_key = f"BYBIT_{symbol.replace('/', '_')}_1h"
+        pos_key = f"P{self.trader.profile_id}_{self.mock_exchange.name}_{symbol.replace('/', '_')}"
         order_id = "order_123"
         
         # 1. Setup Pending Position
@@ -137,6 +137,46 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.trader.active_positions[pos_key]['status'], 'filled')
         self.assertEqual(self.trader.active_positions[pos_key]['entry_price'], 49005.0)
         self.trader._update_db_position.assert_called_once_with(pos_key)
+
+    async def test_deep_history_sync(self):
+        """Test that deep_history_sync identifies a closed trade for a DB-active position."""
+        symbol = 'ETH/USDT'
+        # Position is in DB but NOT in memory (it's a stale DB record)
+        stale_db_trade = {
+            'id': 201,
+            'symbol': symbol,
+            'side': 'SELL',
+            'entry_price': 3000.0,
+            'entry_time': int(time.time() * 1000) - 7200000, # 2 hours ago
+            'qty': 0.5,
+            'status': 'ACTIVE',
+            'pos_key': f"P1_BYBIT_{symbol.replace('/', '_')}"
+        }
+        
+        # Mock DB returning this stale trade
+        self.mock_db.get_active_positions = AsyncMock(return_value=[stale_db_trade])
+        
+        # Mock exchange history returning the exit (Buy back)
+        exit_trade = {
+            'symbol': symbol,
+            'side': 'buy',
+            'price': 2950.0,
+            'amount': 0.5,
+            'timestamp': int(time.time() * 1000) - 1800000 # 30 mins ago
+        }
+        self.mock_exchange.fetch_my_trades = AsyncMock(return_value=[exit_trade])
+        
+        # Run deep sync
+        await self.trader.deep_history_sync(lookback_hours=24)
+        
+        # Verify it cleared DB and tried to remove from memory
+        self.trader._clear_db_position.assert_called_once()
+        self.trader.remove_position.assert_called_once()
+        
+        # Check params
+        call_args = self.trader._clear_db_position.call_args[1]
+        self.assertEqual(call_args['exit_price'], 2950.0)
+        self.assertIn("Deep History", call_args['exit_reason'])
 
 if __name__ == '__main__':
     unittest.main()
