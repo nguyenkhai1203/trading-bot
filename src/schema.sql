@@ -93,3 +93,14 @@ CREATE TABLE IF NOT EXISTS ai_models (
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (model_name, environment)
 );
+
+CREATE TABLE IF NOT EXISTS market_sentiment (
+    symbol TEXT PRIMARY KEY,
+    bms REAL NOT NULL,
+    sentiment_zone TEXT NOT NULL,
+    trend_score REAL,
+    momentum_score REAL,
+    volatility_score REAL,
+    dominance_score REAL,
+    updated_at INTEGER NOT NULL
+);

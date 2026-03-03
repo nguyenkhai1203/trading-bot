@@ -534,3 +534,38 @@ def format_portfolio_update_v2(
                     lines.append(format_position_v2(**p, is_pending=True))
                     lines.append("")
     return "\n".join(lines)
+
+def format_bms_report(bms_data: dict) -> str:
+    """
+    Format BTC Macro Signal (BMS) report for Telegram.
+    
+    Args:
+        bms_data: Dict with keys: bms, sentiment_zone, trend_score, momentum_score, volatility_score, dominance_score
+    """
+    zone = str(bms_data.get('sentiment_zone', 'YELLOW')).upper()
+    score = float(bms_data.get('bms', 0))
+    
+    # Zone Emojis
+    zone_emoji = "🟢" if zone == 'GREEN' else "🔴" if zone == 'RED' else "🟡"
+    
+    # Zone Descriptions
+    if zone == 'GREEN':
+        desc = "BULLISH - Altcoin signals BOOSTED"
+    elif zone == 'RED':
+        desc = "BEARISH - Altcoin signals VETOED"
+    else:
+        desc = "NEUTRAL - No extra filtering"
+        
+    lines = [
+        f"📊 *BTC MACRO SIGNAL (BMS)*",
+        f"{zone_emoji} Zone: *{zone}*",
+        f"🎯 Score: *{score:.2f}*",
+        f"📝 Status: _{desc}_",
+        "",
+        f"📈 Trend: {float(bms_data.get('trend_score', 0)):+.2f}",
+        f"⚡ Momentum: {float(bms_data.get('momentum_score', 0)):+.2f}",
+        f"📉 Volatility: {float(bms_data.get('volatility_score', 0)):+.2f}",
+        f"💎 Dominance: {float(bms_data.get('dominance_score', 0)):+.2f}"
+    ]
+    
+    return "\n".join(lines)

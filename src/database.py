@@ -456,3 +456,22 @@ class DataManager:
             INSERT OR REPLACE INTO ai_models (model_name, environment, weights_json, accuracy, mse, samples, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (model_name, env, weights_json, accuracy, mse, samples, now))
+
+    # ------------------------------------------------------------------------
+    # MARKET SENTIMENT (BMS)
+    # ------------------------------------------------------------------------
+    async def upsert_market_sentiment(self, symbol: str, bms: float, sentiment_zone: str, trend_score: float = 0, momentum_score: float = 0, volatility_score: float = 0, dominance_score: float = 0):
+        """Insert or Update the latest market sentiment score."""
+        now = int(datetime.now().timestamp())
+        await self._execute_write("""
+            INSERT OR REPLACE INTO market_sentiment (symbol, bms, sentiment_zone, trend_score, momentum_score, volatility_score, dominance_score, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (symbol, bms, sentiment_zone, trend_score, momentum_score, volatility_score, dominance_score, now))
+
+    async def get_latest_market_sentiment(self, symbol: str = 'BTC/USDT:USDT') -> Optional[dict]:
+        """Fetch the most recent sentiment for a symbol."""
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM market_sentiment WHERE symbol = ?", (symbol,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None

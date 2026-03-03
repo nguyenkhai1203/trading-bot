@@ -66,11 +66,11 @@ class BTCAnalyzer:
             await self.db.upsert_market_sentiment(
                 symbol=symbol,
                 bms=m_bms,
-                zone=m_zone,
-                trend=m_trend,
-                momentum=m_momentum,
-                volatility=m_vol,
-                dominance=m_dom
+                sentiment_zone=m_zone,
+                trend_score=m_trend,
+                momentum_score=m_momentum,
+                volatility_score=m_vol,
+                dominance_score=m_dom
             )
             
             self.logger.info(f"[BMS-MTF] Updated: {m_bms:.2f} ({m_zone}) | T:{m_trend:.2f} M:{m_momentum:.2f} V:{m_vol:.2f}")

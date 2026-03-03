@@ -31,7 +31,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
-from notification import format_position_v2, format_portfolio_update_v2
+from notification import format_position_v2, format_portfolio_update_v2, format_bms_report
 from database import DataManager
 from data_manager import MarketDataManager
 from exchange_factory import create_adapter_from_profile
@@ -364,10 +364,23 @@ async def get_summary_message(period: str) -> str:
         logging.error(f"Summary generated error: {e}")
         return "❌ Error generating summary."
 
+async def get_bms_message() -> str:
+    """Fetch and format the latest BTC Macro Signal (BMS) report."""
+    try:
+        if not db: return "BMS data unavailable (DB connection issue)."
+        bms_data = await db.get_latest_market_sentiment()
+        if not bms_data:
+            return "📡 *BTC MACRO SIGNAL (BMS)*\n_No sentiment data found in database yet._"
+        return format_bms_report(bms_data)
+    except Exception as e:
+        logging.error(f"Error generating BMS message: {e}")
+        return "❌ Error fetching BMS status."
+
 # ============== COMMANDS ==============
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
-        [InlineKeyboardButton("📊 Status", callback_data='status')],
+        [InlineKeyboardButton("📊 Status", callback_data='status'),
+         InlineKeyboardButton("🛡️ BMS", callback_data='bms')],
         [InlineKeyboardButton("📈 This Month", callback_data='summary_month'),
          InlineKeyboardButton("📈 All Time", callback_data='summary_all')],
     ]
@@ -478,6 +491,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         msg = await get_summary_message('month')
     elif query.data == 'summary_all':
         msg = await get_summary_message('all')
+    elif query.data == 'bms':
+        msg = await get_bms_message()
     else:
         msg = "Unknown"
     
@@ -487,19 +502,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ============== AUTO REPORT ==============
 async def periodic_report_loop(application: Application):
     """Loop for periodic reports (replacing JobQueue)"""
+    # Initial report after delay
+    await asyncio.sleep(10)
+    print("📢 Sending initial 2h periodic report...")
+    try:
+        if CHAT_ID:
+            # 1. BMS Report
+            bms_msg = await get_bms_message()
+            await application.bot.send_message(chat_id=CHAT_ID, text=bms_msg, parse_mode='Markdown')
+            
+            # 2. Portfolio Update v2
+            status_msg = await get_status_message(is_portfolio=True)
+            await application.bot.send_message(chat_id=CHAT_ID, text=status_msg, parse_mode='Markdown')
+            
+            # 3. Monthly Summary
+            summary_msg = await get_summary_message('month')
+            await application.bot.send_message(chat_id=CHAT_ID, text=summary_msg, parse_mode='Markdown')
+    except Exception as e:
+        print(f"⚠️ Initial auto-report failed: {e}")
+
     while True:
         await asyncio.sleep(7200) # 2 hours
         try:
             if CHAT_ID:
-                # 1. Send Portfolio Update v2
+                # 1. BMS Report
+                bms_msg = await get_bms_message()
+                await application.bot.send_message(chat_id=CHAT_ID, text=bms_msg, parse_mode='Markdown')
+
+                # 2. Portfolio Update v2
                 status_msg = await get_status_message(is_portfolio=True)
                 await application.bot.send_message(chat_id=CHAT_ID, text=status_msg, parse_mode='Markdown')
                 
-                # 2. Send Performance Summary (Realized Trades)
+                # 3. Monthly Summary
                 summary_msg = await get_summary_message('month')
                 await application.bot.send_message(chat_id=CHAT_ID, text=summary_msg, parse_mode='Markdown')
         except Exception as e:
-            print(f"⚠️ Auto-report failed: {e}")
+            print(f"⚠️ Periodic auto-report failed: {e}")
 
 async def post_init(application: Application) -> None:
     """Initialize DB, profiles and background tasks."""
