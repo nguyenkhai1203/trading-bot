@@ -9,6 +9,9 @@ A multi-exchange, automated trading bot designed for high-frequency signal execu
 - **Wait-and-Patience Entry**: Uses smart limit orders to capture better entry prices (1-2% improvement) based on technical levels.
 - **Dynamic Risk Scaling**: Automatically adjusts position size and leverage (8x-12x) based on signal confidence.
 - **Neural Brain Integration**: Uses a lightweight RL-based scoring system to filter high-probability entries.
+- **BTC Macro Signal (BMS)**: Integrated "Intelligent Shield" that boosts signals in bullish zones and vetoes entries during high-risk macro reversals.
+- **Resource Efficiency**: Throttled balance checks (5m intervals) and a shared account cache to prevent duplicate profile orders.
+- **Margin Protection**: Automatic cooldown for "Insufficient Margin" errors and proactive eviction of low-confidence pending orders.
 - **Authoritative Sync**: Periodically reconciles local state with the exchange to ensure 100% accuracy.
 - **Telegram Command Center**: Fully remote control and status reporting via Telegram bot.
 - **Isolated Margin Safety**: Forces isolated margin per position to prevent account-wide drawdown.
@@ -27,7 +30,6 @@ python3 src/self_test.py
 ```bash
 python3 scripts/download_data.py
 python3 src/analyzer.py
-python3 src/analyzer.py --download #TO download data OHLCV
 python3 scripts/sync_history.py     # Reconile last 24h trade history from exchange to DB
 python3 scripts/clean_positions.py  # Fix corrupted positions (NaN values)
 ```
@@ -45,7 +47,10 @@ Profiles are managed via the database. To add a new profile or change exchange k
 ```bash
 python3 launcher.py
 ```
-*Note: Launcher starts both the trading loop and the Telegram command bot.*
+*Note: Launcher starts both the trading loop and the Telegram command bot. By default, the initial strategy optimization is **skipped** to avoid startup delays. To force an optimization cycle on launch, use:*
+```bash
+python3 launcher.py --init-opt
+```
 
 ## 🗄️ Database Architecture
 The bot uses a centralized SQLite database (`trading_bot.db`) for all persistent state, replacing unstable JSON files.
@@ -82,9 +87,9 @@ The bot includes a Neural Network that learns from trade performance. To activat
 
 For in-depth information on system architecture, strategy mechanics, and troubleshooting, please refer to the **Project Brain**:
 
-- [**System Architecture & Knowledge**](.brain/knowledge.md) - Deep dive into how it works and config settings.
-- [**Recent Updates & Walkthroughs**](.brain/walkthrough.md) - Log of major features and recent changes.
-- [**Development Roadmap**](.brain/task.md) - Active tasks and historical progress.
+- [**System Architecture & Knowledge**](.brain/knowledge.md) - Deep dive into how it works, BMS logic, and configuration.
+- [**Recent Updates & Walkthroughs**](.brain/walkthrough.md) - Log of major features and recent stability iterations.
+- [**Development Roadmap**](.brain/task.md) - Active tasks, historical progress, and Phase 23 details.
 
 ---
 ⚠️ **Disclaimer**: This is a production-grade trading tool. Always test in **Dry Run mode** (`DRY_RUN=True` in `.env`) before deploying real capital.

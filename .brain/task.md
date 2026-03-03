@@ -36,16 +36,6 @@
 - [x] Fix 10: `get_current_balance()` read from unified store
 - [x] Fix 11: `pnl_usd` → `pnl_usdt` in summary message
 
-### BMS & Two-Tier Optimization (Iteration 9 & 10 - March 2026)
-- [x] Implement `BTCAnalyzer` for Macro Signal (BMS) scoring
-- [x] Integrate BMS "Traffic Light" Veto System (RED/YELLOW/GREEN)
-- [x] Weighted Scoring unification ($W_{BTC} \times BMS + W_{Alt} \times Alt$)
-- [x] Loop A: Internal BMS Weight Optimizer (`scripts/optimize_bms.py`)
-- [x] Loop B: Global Strategy Optimizer in `analyzer.py` (Grid Search for $W_{BTC}$)
-- [x] Historical BMS data alignment for Strategy Backtesting
-- [x] Expanded unit tests for BMS and Two-Tier Optimization logic
-- [x] Documentation of BMS layer in architecture/knowledge base
-
 ---
 
 ## 🔴 In Progress / Next
@@ -101,12 +91,8 @@
 - [ ] Map adapter-specific status codes to uniform DB states
 - [ ] Neural Brain training automation via DB logs
 
-### Phase 6: BMS Active Shield & Refinement (Auto-Exit)
-- [x] Refactor `BTCAnalyzer` to use 0.0 - 1.0 scale (0.5 = Neutral)
-- [x] Implement Symmetrical Veto: Veto Short in GREEN (>0.7), Veto Long in RED (<0.3)
-- [x] Implement "BMS Intelligent Shield" (Dual Macro-Micro Confirmation Exit)
-- [x] Update `tests/test_btc_analyzer.py` and `tests/test_strategy_bms.py` for 0.0-1.0 scale
-- [x] Ensure `StrategyAnalyzer` grid search supports the 0.0-1.0 scale
-- [x] Upgrade BMS to Multi-Timeframe (MTF) Analysis (1h, 4h, 1d)
-- [x] Implement 12h Periodic Global Optimization Scheduler
+### Phase 4: Verification & Launch
+- [ ] 24h Dry-run stress test with 5+ concurrent profiles
+- [ ] Final security audit (API key isolation checks)
+- [ ] Full regression testing on signal generation logic
 

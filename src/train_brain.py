@@ -1,205 +1,141 @@
-
+import asyncio
 import json
 import os
 import numpy as np
 import sys
+from datetime import datetime
 
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from neural_brain import NeuralBrain
+from database import DataManager
 
-HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_performance.json')
-
-def load_training_data():
-    if not os.path.exists(HISTORY_FILE):
-        print("⚠️ No history file found.")
-        return [], []
+async def load_training_data(env='LIVE'):
+    """Fetch training data from ai_training_logs table."""
+    db = await DataManager.get_instance(env)
     
-    try:
-        with open(HISTORY_FILE, 'r') as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"⚠️ Error loading history: {e}")
-        return [], []
-        
-    trades = data.get('trades', [])
-    print(f"📚 Found {len(trades)} total trades in history.")
+    # Join with trades to get the actual result (WIN/LOSS)
+    query = """
+        SELECT l.snapshot_json, l.entry_confidence, t.status, t.pnl, t.exit_reason
+        FROM ai_training_logs l
+        JOIN trades t ON l.trade_id = t.id
+        WHERE t.status IN ('CLOSED', 'ACTIVE')
+    """
     
     inputs = []
     targets = []
     
-    for t in trades:
-        # We need the result to train (snapshot will be bootstrapped if missing)
-        if 'result' not in t:
-            continue
-            
-        snapshot = t.get('snapshot')
-            
-        # ─── EXTRACTION & BOOTSTRAPPING ───
-        try:
-            # Handle both list (legacy) and dict (new) snapshots if any
-            if snapshot:
-                if isinstance(snapshot, list):
-                    feature_vector = snapshot
-                else:
-                    feature_vector = [
-                        snapshot.get('norm_RSI_7', 0.5),
-                        snapshot.get('norm_RSI_14', 0.5),
-                        snapshot.get('norm_RSI_21', 0.5),
-                        snapshot.get('norm_MACD', 0.5),
-                        snapshot.get('norm_BB_Width', 0.5),
-                        snapshot.get('norm_Price_in_BB', 0.5),
-                        snapshot.get('norm_Volume', 0.5),
-                        snapshot.get('norm_ADX', 0.5),
-                        snapshot.get('norm_ATR', 0.5),
-                        snapshot.get('state_pnl_pct', 0.0),
-                        snapshot.get('state_leverage', 0.0),
-                        snapshot.get('state_equity_ratio', 1.0)
-                    ]
-            else:
-                # 🛠 BOOTSTRAP: Reconstruct approximate snapshot from signals (for legacy trades)
-                signals = t.get('signals', [])
+    async with (await db.get_db()).execute(query) as cursor:
+        rows = await cursor.fetchall()
+        print(f"📚 Found {len(rows)} training samples in database ({env}).")
+        
+        for row in rows:
+            try:
+                snapshot = json.loads(row['snapshot_json'])
                 
-                # Default neutral state
-                f_rsi7, f_rsi14, f_rsi21 = 0.5, 0.5, 0.5
-                f_macd, f_bbw, f_p_bb = 0.5, 0.2, 0.5
-                f_vol, f_adx, f_atr = 0.5, 0.2, 0.05
-                f_pnl, f_lev, f_eq = 0.0, 0.0, 1.0
+                # Standard Feature Extraction (consistent with strategy.py)
+                feature_vector = [
+                    snapshot.get('norm_RSI_7', 0.5),
+                    snapshot.get('norm_RSI_14', 0.5),
+                    snapshot.get('norm_RSI_21', 0.5),
+                    snapshot.get('norm_MACD', 0.5),
+                    snapshot.get('norm_BB_Width', 0.5),
+                    snapshot.get('norm_Price_in_BB', 0.5),
+                    snapshot.get('norm_Volume', 0.5),
+                    snapshot.get('norm_ADX', 0.5),
+                    snapshot.get('norm_ATR', 0.5),
+                    snapshot.get('state_pnl_pct', 0.0),
+                    snapshot.get('state_leverage', 0.0),
+                    snapshot.get('state_equity_ratio', 1.0)
+                ]
                 
-                # Heuristic mapping
-                for s in signals:
-                    s_low = s.lower()
-                    if 'rsi_7' in s_low and 'oversold' in s_low: f_rsi7 = 0.25
-                    if 'rsi_7' in s_low and 'overbought' in s_low: f_rsi7 = 0.75
-                    if 'rsi_14' in s_low and 'oversold' in s_low: f_rsi14 = 0.25
-                    if 'rsi_14' in s_low and 'overbought' in s_low: f_rsi14 = 0.75
-                    if 'rsi_21' in s_low and 'oversold' in s_low: f_rsi21 = 0.25
-                    if 'rsi_21' in s_low and 'overbought' in s_low: f_rsi21 = 0.75
-                    
-                    if 'macd' in s_low and ('cross_up' in s_low or 'gt_signal' in s_low): f_macd = 0.7
-                    if 'macd' in s_low and ('cross_down' in s_low or 'lt_signal' in s_low): f_macd = 0.3
-                    
-                    if 'bb_low' in s_low or 'lower_touch' in s_low: f_p_bb = 0.1
-                    if 'bb_up' in s_low or 'upper_touch' in s_low: f_p_bb = 0.9
-                    
-                    if 'vol_spike' in s_low: f_vol = 0.8
-                    if 'adx_strong' in s_low: f_adx = 0.6
+                # Dynamic Features (consistent with v4.0)
+                # These might need normalization logic if not preserved in snapshot
+                # For now, we assume primary 12 features + 5 dynamic = 17
+                # If snapshot is missing dynamic ones, we use defaults
+                dynamic_features = [
+                    snapshot.get('norm_sl_orig', 0.5),
+                    snapshot.get('norm_sl_final', 0.5),
+                    snapshot.get('sl_move_count_norm', 0.0),
+                    1.0 if snapshot.get('sl_tightened') else 0.0,
+                    snapshot.get('max_pnl_norm', 0.0)
+                ]
+                feature_vector.extend(dynamic_features)
                 
-                feature_vector = [f_rsi7, f_rsi14, f_rsi21, f_macd, f_bbw, f_p_bb, f_vol, f_adx, f_atr, f_pnl, f_lev, f_eq]
+                # Fill NaNs
+                feature_vector = [0.5 if (x is None or not np.isfinite(x)) else float(x) for x in feature_vector]
                 
-            # Safe extraction of entry and side
-            raw_entry = t.get('entry_price')
-            entry = float(raw_entry) if isinstance(raw_entry, (int, float)) else 1.0
-            side_mult = 1 if t.get('side') == 'BUY' else -1
-            
-            # SL Distances (Normalized: 0 = -5%, 0.5 = 0%, 1 = +5%)
-            # Handle NoneType correctly to avoid subtraction errors
-            raw_sl_orig = t.get('sl_original')
-            raw_sl_final = t.get('sl_final')
-            
-            sl_orig = float(raw_sl_orig) if isinstance(raw_sl_orig, (int, float)) else entry
-            sl_final = float(raw_sl_final) if isinstance(raw_sl_final, (int, float)) else entry
-            
-            dist_orig = ((sl_orig - entry) / entry) * side_mult if entry and entry > 0 else 0
-            dist_final = ((sl_final - entry) / entry) * side_mult if entry and entry > 0 else 0
-            
-            norm_sl_orig = np.clip((dist_orig + 0.05) / 0.1, 0, 1)
-            norm_sl_final = np.clip((dist_final + 0.05) / 0.1, 0, 1)
-            
-            dynamic_features = [
-                norm_sl_orig,
-                norm_sl_final,
-                min(float(t.get('sl_move_count', 0) or 0) / 10.0, 1.0),
-                1.0 if t.get('sl_tightened') else 0.0,
-                min(float(t.get('max_pnl_pct', 0) or 0) / 10.0, 1.0)
-            ]
-            
-            feature_vector.extend(dynamic_features)
-            # Clean NaNs and Infinities (CRITICAL: prevents MSE: nan)
-            feature_vector = [0.5 if (x is None or not np.isfinite(x)) else float(x) for x in feature_vector]
-            
-            inputs.append(feature_vector)
-            
-            # Target: WIN = 1.0, LOSS = 0.0
-            target = 1.0 if t['result'] == 'WIN' else 0.0
-            targets.append(target)
-            
-        except Exception as e:
-            print(f"Skipping bad record: {e}")
-            continue
-            
+                # Target: WIN if PnL > 0, else LOSS
+                # Note: For ACTIVE trades, this is technically "ongoing", but usually we only train on CLOSED.
+                if row['status'] == 'CLOSED':
+                    target = 1.0 if row['pnl'] > 0 else 0.0
+                    inputs.append(feature_vector)
+                    targets.append(target)
+            except Exception as e:
+                print(f"⚠️ Skipping bad record: {e}")
+                continue
+                
     return inputs, targets
 
-    # 6. Save
-    brain.save_model()
-    print("💾 Brain saved successfully!")
-    return brain
-
-def evaluate(brain, X, y):
-    if len(X) == 0:
-        print("No test data.")
-        return
-        
-    correct = 0
-    mse = 0
-    
-    for i in range(len(X)):
-        pred = brain.predict(X[i])
-        target = y[i]
-        
-        # Binary classification accuracy (threshold 0.5)
-        pred_class = 1.0 if pred >= 0.5 else 0.0
-        if pred_class == target:
-            correct += 1
-            
-        mse += (pred - target) ** 2
-        
-    acc = correct / len(X) * 100
-    avg_mse = mse / len(X)
-    print(f"Accuracy: {acc:.1f}% | MSE: {avg_mse:.4f}")
-    return acc, avg_mse
-
-def run_nn_training(min_samples=10, epochs=100):
-    """
-    Function to be called by automated maintenance scripts.
-    """
+async def run_nn_training(min_samples=10, epochs=100, env='LIVE'):
+    """Main training entry point."""
     print("\n" + "🧠" * 30)
-    print("🧠 STARTING AUTOMATED NEURAL BRAIN TRAINING")
+    print(f"🧠 STARTING NEURAL BRAIN TRAINING ({env})")
     print("🧠" * 30 + "\n")
     
     # 1. Load Data
-    inputs, targets = load_training_data()
+    inputs, targets = await load_training_data(env)
     
     if len(inputs) < min_samples:
-        print(f"⚠️ [BRAIN] Not enough training data. Found {len(inputs)} samples, need at least {min_samples}.")
-        return False
+        print(f"⚠️ [BRAIN] Not enough data. Found {len(inputs)}, need {min_samples}.")
+        return {"status": "skipped", "reason": "not_enough_data"}
     
-    print(f"📊 [BRAIN] Dataset size: {len(inputs)} samples")
-    
-    # 2. Split Data
-    split_idx = int(len(inputs) * 0.8)
+    # 2. Split (80/20)
     indices = np.arange(len(inputs))
     np.random.shuffle(indices)
+    split = int(len(inputs) * 0.8)
     
-    X_train = np.array(inputs)[indices[:split_idx]]
-    y_train = np.array(targets)[indices[:split_idx]]
-    X_test = np.array(inputs)[indices[split_idx:]]
-    y_test = np.array(targets)[indices[split_idx:]]
+    X_train = np.array(inputs)[indices[:split]]
+    y_train = np.array(targets)[indices[:split]]
+    X_test = np.array(inputs)[indices[split:]]
+    y_test = np.array(targets)[indices[split:]]
     
-    # 3. Training
+    # 3. Model Init & Training
     brain = NeuralBrain(input_size=17)
-    print("💪 [BRAIN] Training model...")
-    final_loss = brain.train(X_train.tolist(), y_train.tolist(), epochs=epochs)
+    await brain.sync_from_db(env) # Start from latest DB weights
+    
+    print(f"💪 Training on {len(X_train)} samples...")
+    brain.train(X_train.tolist(), y_train.tolist(), epochs=epochs)
     
     # 4. Evaluation
-    print("--- Brain Performance ---")
-    acc, mse = evaluate(brain, X_test, y_test)
+    correct = 0
+    mse_total = 0
+    for i in range(len(X_test)):
+        pred = brain.predict(X_test[i])
+        target = y_test[i]
+        if (pred >= 0.5) == (target >= 0.5):
+            correct += 1
+        mse_total += (pred - target) ** 2
     
-    # 5. Save
-    brain.save_model()
-    print("✅ [BRAIN] Neural model updated and saved.\n")
-    return {"status": "success", "accuracy": acc, "mse": mse, "samples": len(inputs)}
+    accuracy = (correct / len(X_test)) * 100 if len(X_test) > 0 else 0
+    mse = mse_total / len(X_test) if len(X_test) > 0 else 0
+    
+    print(f"📊 Results: Accuracy={accuracy:.1f}%, MSE={mse:.4f}")
+    
+    # 5. Save to DB
+    stats = {
+        'accuracy': accuracy,
+        'mse': mse,
+        'samples': len(inputs)
+    }
+    await brain.save_model_to_db(env, stats)
+    
+    return {"status": "success", "accuracy": accuracy, "mse": mse, "samples": len(inputs)}
 
 if __name__ == "__main__":
-    run_nn_training()
+    try:
+        asyncio.run(run_nn_training())
+    finally:
+        from database import DataManager
+        asyncio.run(DataManager.clear_instances())

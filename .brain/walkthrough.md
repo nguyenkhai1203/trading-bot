@@ -41,48 +41,7 @@ Quick map to navigate and debug the project.
 
 ---
 
-## 🚀 Major Updates
-
-### Iteration 14 — BMS Intelligent Shield (March 4, 2026)
-**Upgraded the macro exit logic from a blind hard-cut to a data-confirmed strategy:**
-- **Two-Tiered Protection**:
-    - **Hard Shield**: If BMS Vetoes the trade AND the Neural Brain confirms the bearishness (Score < 0.4), the position is closed immediately.
-    - **Soft Shield**: If BMS Vetoes but the Neural Brain still shows micro-strength (Score >= 0.4), the bot **Tightens the Stop Loss** instead.
-- **Tightening Logic**: SL is moved halfway toward the current price or to a small profit lock (Entry + 0.3%) if the trade is in profit. This allows the trade to potentially survive macro noise while drastically reducing risk.
-
-### Iteration 13 — 12h Periodic Optimizer (March 4, 2026)
-**Automated the full optimization cycle to run twice daily:**
-- **Scheduler**: Integrated a 12-hour recurring task into `bot.py` that triggers `run_global_optimization(download=True)`.
-- **Persistence**: Using the `risk_metrics` database table to track `last_optimization_time`, ensuring the cycle persists even after bot restarts.
-- **Hands-Free Maintenance**: The bot now handles data refreshes, BMS optimization, Altcoin weight finding, and Neural Brain retraining automatically every 12 hours.
-
-### Iteration 12 — Multi-Timeframe (MTF) Macro Analysis (March 4, 2026)
-**Upgraded BMS to aggregate sentiment from 1h, 4h, and 1d timeframes:**
-- **Aggregate Weights**: Implemented a weighted macro scoring system: 1h (30%), 4h (40%), and 1d (30%).
-- **Robust Filtering**: Ensured the "Supreme Filter" accounts for structural market regimes (1d) and structural trends (4h), preventing noise from the 1h timeframe from triggering false macro shifts.
-- **Auto-Exit Sync**: Proactive exits now trigger based on this robust MTF signal, providing higher confidence in macro-driven closures.
-
-### Iteration 11 — Active Shield & Scale Refinement (March 4, 2026)
-**Standardized BMS to a 0.0-1.0 scale and implemented proactive macro-exits:**
-- **0.0 - 1.0 Scale**: Refactored `BTCAnalyzer` and `Strategy` to use a 0.0-1.0 sentiment score (0.5 = Neutral) for smoother mathematical integration.
-- **Symmetrical Veto**: Implemented logic to veto LONGs in the RED zone (< 0.3) and SHORTs in the GREEN zone (> 0.7).
-- **Active Shield (Auto-Exit)**: Updated `bot.py` to proactively close positions when market sentiment shifts against the trade (e.g., cutting longs if BTC enters the RED zone).
-- **Unified Optimizer**: Integrated the full "Data -> BMS -> Alt -> Brain -> Backtest" flow into a single `py src/analyzer.py` command for streamlined maintenance.
-- **Standardized Confidence**: Standardized strategy output to always be a 0.0-1.0 confidence score, regardless of brain state.
-
-### Iteration 10 — Two-Tier BMS Optimization (March 4, 2026)
-**Mathematically discovered the best weights for BTC sentiment and its impact on Altcoins:**
-- **Loop A (Internal BTC)**: Automated weight discovery for BTC sub-scores (Trend, Momentum, Volatility, Dominance) using `scripts/optimize_bms.py`.
-- **Loop B (Global Strategy)**: Integrated $W_{BTC}$ (Global Weight) into the `StrategyAnalyzer` grid search, allowing for symbol-specific BTC-Altcoin correlation optimization.
-- **Data Alignment**: Modified `StrategyAnalyzer.load_data` to automatically merge historical BMS data with Altcoin candles for high-fidelity backtesting.
-- **Config Persistence**: Optimized $W_{BTC}$ is now saved to `strategy_config.json` per symbol/timeframe under the `risk` key.
-
-### Iteration 9 — BTC Macro Signal (BMS) integration (March 3, 2026)
-**Implemented a global "Supreme Filter" to provide market context:**
-- **BTC-First Logic**: Created `BTCAnalyzer` to calculate a composite score (0-100) based on Trend, Momentum, Volatility, and Dominance.
-- **Veto System**: Implemented a "Traffic Light" mechanism where score < 20 (RED Zone) blocks all Long entries.
-- **Weighted Scoring**: Signals now combine Altcoin score and BMS score using configurable weights ($W_{BTC}$ and $W_{Alt}$).
-- **Notifications**: Telegram alerts for BMS Zone transitions to keep the user informed of macro shifts.
+## �🚀 Major Updates
 
 ### Iteration 8 — Multi-Profile Safety & Shared State (March 3, 2026)
 **Fixed multi-profile synchronization and loop crashes:**

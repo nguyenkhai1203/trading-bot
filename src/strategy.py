@@ -40,126 +40,92 @@ SHORT_KEYWORDS = {
 
 
 class WeightedScoringStrategy(Strategy):
-    def __init__(self, symbol="default", timeframe="1h", exchange=None, db=None):
+    # Static cache to allow synchronous access to DB-backed configs
+    _config_cache = {} 
+    
+    def __init__(self, symbol="default", timeframe="1h", exchange=None):
         super().__init__(name=f"WeightedScoringStrategy_{symbol}_{timeframe}")
         self.symbol = symbol
         self.timeframe = timeframe
         self.exchange = exchange
-        self.db = db
         self.logger = logging.getLogger(__name__)
-        self.config_mtime = 0  # Track config file modification time
-        self.config_version = 0  # Version number for positions to reference
-        self.config_data = {}  # Initialize early to prevent AttributeError in analyzer
-        self.weights = self.load_weights(symbol, timeframe, exchange)
+        self.config_version = 0
         
-        # BMS Global Weights (Default 60/40)
-        global_risk = self.config_data.get('risk', {})
-        self.w_btc = global_risk.get('w_btc', 0.6)
-        self.w_alt = global_risk.get('w_alt', 0.4)
+        # Load config from static cache or fallback to default
+        self.config_data = self._get_cached_config(symbol, timeframe, exchange)
+        self.weights = self.config_data.get('weights', self.get_default_weights())
         
-        # RL BRAIN (Input Size = 17 Normalized Features v4.0)
+        # RL BRAIN
         try:
             self.brain = NeuralBrain(input_size=17)
             self.use_brain = True
         except Exception as e:
-            print(f"⚠️ Failed to init NeuralBrain: {e}")
+            self.logger.warning(f"Failed to init NeuralBrain: {e}")
             self.use_brain = False
             
-        # Optimization: Pre-categorized signals
         self.long_signals_cache = set()
         self.short_signals_cache = set()
         self._precalculate_signal_categories()
-        
-    def _precalculate_signal_categories(self):
-        """Pre-sort signals into LONG and SHORT sets to avoid string parsing in get_signal loop."""
-        self.long_signals_cache.clear()
-        self.short_signals_cache.clear()
-        for signal_name in self.weights.keys():
-            if any(kw in signal_name for kw in LONG_KEYWORDS):
-                self.long_signals_cache.add(signal_name)
-            elif any(kw in signal_name for kw in SHORT_KEYWORDS):
-                self.short_signals_cache.add(signal_name)
 
+    def _precalculate_signal_categories(self):
+        """Pre-processes weights to separate long and short signals for faster scoring."""
+        self.long_signals_cache = set()
+        self.short_signals_cache = set()
+        for sig in self.weights.keys():
+            sig_lower = sig.lower()
+            if any(k.lower() in sig_lower for k in LONG_KEYWORDS):
+                self.long_signals_cache.add(sig)
+            elif any(k.lower() in sig_lower for k in SHORT_KEYWORDS):
+                self.short_signals_cache.add(sig)
+
+    def _get_cached_config(self, symbol, timeframe, exchange):
+        """Fetch config from static cache with fallbacks."""
+        # Standardized normalization
+        clean_symbol = symbol.split(':')[0].replace('/', '_').upper() if symbol != 'default' else 'default'
         
-    def load_weights(self, symbol, timeframe, exchange=None):
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
-        if not os.path.exists(config_path):
-            print("Config not found, using defaults")
-            return self.get_default_weights()
-            
-        try:
-            with open(config_path, 'r') as f:
-                data = json.load(f)
-        except (PermissionError, IOError, json.JSONDecodeError) as e:
-            self.logger.warning(f"Could not read strategy_config.json: {e}. Keeping existing weights.")
-            # Ensure config_data has basic structure if it was empty/failed
-            if not self.config_data:
-                self.config_data = {}
-            return self.config_data.get('weights', self.get_default_weights())
+        # 1. Exact match (Standardized DB format should use BTC/USDT, but we handle both)
+        norm_sym = symbol.replace('_', '/') 
         
-        # Track file modification time and increment version on reload
-        import os.path as osp
-        mtime = osp.getmtime(config_path)
-        if mtime != self.config_mtime:
-            self.config_version += 1
-            self.config_mtime = mtime
-            
-        # Try specific exchange_symbol_timeframe, then fallback to symbol if not found
-        # Issue 9: Standardized key is EXCHANGE_BASE_QUOTE_TF
-        clean_symbol = symbol.split(':')[0].replace('/', '_').upper()
+        keys_to_try = [
+            (norm_sym, timeframe, exchange),
+            (symbol, timeframe, exchange),
+            ('default', 'default', 'default')
+        ]
+        
+        for k in keys_to_try:
+            if k in self._config_cache:
+                return self._config_cache[k]
+        
+        # 2. Key-based match (legacy support)
         key_ex = f"{exchange}_{clean_symbol}_{timeframe}" if (exchange and timeframe) else None
-        key_tf = f"{clean_symbol}_{timeframe}"
-        
-        if key_ex and key_ex in data:
-            self.config_data = data[key_ex]
-            self.logger.debug(f"Loaded exchange-specific config for {key_ex}")
-        elif key_tf in data:
-            self.config_data = data[key_tf]
-        elif symbol in data:
-            self.config_data = data[symbol]
-        elif 'default' in data:
-            self.config_data = data['default']
-        else:
-            self.config_data = {}
-        
-        # Load Risk Settings
-        risk = self.config_data.get('risk', {})
-        from config import STOP_LOSS_PCT, TAKE_PROFIT_PCT
-        self.sl_pct = risk.get('sl_pct', STOP_LOSS_PCT)
-        self.tp_pct = risk.get('tp_pct', TAKE_PROFIT_PCT)
-             
+        if key_ex and key_ex in self._config_cache:
+            return self._config_cache[key_ex]
+            
+        return {}
+
+    @classmethod
+    def update_cache(cls, all_configs: list):
+        """Populate the static cache from DB rows."""
+        new_cache = {}
+        for c in all_configs:
+            # Index by the primary columns
+            new_cache[(c['symbol'], c['timeframe'], c['exchange'])] = c
+        cls._config_cache = new_cache
+
+    def load_weights(self, symbol, timeframe, exchange=None):
+        """Legacy placeholder: weights are now loaded via static cache + _get_cached_config."""
+        self.config_data = self._get_cached_config(symbol, timeframe, exchange)
         return self.config_data.get('weights', self.get_default_weights())
     
-    def reload_weights_if_changed(self):
-        """Check if config file changed, reload if needed."""
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
-        if not os.path.exists(config_path):
-            return
-        
-        import os.path as osp
-        current_mtime = osp.getmtime(config_path)
-        
-        # Check if config file was modified
-        if current_mtime != self.config_mtime:
-            print(f"[CONFIG RELOAD] {self.symbol}_{self.timeframe} - Config file changed, reloading...")
-            self.weights = self.load_weights(self.symbol, self.timeframe, self.exchange)
-            self._precalculate_signal_categories()
-
-    
     def is_enabled(self):
-        """Check if this strategy config is enabled.
-        Used to block NEW positions if config becomes disabled.
-        """
         return self.config_data.get('enabled', True)
 
-    def get_dynamic_risk_params(self, row=None):
-        """Returns (sl_pct, tp_pct) based on current config."""
-        return self.sl_pct, self.tp_pct
-
     def reload_config(self):
-        """Reloads parameters from strategy_config.json"""
-        self.weights = self.load_weights(self.symbol, self.timeframe, self.exchange)
-        print(f"🔄 [{self.symbol} {self.timeframe}] Config reloaded.")
+        """Reloads parameters from cache."""
+        self.config_data = self._get_cached_config(self.symbol, self.timeframe, self.exchange)
+        self.weights = self.config_data.get('weights', self.get_default_weights())
+        self._precalculate_signal_categories()
+        print(f"🔄 [{self.symbol} {self.timeframe}] Config reloaded from cache.")
 
     def get_sizing_tier(self, score):
         # Default fallback (Use LOW tier to ensure min notional is met)
@@ -173,29 +139,20 @@ class WeightedScoringStrategy(Strategy):
             tiers = getattr(config, 'CONFIDENCE_TIERS', {})
             
             # Map weighted score to tier keys (high/medium/low)
-            # Strategy score is typically 0-10+. CONFIDENCE_TIERS uses 'min_confidence' (0-1) or we map score.
-            # Adaptation: Map Score to Confidence Level for lookup
-            # Score 7+ -> High, 5-7 -> Medium, <5 -> Low
-            
-            # Since CONFIDENCE_TIERS is keyed by 'high', 'medium', 'low', we select based on score.
             target_tier_key = 'low'
             if score >= 7.0: target_tier_key = 'high'
             elif score >= 5.0: target_tier_key = 'medium'
             
             selected_tier = tiers.get(target_tier_key, tiers.get('low', res))
             
-            # Ensure return has required keys
             return {
                 "leverage": selected_tier.get('leverage', 3),
                 "cost_usdt": selected_tier.get('cost_usdt', 3.0) 
             }
             
         tiers = self.config_data['tiers']
-        
-        # Check tiers in order from strategy_config.json
         selected_tier = res # default
              
-        # GLOBAL OVERRIDE: Clamp to config safety settings
         from config import GLOBAL_MAX_LEVERAGE, GLOBAL_MAX_COST_PER_TRADE
         
         final_tier = selected_tier.copy()
@@ -205,11 +162,40 @@ class WeightedScoringStrategy(Strategy):
         if 'cost_usdt' in final_tier:
              final_tier['cost_usdt'] = min(final_tier['cost_usdt'], GLOBAL_MAX_COST_PER_TRADE)
              
-        # Fallback if cost_usdt missing but tier selected
         if 'cost_usdt' not in final_tier and 'leverage' in final_tier:
              final_tier['cost_usdt'] = min(5.0, GLOBAL_MAX_COST_PER_TRADE)
              
         return final_tier
+
+    def get_dynamic_risk_params(self, row):
+        """
+        Calculates SL and TP percentages. 
+        If dynamic SLTP is enabled, uses ATR for volatility-based protection.
+        """
+        import config
+        
+        # Default from config
+        sl_pct = getattr(config, 'STOP_LOSS_PCT', 0.02)
+        tp_pct = getattr(config, 'TAKE_PROFIT_PCT', 0.04)
+        
+        # Dynamic ATR-based SLTP
+        if getattr(config, 'ENABLE_DYNAMIC_SLTP', False):
+            atr = row.get('ATR_14')
+            close = row.get('close')
+            
+            if atr and close and close > 0:
+                # Use ATR multiplier from config (default 1.5x ATR)
+                mult = getattr(config, 'ATR_TRAIL_MULTIPLIER', 1.5)
+                dynamic_sl = (atr * mult) / close
+                
+                # Take Profit usually 2-3x the SL for positive risk/reward
+                dynamic_tp = dynamic_sl * 2.0
+                
+                # Apply safety bounds (don't go below 0.5% or above 10%)
+                sl_pct = max(0.005, min(dynamic_sl, 0.10))
+                tp_pct = max(0.01, min(dynamic_tp, 0.20))
+                
+        return sl_pct, tp_pct
 
     def get_default_weights(self):
         # Keys MUST match FeatureEngineer signal column names (without 'signal_' prefix)
@@ -250,7 +236,7 @@ class WeightedScoringStrategy(Strategy):
             "breakout_below_support":1.1,   # signal_breakout_below_support
         }
 
-    def get_signal(self, row, tracker=None, use_adaptive=True, use_brain=True, bms_score: Optional[float] = None, bms_zone: Optional[str] = None):
+    def get_signal(self, row, tracker=None, use_adaptive=True, use_brain=True, bms_score=None, bms_zone=None):
         """
         Calculates LONG/SHORT score based on DYNAMIC signals from config.
         Checks if 'signal_{key}' exists in row and is True.
@@ -259,8 +245,6 @@ class WeightedScoringStrategy(Strategy):
             row: Single row of features (pandas Series or dict)
             use_adaptive: If True, apply adaptive weight adjustments from signal tracker
             use_brain: If True, include Neural Brain scores
-            bms_score: Proactive BTC Macro Signal score (0-100)
-            bms_zone: Sentiment zone ('RED', 'YELLOW', 'GREEN')
         """
         # Skip if explicitly disabled in config
         if not self.config_data.get('enabled', True):
@@ -297,49 +281,48 @@ class WeightedScoringStrategy(Strategy):
                     score_short += weight
                     reasons_short.append(signal_name)
                     
-        # --- DECISION ---
+        # === BMS WEIGHTING (INTELLIGENT SHIELD) ===
+        # Formula: FinalScore = (AltScore * w_alt_adj) + (BMS * 10 * w_btc_adj)
+        w_btc = getattr(self, 'w_btc', 0.5)
+        w_alt = getattr(self, 'w_alt', 0.5)
+        
+        if bms_score is not None:
+            w_btc_adj = w_btc
+            w_alt_adj = w_alt
+
+            # 1. Zone Adjustments
+            if bms_zone == 'GREEN':
+                # Boost BTC weight in GREEN zone (risk-on)
+                w_btc_adj = min(w_btc * 1.2, 0.9)
+                w_alt_adj = 1.0 - w_btc_adj
+                # Veto Short signals in GREEN zone
+                score_short = 0.0
+            elif bms_zone == 'RED':
+                # RED zone is defensive (risk-off)
+                # Veto Long signals in RED zone
+                score_long = 0.0
+                # In RED zone, we don't boost BTC weight, we just keep it or shift to exit
+            
+            # 2. Score Calculation
+            score_long = (score_long * w_alt_adj) + (bms_score * 10.0 * w_btc_adj)
+            score_short = (score_short * w_alt_adj) + ((1.0 - bms_score) * 10.0 * w_btc_adj)
+
+        # === DECISION ===
         thresholds = self.config_data.get('thresholds', {'entry_score': 5.0, 'exit_score': 2.5})
         entry_thresh = thresholds['entry_score']
         
-        # 3. Combine with BMS (BTC Macro Signal)
-        final_score_long = score_long
-        final_score_short = score_short
-        
-        if bms_score is not None:
-            # Formula: Final_Score = (Alt_Signal_Score * W_Alt) + (BMS * W_BTC)
-            # Heuristic scale: 0-10+, BMS scale: 0.0-1.0. Scale BMS to 0-10.
-            bms_scaled_long = bms_score * 10.0
-            bms_scaled_short = (1.0 - bms_score) * 10.0
-            
-            # Adjustment weights (Dynamic in Vùng Xanh)
-            w_btc_adj = self.w_btc
-            if bms_zone == 'GREEN':
-                w_btc_adj *= 1.2 # Bullish Confirmed boost
-            
-            w_alt_adj = 1.0 - w_btc_adj
-            
-            # Combined scores
-            final_score_long = (score_long * w_alt_adj) + (bms_scaled_long * w_btc_adj)
-            final_score_short = (score_short * w_alt_adj) + (bms_scaled_short * w_btc_adj)
-            
-            # --- TRAFFIC LIGHT VETO ---
-            if bms_zone == 'RED':
-                # Region RED: Strong Veto on LONGs, Prioritize SHORTs
-                final_score_long = 0.0
-                reasons_long.append("BMS_VETO_RED")
-            elif bms_zone == 'GREEN':
-                # Region GREEN: Strong Veto on SHORTs, Prioritize LONGs
-                final_score_short = 0.0
-                reasons_short.append("BMS_VETO_GREEN")
-
-        # Update scores used for final trigger
-        score_long = final_score_long
-        score_short = final_score_short
-
         confidence = 0.0
         signal = {'side': 'SKIP', 'confidence': 0.0, 'comment': 'Wait', 'snapshot': None}
         
         # === NEURAL BRAIN INTEGRATION ===
+        # Skip brain inference during backtests for maximum speed
+        if not use_brain:
+            if score_long >= entry_thresh:
+                signal = {'side': 'BUY', 'confidence': min(score_long / 10.0, 1.0), 'comment': f'Score {score_long:.1f}', 'snapshot': None}
+            elif score_short >= entry_thresh:
+                signal = {'side': 'SELL', 'confidence': min(score_short / 10.0, 1.0), 'comment': f'Score {score_short:.1f}', 'snapshot': None}
+            return signal
+
         # Extract features for brain (must match NeuralBrain input size = 17)
         # Handle missing keys safely with defaults
         snapshot = {
@@ -361,26 +344,23 @@ class WeightedScoringStrategy(Strategy):
         feature_vector = list(snapshot.values())
         
         # Add 5 dynamic context placeholders for v4.0 (Defaults for NEW trades)
+
+        # Case: New trade - SL original = current target SL, moves = 0, pnl = 0
+        sl_orig = row.get('sl', row.get('close', 0))
+        entry = row.get('close', 1)
+        side_mult = 1 # We don't know side yet in this logic block, but we can assume BUY for scaling
+        # Actually, it's better to just use neutral 0.5 for placeholders at entry
         feature_vector.extend([0.5, 0.5, 0.0, 0.0, 0.0]) # [dist_orig, dist_final, moves, tightened, max_pnl]
         
         neural_score = 0.5
         if self.use_brain and use_brain:
+
             try:
                 # Replace NaNs with defaults just in case
                 clean_vector = [0.5 if (pd.isna(x) if hasattr(pd, 'isna') else x is None) else x for x in feature_vector]
                 neural_score = self.brain.predict(clean_vector)
             except Exception as e:
                 print(f"⚠️ Brain error: {e}")
-
-        # Skip brain inference during backtests for maximum speed (Neural score 0.5 default)
-        if not use_brain:
-            if score_long >= entry_thresh:
-                conf = min(score_long / 10.0, 1.0)
-                signal = {'side': 'BUY', 'confidence': conf, 'comment': f'Score {score_long:.1f}', 'snapshot': None, 'neural_score': 0.5}
-            elif score_short >= entry_thresh:
-                conf = min(score_short / 10.0, 1.0)
-                signal = {'side': 'SELL', 'confidence': conf, 'comment': f'Score {score_short:.1f}', 'snapshot': None, 'neural_score': 0.5}
-            return signal
         
         # Merge Heuristic Score + Neural Score
         # Strategy: Brain acts as a Validator (Filter)

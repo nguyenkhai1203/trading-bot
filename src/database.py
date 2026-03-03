@@ -3,7 +3,6 @@ import logging
 import asyncio
 import aiosqlite
 import json
-import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 
@@ -64,7 +63,7 @@ class DataManager:
         if os.path.exists(schema_path):
             with open(schema_path, 'r', encoding='utf-8') as f:
                 schema_sql = f.read()
-
+ 
             # [PRE-MIGRATION] Add missing columns to existing tables BEFORE running schema.
             # This prevents "no such column" errors when schema.sql creates indexes that
             # reference columns not yet present in an older DB (e.g. pos_key, leverage).
@@ -79,9 +78,6 @@ class DataManager:
                     if 'leverage' not in columns:
                         self.logger.info("Pre-migration: Adding leverage to trades table")
                         await self._db.execute("ALTER TABLE trades ADD COLUMN leverage REAL")
-                    if 'shadow' not in columns:
-                        self.logger.info("Pre-migration: Adding shadow flag to trades table")
-                        await self._db.execute("ALTER TABLE trades ADD COLUMN shadow INTEGER DEFAULT 0")
                     await self._db.commit()
             except Exception as e:
                 self.logger.error(f"Pre-migration error: {e}")
@@ -89,6 +85,28 @@ class DataManager:
             # Run schema script (CREATE TABLE IF NOT EXISTS + indexes)
             # Now safe to run because all required columns already exist.
             await self._db.executescript(schema_sql)
+            
+            # [CRITICAL] Ensure SYSTEM profile (ID 0) exists for global metrics
+            # This satisfies FOREIGN KEY constraints in risk_metrics table
+            await self._db.execute("""
+                INSERT OR IGNORE INTO profiles (id, name, environment, exchange, label)
+                VALUES (0, 'SYSTEM', 'LIVE', 'NONE', 'System Global Profile')
+            """)
+            await self._db.execute("""
+                INSERT OR IGNORE INTO profiles (id, name, environment, exchange, label)
+                VALUES (0, 'SYSTEM', 'TEST', 'NONE', 'System Global Profile')
+            """)
+            await self._db.commit() # Commit profiling inserts before enabling FK in some SQLite versions
+            
+            await self._db.execute("PRAGMA foreign_keys=ON")
+            
+            # Verify FK state
+            async with self._db.execute("PRAGMA foreign_keys") as cursor:
+                fk_state = await cursor.fetchone()
+                if fk_state and not fk_state[0]:
+                    # Some systems/SQLite builds don't support FKs, but we usually expect it here
+                    self.logger.warning("PRAGMA foreign_keys=ON did not return 1. Integrity constraints might be disabled.")
+            
             await self._db.commit()
         else:
             self.logger.error(f"Schema file not found at {schema_path}")
@@ -195,7 +213,7 @@ class DataManager:
                     exchange_order_id=?, symbol=?, side=?, qty=?, entry_price=?, 
                     sl_price=?, tp_price=?, sl_order_id=?, tp_order_id=?, 
                     pos_key=?, status=?, timeframe=?, pnl=?, meta_json=?, leverage=?,
-                    exit_price=?, exit_reason=?, exit_time=?, shadow=?
+                    exit_price=?, exit_reason=?, exit_time=?
                 WHERE id=?
             """, (
                 pos_data.get('exchange_order_id'), pos_data.get('symbol'), pos_data.get('side'),
@@ -204,7 +222,6 @@ class DataManager:
                 pos_data.get('status', 'OPENED'), pos_data.get('timeframe'), pos_data.get('pnl', 0), 
                 meta_json, pos_data.get('leverage'),
                 pos_data.get('exit_price'), pos_data.get('exit_reason'), pos_data.get('exit_time'),
-                pos_data.get('shadow', 0),
                 trade_id
             ))
             return trade_id
@@ -216,8 +233,8 @@ class DataManager:
                     profile_id, exchange_order_id, exchange, symbol, side, qty, 
                     entry_price, sl_price, tp_price, sl_order_id, tp_order_id, 
                     pos_key, status, timeframe, entry_time, pnl, meta_json, leverage,
-                    exit_price, exit_reason, exit_time, shadow
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    exit_price, exit_reason, exit_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pos_data.get('profile_id'), pos_data.get('exchange_order_id'), pos_data.get('exchange'), 
                 pos_data.get('symbol'), pos_data.get('side'), pos_data.get('qty', 0),
@@ -225,8 +242,7 @@ class DataManager:
                 pos_data.get('sl_order_id'), pos_data.get('tp_order_id'), pos_key,
                 pos_data.get('status', 'OPENED'), pos_data.get('timeframe'), entry_time, 
                 pos_data.get('pnl', 0), meta_json, pos_data.get('leverage'),
-                pos_data.get('exit_price'), pos_data.get('exit_reason'), pos_data.get('exit_time'),
-                pos_data.get('shadow', 0)
+                pos_data.get('exit_price'), pos_data.get('exit_reason'), pos_data.get('exit_time')
             ))
             return cursor.lastrowid
 
@@ -357,25 +373,86 @@ class DataManager:
             INSERT OR REPLACE INTO risk_metrics (profile_id, environment, metric_name, value, updated_at)
             VALUES (?, ?, ?, ?, ?)
         """, (profile_id, env, metric_name, value, now))
-    # ------------------------------------------------------------------------
-    # MARKET SENTIMENT
-    # ------------------------------------------------------------------------
-    async def upsert_market_sentiment(self, symbol: str, bms: float, zone: str, trend: float, momentum: float, volatility: float, dominance: float):
-        """Update or insert composite market sentiment score."""
-        now = int(time.time())
-        await self._execute_write("""
-            INSERT OR REPLACE INTO market_sentiment 
-            (symbol, bms, sentiment_zone, trend_score, momentum_score, volatility_score, dominance_score, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (symbol, bms, zone, trend, momentum, volatility, dominance, now))
 
-    async def get_latest_market_sentiment(self, symbol: str = 'BTC/USDT') -> Optional[dict]:
-        """Fetch the latest sentiment for a specific index or symbol."""
+    # ------------------------------------------------------------------------
+    # STRATEGY CONFIGS
+    # ------------------------------------------------------------------------
+    async def get_strategy_config(self, symbol: str, timeframe: str, exchange: str) -> Optional[dict]:
+        """Fetch strategy configuration for a specific pair/timeframe/exchange."""
         db = await self.get_db()
         db.row_factory = aiosqlite.Row
         async with db.execute("""
-            SELECT * FROM market_sentiment WHERE symbol = ?
-            ORDER BY updated_at DESC LIMIT 1
-        """, (symbol,)) as cursor:
+            SELECT config_json, enabled FROM strategy_configs 
+            WHERE symbol = ? AND timeframe = ? AND exchange = ?
+        """, (symbol, timeframe, exchange)) as cursor:
             row = await cursor.fetchone()
-            return dict(row) if row else None
+            if row:
+                config = json.loads(row['config_json'])
+                config['enabled'] = bool(row['enabled'])
+                return config
+            return None
+
+    async def save_strategy_config(self, symbol: str, timeframe: str, exchange: str, config_dict: dict):
+        """Save/Update strategy configuration."""
+        now = int(datetime.now().timestamp())
+        enabled = 1 if config_dict.get('enabled', True) else 0
+        # Don't store the enabled flag inside the JSON anymore, keep it in the column
+        config_to_save = config_dict.copy()
+        if 'enabled' in config_to_save: del config_to_save['enabled']
+        
+        await self._execute_write("""
+            INSERT OR REPLACE INTO strategy_configs (symbol, timeframe, exchange, enabled, config_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (symbol, timeframe, exchange, enabled, json.dumps(config_to_save), now))
+
+    async def get_all_strategy_configs(self, exchange: Optional[str] = None) -> List[dict]:
+        """Fetch all configurations with normalization."""
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        sql = "SELECT * FROM strategy_configs"
+        params = []
+        if exchange:
+            sql += " WHERE exchange = ?"
+            params.append(exchange)
+            
+        async with db.execute(sql, params) as cursor:
+            rows = await cursor.fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                config = json.loads(d['config_json'])
+                config['enabled'] = bool(d['enabled'])
+                config['symbol'] = d['symbol']
+                config['timeframe'] = d['timeframe']
+                config['exchange'] = d['exchange']
+                results.append(config)
+            return results
+
+    # ------------------------------------------------------------------------
+    # AI MODELS
+    # ------------------------------------------------------------------------
+    async def get_ai_model(self, model_name: str, env: str) -> Optional[dict]:
+        """Fetch AI model weights and stats."""
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT weights_json, accuracy, mse, samples FROM ai_models 
+            WHERE model_name = ? AND environment = ?
+        """, (model_name, env)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    'weights': json.loads(row['weights_json']),
+                    'accuracy': row['accuracy'],
+                    'mse': row['mse'],
+                    'samples': row['samples']
+                }
+            return None
+
+    async def save_ai_model(self, model_name: str, env: str, weights_json: str, accuracy: float, mse: float, samples: int):
+        """Save/Update AI model weights and performance stats."""
+        now = int(datetime.now().timestamp())
+        await self._execute_write("""
+            INSERT OR REPLACE INTO ai_models (model_name, environment, weights_json, accuracy, mse, samples, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (model_name, env, weights_json, accuracy, mse, samples, now))

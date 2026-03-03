@@ -70,43 +70,80 @@ class NeuralBrain:
         
         return float(output[0][0])
     
-    def save_model(self):
-        """Serialize weights to JSON."""
-        serializable_weights = {k: v.tolist() for k, v in self.weights.items()}
+    async def save_model_to_db(self, env='LIVE', stats=None):
+        """Async save to database."""
         try:
+            from database import DataManager
+            weights = {
+                'W1': self.weights['W1'].tolist(),
+                'b1': self.weights['b1'].tolist(),
+                'W2': self.weights['W2'].tolist(),
+                'b2': self.weights['b2'].tolist()
+            }
+            weights_json = json.dumps(weights)
+            
+            db = await DataManager.get_instance()
+            accuracy = stats.get('accuracy', 0) if stats else 0
+            mse = stats.get('mse', 0) if stats else 0
+            samples = stats.get('samples', 0) if stats else 0
+            
+            await db.save_ai_model('neural_brain', env, weights_json, accuracy, mse, samples)
+            print(f"💾 [BRAIN] Weights saved to database ({env})")
+        except Exception as e:
+            print(f"❌ [BRAIN] Failed to save to DB: {e}")
+
+    def save_model(self):
+        """Legacy synchronous save to file (fallback and unit tests)."""
+        try:
+            serializable_weights = {k: v.tolist() for k, v in self.weights.items()}
             with open(self.model_path, 'w') as f:
                 json.dump(serializable_weights, f)
-            print("🧠 Brain saved successfully.")
+            print(f"🧠 [BRAIN] Weights saved to local file: {self.model_path}")
         except Exception as e:
-            print(f"❌ Failed to save brain: {e}")
+            print(f"❌ [BRAIN] Failed to save to file: {e}")
 
     def load_model(self):
-        """Load weights from JSON."""
-        if not os.path.exists(self.model_path):
-            # print("🧠 No existing brain found. Created new random brain.")
-            return
-            
+        """Synchronous load from file (as starting point)."""
+        if os.path.exists(self.model_path):
+            try:
+                with open(self.model_path, 'r') as f:
+                    data = json.load(f)
+                
+                # Load and Validate shapes
+                for k in ['W1', 'b1', 'W2', 'b2']:
+                    if k in data:
+                        loaded_val = np.array(data[k])
+                        if loaded_val.shape == self.weights[k].shape:
+                            self.weights[k] = loaded_val
+                        else:
+                            print(f"⚠️ [BRAIN] Shape mismatch for {k}, using random.")
+                
+                self.is_trained = True
+                print("🧠 [BRAIN] Weights loaded from file.")
+            except Exception as e:
+                print(f"⚠️ [BRAIN] Error loading weights: {e}")
+        else:
+            # print("🆕 [BRAIN] No weights file found, using random initialization.")
+            pass
+
+    async def sync_from_db(self, env='LIVE'):
+        """Async update weights from database."""
         try:
-            with open(self.model_path, 'r') as f:
-                data = json.load(f)
-                
-            # Load and Validate
-            loaded_W1 = np.array(data['W1'])
+            from database import DataManager
+            db = await DataManager.get_instance()
+            model_data = await db.get_ai_model('neural_brain', env)
             
-            if loaded_W1.shape != (self.input_size, self.hidden_size):
-                print(f"⚠️ NeuralBrain Shape mismatch: Loaded {loaded_W1.shape} != Expected {(self.input_size, self.hidden_size)}")
-                print("⚠️ Re-initializing and saving new random weights to fix mismatch.")
-                self.save_model() # Save the random initialized weights over the old bad ones
-                return
-                
-            self.weights['W1'] = loaded_W1
-            self.weights['b1'] = np.array(data['b1'])
-            self.weights['W2'] = np.array(data['W2'])
-            self.weights['b2'] = np.array(data['b2'])
-            self.is_trained = True
-            print("🧠 Brain loaded successfully.")
+            if model_data and model_data.get('weights'):
+                data = model_data['weights']
+                for k in ['W1', 'b1', 'W2', 'b2']:
+                    if k in data:
+                        loaded_val = np.array(data[k])
+                        if loaded_val.shape == self.weights[k].shape:
+                            self.weights[k] = loaded_val
+                self.is_trained = True
+                print(f"🧠 [BRAIN] Weights synchronized from database ({env}).")
         except Exception as e:
-            print(f"⚠️ Failed to load brain ({e}). Using random weights.")
+            print(f"⚠️ [BRAIN] Sync error: {e}")
 
     def train(self, inputs, targets, epochs=1):
         """
@@ -134,18 +171,11 @@ class NeuralBrain:
                 total_error += np.sum(error**2)
                 
                 # Backward (Chain Rule)
-                # dL/dy_hat = error
-                # dy_hat/dz2 = y_hat * (1 - y_hat) [Sigmoid derivative]
                 delta2 = error * (y_hat * (1 - y_hat)) # (1, 1)
-                
-                # dL/dW2 = a1.T * delta2
                 dW2 = np.dot(a1.T, delta2)
                 db2 = np.sum(delta2, axis=0, keepdims=True)
                 
-                # dL/da1 = delta2 * W2.T
-                # da1/dz1 = 1 if z1 > 0 else 0 [ReLU derivative]
                 delta1 = np.dot(delta2, self.weights['W2'].T) * (z1 > 0)
-                
                 dW1 = np.dot(x.T, delta1)
                 db1 = np.sum(delta1, axis=0, keepdims=True)
                 
@@ -155,7 +185,7 @@ class NeuralBrain:
                 self.weights['W2'] -= self.learning_rate * dW2
                 self.weights['b2'] -= self.learning_rate * db2
                 
-            return total_error / len(inputs)
+        return total_error / len(inputs)
 
 if __name__ == "__main__":
     # Test Brain

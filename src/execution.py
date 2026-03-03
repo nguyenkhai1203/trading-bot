@@ -114,6 +114,14 @@ class Trader:
         # Unique identifier for this exchange account (shared across profiles)
         self.account_key = self._get_account_key()
         
+        # Initialize shared account state if not present
+        if self.account_key not in self.__class__._shared_account_cache:
+            self.__class__._shared_account_cache[self.account_key] = {
+                'last_balance_check': 0,
+                'last_balance': None,
+                'margin_cooldown_until': 0
+            }
+        
     def _get_account_key(self):
         """Uniquely identify the account to share state across multiple profiles."""
         api_key = "DRY"
@@ -165,6 +173,65 @@ class Trader:
         if asyncio.iscoroutine(res):
             return await res
         return res
+
+    async def fetch_balance_throttled(self, force=False):
+        """
+        Fetches balance from exchange with throttling (default 5 minutes).
+        Returns the cached balance if within the interval.
+        """
+        if self.dry_run:
+            from config import SIMULATION_BALANCE
+            return { 'total': { 'USDT': SIMULATION_BALANCE } }
+
+        now = time.time()
+        shared = self.__class__._shared_account_cache.get(self.account_key)
+        
+        # Check if we should fetch (every 300s / 5m)
+        if force or (now - shared.get('last_balance_check', 0) > 300):
+            try:
+                bal = await self.exchange.fetch_balance()
+                shared['last_balance'] = bal
+                shared['last_balance_check'] = now
+                self.logger.info(f"[{self.exchange_name}] Balance updated from exchange.")
+                return bal
+            except Exception as e:
+                self.logger.error(f"Error fetching balance: {e}")
+                return shared.get('last_balance') or {}
+        
+        return shared.get('last_balance') or {}
+
+    async def check_margin_error(self, error_msg):
+        """
+        Check if error is 'Insufficient Margin' and set a cooldown if so.
+        Also attempts to cancel low-confidence orders to free up room.
+        """
+        msg = str(error_msg).lower()
+        if "insufficient margin" in msg or "-2019" in msg or "insufficient balance" in msg:
+            shared = self.__class__._shared_account_cache.get(self.account_key)
+            shared['margin_cooldown_until'] = time.time() + 300 # 5 minute cooldown
+            self.logger.warning(f"[{self.exchange_name}] Insufficient margin detected. Throttling entries for 5 minutes.")
+            
+            # PROACTIVE: Cancel lowest confidence pending order to free space
+            if len(self.pending_orders) > 1:
+                try:
+                    # Find pending order with lowest entry_confidence
+                    candidates = [(k, v) for k, v in self.pending_orders.items() if v.get('status') == 'pending' and v.get('order_id')]
+                    if candidates:
+                        lowest = min(candidates, key=lambda x: x[1].get('entry_confidence') or 0.5)
+                        l_key, l_val = lowest
+                        if (l_val.get('entry_confidence') or 0.5) < 0.6: # Only cancel if confidence is not super high
+                            self.logger.info(f"🛡️ [MARGIN RECOVERY] Cancelling low-confidence order {l_val.get('order_id')} for {l_val.get('symbol')} to free margin.")
+                            await self.cancel_pending_order(l_key, reason="Insufficient margin (Low confidence eviction)")
+                except Exception as cancel_err:
+                    self.logger.error(f"Error during margin-recovery cancellation: {cancel_err}")
+            
+            return True
+        return False
+
+    def is_margin_throttled(self):
+        """Check if we are currently in a margin-rejection cooldown."""
+        shared = Trader._shared_account_cache.get(self.account_key)
+        return time.time() < shared.get('margin_cooldown_until', 0)
 
     async def sync_from_db(self):
         """Authoritative sync: Load active positions and pending orders from the database."""
@@ -278,6 +345,14 @@ class Trader:
             }
             trade_id = await self.db.save_position(trade_data)
             pos['id'] = trade_id
+            
+            # [AI TRAINING] Log snapshot for future training
+            snapshot = pos.get('snapshot')
+            if snapshot and trade_id:
+                # Use confidence if available
+                conf = pos.get('entry_confidence', 0.5)
+                await self.db.log_ai_snapshot(trade_id, json.dumps(snapshot, cls=BotJSONEncoder), conf)
+                
         except Exception as e:
             import traceback
             err_trace = traceback.format_exc()
@@ -713,7 +788,7 @@ class Trader:
 
 
 
-    async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None, reduce_only=False, shadow_mode=False, params=None):
+    async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None, reduce_only=False, params=None):
         """Places an order and updates persistent storage. For limit orders, monitors fill in background."""
         
         # Determine if TP/SL are attached (for scope safety)
@@ -768,9 +843,14 @@ class Trader:
         if price_to_check and price_to_check > 0:
             is_valid, reason, notional = self._check_min_notional(symbol, price_to_check, qty)
             if not is_valid:
-                self.logger.info(f"[{symbol}] Notional ${notional:.2f} too low for exchange. Switching to SHADOW MODE.")
-                print(f"⚠️ [{self.exchange_name}] [{symbol}] Notional ${notional:.2f} < Min requirement. Switching to SHADOW MODE.")
-                shadow_mode = True
+                msg = f"Rejected order {symbol}: {reason}"
+                self.logger.warning(msg)
+                print(f"⚠️ [{self.exchange_name}] [{symbol}] Order rejected: {reason} (Notional: ${notional:.2f})")
+                
+                # Apply SL cooldown to prevent continuous loop rejections for the same signal
+                asyncio.create_task(self.set_sl_cooldown(symbol, custom_duration=86400))
+                
+                return None
         
         exchange_name = getattr(self.exchange, 'name', self.exchange_name)
         pos_key = self._get_pos_key(symbol, timeframe)
@@ -782,13 +862,11 @@ class Trader:
         api_qty = qty_str if 'qty_str' in locals() and qty_str else qty
         print(f"🔧 [{exchange_name}] Sending Order: {side} {symbol} Qty={api_qty} (Type={api_qty.__class__.__name__}) @ {price or 'MARKET'}")
 
-        if self.dry_run or shadow_mode or not self.exchange.can_trade:
-            if shadow_mode:
-                print(f"👻 [SHADOW MODE] {side} {symbol} ({timeframe}) - Insufficient balance simulation.")
-            elif not self.exchange.can_trade:
+        if self.dry_run or not self.exchange.can_trade:
+            if not self.exchange.can_trade:
                 print(f"🛡️ [PUBLIC MODE] Simulating {side} {symbol} ({timeframe}) - Simulation Active.")
             
-            self.logger.info(f"[SIMULATION] {side} {symbol} ({timeframe}): Qty={qty}, SL={sl}, TP={tp} (Shadow={shadow_mode})")
+            self.logger.info(f"[SIMULATION] {side} {symbol} ({timeframe}): Qty={qty}, SL={sl}, TP={tp}")
             
             # Determine status based on order type
             is_limit = order_type == 'limit'
@@ -811,28 +889,21 @@ class Trader:
                 "signals_used": signals,
                 "entry_confidence": confidence,
                 "snapshot": snapshot,
-                "shadow": 1 if shadow_mode else 0,
                 "timestamp": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
             }
             await self._update_db_position(pos_key)
             
             # Send notification
-            label = "[SIGNAL ONLY]" if shadow_mode else None
             _, tg_msg = format_pending_order(
-                symbol, timeframe, side, price, sl, tp, confidence, leverage, self.dry_run or shadow_mode,
+                symbol, timeframe, side, price, sl, tp, confidence, leverage, self.dry_run,
                 exchange_name=self.exchange_name, profile_label=self.profile_name
             ) if is_limit else format_position_filled(
-                symbol, timeframe, side, price, qty_rounded, price * qty_rounded, sl, tp, confidence, leverage, self.dry_run or shadow_mode,
+                symbol, timeframe, side, price, qty_rounded, price * qty_rounded, sl, tp, confidence, leverage, self.dry_run,
                 exchange_name=self.exchange_name, profile_label=self.profile_name
             )
-            
-            # Prepend Signal Only label if shadow
-            if shadow_mode:
-                tg_msg = f"🔔 *[SIGNAL ONLY]*\n{tg_msg}"
-                
             await send_telegram_message(tg_msg)
             
-            return {'id': 'dry_run_id' if not shadow_mode else 'shadow_id', 'status': 'closed' if not is_limit else 'open', 'filled': qty if not is_limit else 0}
+            return {'id': 'dry_run_id', 'status': 'closed' if not is_limit else 'open', 'filled': qty if not is_limit else 0}
 
         # LIVE LOGIC
         # Prepare params
@@ -850,6 +921,11 @@ class Trader:
         # Issue 10: Strict Spot Filtering Safeguard
         if self.exchange.is_spot(symbol):
             self.logger.error(f"❌ [ABORT] Detected Spot symbol {symbol} during Futures trade attempt on {self.exchange_name}! Aborting.")
+            return None
+
+        # Margin Throttling Check (v4.0)
+        if not self.dry_run and self.is_margin_throttled():
+            self.logger.warning(f"❌ [THROTTLED] Skip order for {symbol} due to recent insufficient margin.")
             return None
 
         # Ensure margin mode & leverage set on exchange for LIVE orders
@@ -918,6 +994,8 @@ class Trader:
                             
                     except Exception as recovery_error:
                         self.logger.error(f"[{symbol}] Recovery failed for {client_id}: {recovery_error}")
+                        # Check if this failure is due to insufficient margin
+                        await self.check_margin_error(recovery_error)
                         # If insufficient balance, log current balance to help debug
                         if "insufficient balance" in str(e).lower() or "170131" in str(e):
                             try:
@@ -937,6 +1015,7 @@ class Trader:
                                 print(f"❌ [{self.exchange_name}] Insufficient balance: Need ~{req_margin}, have {curr_bal} USDT")
                             except Exception as bal_err:
                                 self.logger.error(f"Diagnostics: fetch_balance failed: {bal_err}")
+                        await self.check_margin_error(e)
                         raise e # Re-raise original error
                 
                 try:
@@ -1511,7 +1590,6 @@ class Trader:
             # Use ROE (leveraged percentage) for reporting
             pnl_pct = (pnl / (entry_price * qty)) * 100 * leverage
 
-        is_shadow = pos.get('shadow', 0)
         trade_record = {
             "symbol": symbol,
             "side": side,
@@ -1522,8 +1600,7 @@ class Trader:
             "pnl_pct": round(pnl_pct, 2),
             "exit_reason": exit_reason,
             "entry_time": pos.get('timestamp'),
-            "exit_time": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0,
-            "shadow": is_shadow
+            "exit_time": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
         }
 
         # Fix 9 (Unified Store): Write all data to signal_performance.json via tracker.
@@ -1545,8 +1622,7 @@ class Trader:
                     btc_change=0, # Optional or fetch
                     snapshot=pos.get('snapshot'),
                     pos_key=pos_key,
-                    leverage=leverage,
-                    shadow=is_shadow
+                    leverage=leverage
                 )
 
             # Notify Telegram for ALL closed positions
@@ -2417,7 +2493,7 @@ class Trader:
                     if key in active_map:
                         active_trade = active_map[key]
                         if ts > (active_trade.get('entry_time') or 0):
-                            self.logger.info(f"✅ [SYNC] Found deep EXIT for {symbol} {opp_side}: Price {price}")
+                            self.logger.info(f"[SYNC] Found deep EXIT for {symbol} {opp_side}: Price {price}")
                             p_key = active_trade.get('pos_key')
                             await self._clear_db_position(p_key, exit_price=price, exit_reason="SYNC(Deep History)")
                             await self.remove_position(symbol, active_trade.get('timeframe', 'sync'), exit_price=price, exit_reason="SYNC(Deep)")
@@ -2754,7 +2830,10 @@ class Trader:
                     
                     # After marking filled, ensure SL/TP orders are placed (if not already there)
                     try:
-                        await self._create_sl_tp_orders_for_position(pos_key)
+                        if not self.is_margin_throttled():
+                            await self._create_sl_tp_orders_for_position(pos_key)
+                        else:
+                            self.logger.warning(f"[SYNC] Skipping SL/TP creation for {pos_key} due to margin throttling.")
                     except:
                         pass
                     
@@ -2881,7 +2960,7 @@ class Trader:
                                     is_sl_hit = True
                         if is_sl_hit:
                             self.logger.info(f"[{symbol}] Sync detected loss or SL closure. Applying SL Cooldown.")
-                            print(f"🛡️ [{self.exchange_name}] [{symbol}] Applying SL Cooldown after external closure.")
+                            print(f"[SAFE] [{self.exchange_name}] [{symbol}] Applying SL Cooldown after external closure.")
                             await self.set_sl_cooldown(symbol)
                             actual_reason = "SL"
                         else:
@@ -3038,7 +3117,7 @@ class Trader:
                                                 is_loss = (side == 'BUY' and exit_price < entry_price) or (side == 'SELL' and exit_price > entry_price)
                                                 if is_loss:
                                                     self.logger.info(f"[{symbol}] Sync detected loss for fast pending-to-SL trade. Applying Cooldown.")
-                                                    print(f"🛡️ [{self.exchange_name}] [{symbol}] Applying SL Cooldown after fast SL hit.")
+                                                    print(f"[SAFE] [{self.exchange_name}] [{symbol}] Applying SL Cooldown after fast SL hit.")
                                                     await self.set_sl_cooldown(symbol)
                                                 
                                                 await self.log_trade(pos_key, exit_price, exit_reason="Exchange Sync (Fast Fill + SL)")
@@ -3151,7 +3230,11 @@ class Trader:
                         # C) AUTO-RECREATE IF TRULY MISSING
                         # Fix: ONLY repair if the position actually exists on the exchange!
                         if auto_fix and ex_match and (not found_sl or not found_tp):
-                            print(f"🛠️ [REPAIR] {pos_key} is missing SL or TP on exchange. Recreating...")
+                            if self.is_margin_throttled():
+                                self.logger.warning(f"[REPAIR] Skipping recreation for {pos_key} due to margin throttling.")
+                                continue
+                                
+                            print(f"[REPAIR] {pos_key} is missing SL or TP on exchange. Recreating...")
                             
                             # MARK TIMESTAMP BEFORE ACTION to prevent immediate re-entry
                             self._pos_action_timestamps[f"{pos_key}_recreation"] = self.exchange.milliseconds()

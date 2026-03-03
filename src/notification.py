@@ -138,7 +138,7 @@ from datetime import datetime
 # Mode labels
 def get_mode_label(dry_run: bool) -> str:
     """Get mode label for notifications."""
-    return "🧪 TEST" if dry_run else "🟢 LIVE"
+    return "🧪 TEST" if dry_run else "LIVE"
 
 # Direction emojis
 def get_direction_emoji(side: str) -> str:
