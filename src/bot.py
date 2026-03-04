@@ -124,7 +124,13 @@ class TradingBot:
                 if pending_age >= MIN_PENDING_SECS:
                     df_scan = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
                     if df_scan is not None:
-                        sig = self.strategy.get_signal(df_scan.iloc[-1], tracker=self.signal_tracker)
+                        scan_row = df_scan.iloc[-1]
+                        bms_score = float(scan_row.get('bms_score') or 0.5)
+                        bms_zone = str(scan_row.get('bms_zone') or 'NEUTRAL')
+                        sig = self.strategy.get_signal(
+                            scan_row, tracker=self.signal_tracker,
+                            bms_score=bms_score, bms_zone=bms_zone
+                        )
                         opp_side = 'SELL' if pending_pos['side'] == 'BUY' else 'BUY'
                         # FIX-C: Only cancel on STRONG reversal (opposite side + confidence >= 0.4).
                         # Do NOT cancel just because signal turned neutral/None — that's normal noise.
@@ -149,9 +155,17 @@ class TradingBot:
                 # Signal Reversal for Active Position
                 df_scan = self.data_manager.get_data_with_features(self.symbol, self.timeframe, exchange=self.trader.exchange_name)
                 if df_scan is not None:
-                    sig = self.strategy.get_signal(df_scan.iloc[-1], tracker=self.signal_tracker)
+                    scan_row = df_scan.iloc[-1]
+                    bms_score = float(scan_row.get('bms_score') or 0.5)
+                    bms_zone = str(scan_row.get('bms_zone') or 'NEUTRAL')
+                    sig = self.strategy.get_signal(
+                        scan_row, tracker=self.signal_tracker,
+                        bms_score=bms_score, bms_zone=bms_zone
+                    )
                     opp_side = 'SELL' if side == 'BUY' else 'BUY'
-                    if sig['side'] == opp_side and sig['confidence'] * 10 >= 3.0: # Hardcoded exit score 3.0
+                    # Use per-symbol exit_score from config, fallback to 3.0
+                    exit_thresh = self.strategy.config_data.get('thresholds', {}).get('exit_score', 3.0)
+                    if sig['side'] == opp_side and sig['confidence'] * 10 >= exit_thresh:
                         await self.trader.force_close_position(pos_key, reason="Signal flipped")
                         return True
                 
@@ -202,16 +216,23 @@ class TradingBot:
             print(f"📭 [{exchange}] [{sym}/{tf}] No feature data available")
             return None
 
-        signal_data = self.strategy.get_signal(df.iloc[-1], tracker=self.signal_tracker)
+        # Extract BMS from df row and pass to strategy so BMS zone veto is active
+        last_row = df.iloc[-1]
+        bms_score = float(last_row.get('bms_score') or 0.5)
+        bms_zone = str(last_row.get('bms_zone') or 'NEUTRAL')
+        signal_data = self.strategy.get_signal(
+            last_row, tracker=self.signal_tracker,
+            bms_score=bms_score, bms_zone=bms_zone
+        )
         side = signal_data.get('side')
         conf = signal_data.get('confidence', 0.0)
-        current_ts_str = str(df.iloc[-1]['timestamp'])
+        current_ts_str = str(last_row['timestamp'])
         should_log = (current_ts_str != self.last_eval_timestamp)
 
         if side and side != 'SKIP' and conf >= config.MIN_CONFIDENCE_TO_TRADE:
-            signal_data['last_row'] = df.iloc[-1]
+            signal_data['last_row'] = last_row
             if should_log:
-                print(f"✅ [{exchange}] [{sym}/{tf}] SIGNAL {side} conf={conf:.2f}")
+                print(f"✅ [{exchange}] [{sym}/{tf}] SIGNAL {side} conf={conf:.2f} BMS={bms_zone}")
                 self.last_eval_timestamp = current_ts_str
             return signal_data
 
@@ -385,8 +406,18 @@ async def main():
                     await run_global_optimization()
                     last_optimization_time = curr_time
                     print("✅ Periodic optimization complete.")
+                    # [CRITICAL FIX] Refresh strategy config cache from DB after optimization.
+                    # The optimizer writes new weights/enabled flags to the DB, but the
+                    # in-memory WeightedScoringStrategy._config_cache is stale until refreshed.
+                    # Without this, the bot uses old configs and may find no signals.
+                    try:
+                        updated_configs = await db.get_all_strategy_configs()
+                        WeightedScoringStrategy.update_cache(updated_configs)
+                        print(f"[CACHE] Strategy cache refreshed: {len(updated_configs)} configs loaded.")
+                    except Exception as cache_err:
+                        print(f"[CACHE] Failed to refresh strategy cache: {cache_err}")
                 except Exception as e:
-                    print(f"⚠️ Optimization error: {e}")
+                    print(f"Optimization error: {e}")
                 print("="*60 + "\n")
             
             # Periodic Database Maintenance (Once per 24h)
@@ -458,7 +489,23 @@ async def main():
                 async def run_profile_symbol(symbol, s_bots, t, b_track, p_id):
                     # Monitoring All
                     await asyncio.gather(*[sb.run_monitoring_cycle() for sb in s_bots])
-                    
+
+                    # Market Crash/Pump Gate: block new entries when BTC moves ±3%
+                    btc_data = manager.get_data('BTC/USDT:USDT', config.TRADING_TIMEFRAMES[0],
+                                               exchange=p['exchange'])
+                    if btc_data is not None and len(btc_data) >= 2:
+                        try:
+                            latest_close = float(btc_data.iloc[-1]['close'])
+                            prev_close = float(btc_data.iloc[-2]['close'])
+                            btc_pct_change = (latest_close - prev_close) / prev_close if prev_close > 0 else 0
+                            market_status = st.check_market_condition(btc_pct_change)
+                            if market_status in ('crash', 'pump'):
+                                print(f"🌩️ [{p['name']}] [{symbol}] Market {market_status.upper()} "
+                                      f"({btc_pct_change*100:.1f}%). Blocking new entries.")
+                                return
+                        except Exception:
+                            pass  # Don't block on error — safe fallback
+
                     # Entry competition
                     async with t._get_lock(symbol):
                         if await t.has_any_symbol_position(symbol): return

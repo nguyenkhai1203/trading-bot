@@ -45,3 +45,4 @@ src/signal_performance_test.json
 test/__pycache__/
 */__pycache__/
 */__pycache__/*
+start.bat

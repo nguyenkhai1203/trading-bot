@@ -200,31 +200,80 @@ class Trader:
         
         return shared.get('last_balance') or {}
 
-    async def check_margin_error(self, error_msg):
+    async def check_margin_error(self, error_msg, new_confidence=None):
         """
         Check if error is 'Insufficient Margin' and set a cooldown if so.
-        Also attempts to cancel low-confidence orders to free up room.
+        Smart eviction: cancels only pending orders with LOWER confidence than the new signal.
+        Active filled positions are logged but never force-closed (SL/TP protects them).
+        Falls back to legacy single-worst cancel when new_confidence is not provided.
         """
         msg = str(error_msg).lower()
         if "insufficient margin" in msg or "-2019" in msg or "insufficient balance" in msg:
             shared = self.__class__._shared_account_cache.get(self.account_key)
-            shared['margin_cooldown_until'] = time.time() + 300 # 5 minute cooldown
-            self.logger.warning(f"[{self.exchange_name}] Insufficient margin detected. Throttling entries for 5 minutes.")
-            
-            # PROACTIVE: Cancel lowest confidence pending order to free space
-            if len(self.pending_orders) > 1:
-                try:
-                    # Find pending order with lowest entry_confidence
-                    candidates = [(k, v) for k, v in self.pending_orders.items() if v.get('status') == 'pending' and v.get('order_id')]
-                    if candidates:
-                        lowest = min(candidates, key=lambda x: x[1].get('entry_confidence') or 0.5)
-                        l_key, l_val = lowest
-                        if (l_val.get('entry_confidence') or 0.5) < 0.6: # Only cancel if confidence is not super high
-                            self.logger.info(f"🛡️ [MARGIN RECOVERY] Cancelling low-confidence order {l_val.get('order_id')} for {l_val.get('symbol')} to free margin.")
-                            await self.cancel_pending_order(l_key, reason="Insufficient margin (Low confidence eviction)")
-                except Exception as cancel_err:
-                    self.logger.error(f"Error during margin-recovery cancellation: {cancel_err}")
-            
+            shared['margin_cooldown_until'] = time.time() + 900  # 15 minute cooldown
+            self.logger.warning(
+                f"[{self.exchange_name}] Insufficient margin detected. "
+                f"Throttling entries for 15 minutes."
+            )
+
+            try:
+                # All cancellable pending orders (status=pending, have an order_id)
+                pending_candidates = sorted(
+                    [(k, v) for k, v in self.pending_orders.items()
+                     if v.get('status') == 'pending' and v.get('order_id')],
+                    key=lambda x: x[1].get('entry_confidence') or 0.5
+                )
+
+                if new_confidence is not None:
+                    # --- SMART EVICTION: only cancel orders WORSE than the new signal ---
+                    cancelled = 0
+                    for p_key, p_val in pending_candidates:
+                        existing_conf = p_val.get('entry_confidence') or 0.5
+                        if existing_conf < new_confidence:
+                            self.logger.info(
+                                f"🛡️ [EVICT] Cancelling pending {p_val.get('order_id')} "
+                                f"({p_val.get('symbol')} conf={existing_conf:.2f}) "
+                                f"< new signal conf={new_confidence:.2f}"
+                            )
+                            await self.cancel_pending_order(
+                                p_key, reason="Insufficient margin (lower-quality eviction)"
+                            )
+                            cancelled += 1
+
+                    # Warn about filled positions blocking capital (do NOT force-close)
+                    active_worse = [
+                        (k, v) for k, v in self.active_positions.items()
+                        if v.get('status') == 'filled'
+                        and (v.get('entry_confidence') or 0.5) < new_confidence
+                    ]
+                    if active_worse:
+                        self.logger.warning(
+                            f"⚠️ [MARGIN] {len(active_worse)} active position(s) have lower "
+                            f"confidence than new signal ({new_confidence:.2f}) but won't be "
+                            f"force-closed — SL/TP will guard capital."
+                        )
+
+                    if cancelled == 0:
+                        self.logger.info(
+                            f"[MARGIN] No pending orders worse than new signal "
+                            f"(conf={new_confidence:.2f}). Cooldown active, no evictions."
+                        )
+                else:
+                    # --- LEGACY SAFE MODE: cancel single worst order only if conf < 0.6 ---
+                    if pending_candidates:
+                        l_key, l_val = pending_candidates[0]  # already sorted worst-first
+                        if (l_val.get('entry_confidence') or 0.5) < 0.6:
+                            self.logger.info(
+                                f"🛡️ [MARGIN RECOVERY] Cancelling low-confidence order "
+                                f"{l_val.get('order_id')} for {l_val.get('symbol')} to free margin."
+                            )
+                            await self.cancel_pending_order(
+                                l_key, reason="Insufficient margin (Low confidence eviction)"
+                            )
+
+            except Exception as cancel_err:
+                self.logger.error(f"Error during margin-recovery eviction: {cancel_err}")
+
             return True
         return False
 
@@ -1015,7 +1064,7 @@ class Trader:
                                 print(f"❌ [{self.exchange_name}] Insufficient balance: Need ~{req_margin}, have {curr_bal} USDT")
                             except Exception as bal_err:
                                 self.logger.error(f"Diagnostics: fetch_balance failed: {bal_err}")
-                        await self.check_margin_error(e)
+                        await self.check_margin_error(e, new_confidence=confidence)
                         raise e # Re-raise original error
                 
                 try:
@@ -1118,6 +1167,7 @@ class Trader:
                             raise e 
                     except Exception as recovery_error:
                         self.logger.error(f"Recovery failed for {client_id}: {recovery_error}")
+                        await self.check_margin_error(recovery_error, new_confidence=confidence)
                         raise e
 
                 try:
