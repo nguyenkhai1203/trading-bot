@@ -69,8 +69,8 @@ Philosophy: **The Exchange is the Source of Truth.**
 
 ### Tiered State Reconciliation
 The system employs a three-tier defense against state drift and historical inconsistency:
-1.  **Ghost Detection (60s)**: `sync_with_exchange()` runs every minute to detect positions that were closed externally (TP/SL). It uses a price-crossing heuristic and `fetch_positions` to resolve positions immediately.
-2.  **Full Reconciliation (10m)**: `reconcile_positions()` runs every 10 minutes to fix missing SL/TP orders, adopt orphans, and ensure 1:1 parity between DB and Exchange.
+1.  **Ghost Detection (60s)**: `sync_with_exchange()` runs every minute to detect positions that were closed externally (TP/SL). It uses a **Precision-First Resolver** (`_infer_exit_reason`) that prioritizes exchange-native metadata (Bybit `stopOrderType`, etc.) over heuristics. This ensures accurate SL/TP classification and reliable cooldown triggering even for adopted positions with `entry_price=0`.
+2.  **Full Reconciliation (10m)**: `reconcile_positions()` runs every 10 minutes to fix missing SL/TP orders, adopt orphans, and ensure 1:1 parity between DB and Exchange. Now integrated with the same precise resolver.
 3.  **Deep History Sync (1h)**: `deep_history_sync()` scans the last 24-48 hours of actual trade history on the exchange to find any exits that were missed by the real-time loops.
 
 ### Performance & Multi-Profile Safety

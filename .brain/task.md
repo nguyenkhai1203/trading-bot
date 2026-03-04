@@ -81,6 +81,13 @@
 - [x] Standardize `newClientOrderId` with profile-specific prefixes (`P{id}_...`)
 - [x] Fix `NameError` crash in main loop
 
+### Iteration 9 — Precise SL/TP Sync & Cooldowns (March 4, 2026)
+- [x] Implement `_infer_exit_reason` precision-first resolver
+- [x] Fix entry_price=0 logic guard in `reconcile_positions`
+- [x] Integrate resolver into Ghost, Reconcile, and Deep Sync paths
+- [x] Ensure mandatory SL cooldown triggering across all paths
+- [x] Verify with 6/6 passing automated tests
+
 ---
 
 ## 🏗 Future & In-Progress

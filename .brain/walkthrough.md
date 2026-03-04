@@ -43,6 +43,13 @@ Quick map to navigate and debug the project.
 
 ## �🚀 Major Updates
 
+### Iteration 9 — Precise SL/TP Sync & Cooldowns (March 4, 2026)
+**Resolved SL/TP misclassification and improper cooldown application:**
+- **Precise Exit Resolver**: Implemented `_infer_exit_reason()` which prioritizes exchange-native metadata (Bybit `stopOrderType`, Binance `orderType`) and refined proximity checks over price heuristics.
+- **Entry Price Guard Fix**: Resolved a critical bug in `reconcile_positions` where SL detection was bypassed for adopted positions with `entry_price=0`.
+- **Bulletproof Cooldowns**: Guaranteed `set_sl_cooldown` triggering across all 3 sync paths whenever a loss is verified.
+- **Verification**: 6/6 test cases passing, specifically confirming Bybit-native detection and zero-entry-price edge cases.
+
 ### Iteration 8 — Multi-Profile Safety & Shared State (March 3, 2026)
 **Fixed multi-profile synchronization and loop crashes:**
 - **Shared Account Cache**: Implemented a class-level shared cache in `Trader` that gives all profile instances real-time awareness of account-wide positions and orders. This prevents duplicate entries when multiple profiles manage the same underlying API key.

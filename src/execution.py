@@ -2453,6 +2453,53 @@ class Trader:
                          # Resolve via history
                          await self._resolve_ghost_position(pos_key, hit_likely=False, is_pending=True)
 
+
+    def _infer_exit_reason(self, close_trade: dict, pos: dict) -> str:
+        """
+        Determine SL or TP from exchange trade data.
+        Priority: exchange native fields > price proximity > price direction > conservative fallback.
+        """
+        info = close_trade.get('info') or {}
+        
+        # 1. Exchange-native field (Bybit: stopOrderType)
+        stop_type = str(info.get('stopOrderType', '')).lower()
+        if stop_type in ('stoploss', 'stop_loss'):
+            return 'SL'
+        if stop_type in ('takeprofit', 'take_profit'):
+            return 'TP'
+        
+        # 2. orderType fallback (Binance: STOP_MARKET, TAKE_PROFIT_MARKET)
+        order_type = str(close_trade.get('type') or info.get('orderType', '')).lower()
+        if 'stop' in order_type and 'take' not in order_type:
+            return 'SL'
+        if 'take_profit' in order_type or 'take profit' in order_type:
+            return 'TP'
+        
+        # 3. SL proximity check (within 0.5%)
+        exit_price = self._safe_float(close_trade.get('price'))
+        sl_price = self._safe_float(pos.get('sl'))
+        tp_price = self._safe_float(pos.get('tp'))
+        side = pos.get('side', '').upper()
+        
+        if exit_price > 0 and sl_price > 0:
+            if abs(exit_price - sl_price) / sl_price < 0.005:
+                return 'SL'
+        if exit_price > 0 and tp_price > 0:
+            if abs(exit_price - tp_price) / tp_price < 0.005:
+                return 'TP'
+        
+        # 4. Direction heuristic (only if entry_price known)
+        entry_price = self._safe_float(pos.get('entry_price'))
+        if exit_price > 0 and entry_price > 0:
+            if side == 'BUY' and exit_price < entry_price:
+                return 'SL'
+            if side == 'SELL' and exit_price > entry_price:
+                return 'SL'
+            return 'TP'
+        
+        # 5. Conservative fallback — unknown, never silently label as TP
+        return 'SYNC(Unknown)'
+
     async def _resolve_ghost_position(self, pos_key, hit_likely=False, is_pending=False):
         """Helper to find closing trade in history and update DB/memory."""
         pos = self.active_positions.get(pos_key)
@@ -2481,9 +2528,14 @@ class Trader:
                 exit_time = close_trade['timestamp']
                 
                 # Update DB and Memory
-                reason = "SYNC(TP/SL)" if hit_likely else "SYNC(External)"
+                reason = self._infer_exit_reason(close_trade, pos)
                 if is_pending: reason = "SYNC(Fast Fill+Exit)"
                 
+                # Apply cooldown if SL detected
+                if reason == 'SL' and not is_pending:
+                    self.logger.info(f"[{symbol}] Sync detected SL closure. Applying SL Cooldown.")
+                    await self.set_sl_cooldown(symbol)
+
                 # 1. Update DB 'trades' table status
                 await self._clear_db_position(pos_key, exit_price=exit_price, exit_reason=reason)
                 # 2. Log to signal_tracker, notify Telegram, and remove from memory/cleanup orders
@@ -2545,8 +2597,14 @@ class Trader:
                         if ts > (active_trade.get('entry_time') or 0):
                             self.logger.info(f"[SYNC] Found deep EXIT for {symbol} {opp_side}: Price {price}")
                             p_key = active_trade.get('pos_key')
-                            await self._clear_db_position(p_key, exit_price=price, exit_reason="SYNC(Deep History)")
-                            await self.remove_position(symbol, active_trade.get('timeframe', 'sync'), exit_price=price, exit_reason="SYNC(Deep)")
+                            
+                            actual_reason = self._infer_exit_reason(t, active_trade)
+                            if actual_reason == 'SL':
+                                self.logger.info(f"[{symbol}] Deep sync detected SL closure. Applying SL Cooldown.")
+                                await self.set_sl_cooldown(symbol)
+                                
+                            await self._clear_db_position(p_key, exit_price=price, exit_reason=actual_reason)
+                            await self.remove_position(symbol, active_trade.get('timeframe', 'sync'), exit_price=price, exit_reason=actual_reason)
                             total_fixed += 1
                             del active_map[key]
                 
@@ -2995,27 +3053,23 @@ class Trader:
                             self._save_positions()
                             continue
                         
-                        # Improved SL Cooldown detection: triggers on ANY loss or if exit price is near SL level
-                        is_sl_hit = False
-                        if exit_price > 0 and pos.get('entry_price', 0) > 0:
-                            if side == 'BUY' and exit_price < pos.get('entry_price'):
-                                is_sl_hit = True
-                            elif side == 'SELL' and exit_price > pos.get('entry_price'):
-                                is_sl_hit = True
-                            
-                            # Check if exit price is near the SL level (within 0.5% tolerance)
-                            if not is_sl_hit and pos.get('sl'):
-                                sl_price = float(pos.get('sl'))
-                                if abs(exit_price - sl_price) / sl_price < 0.005: 
-                                    is_sl_hit = True
-                        if is_sl_hit:
-                            self.logger.info(f"[{symbol}] Sync detected loss or SL closure. Applying SL Cooldown.")
-                            print(f"[SAFE] [{self.exchange_name}] [{symbol}] Applying SL Cooldown after external closure.")
-                            await self.set_sl_cooldown(symbol)
-                            actual_reason = "SL"
+                        # Determine exit reason accurately using exchange data where possible
+                        if recent_trades:
+                            # Use the most recent closing trade for classification
+                            target_side = 'sell' if side == 'BUY' else 'buy'
+                            close_trades_only = [t for t in recent_trades if t.get('side', '').lower() == target_side]
+                            if close_trades_only:
+                                latest_trade = max(close_trades_only, key=lambda t: t['timestamp'])
+                                actual_reason = self._infer_exit_reason(latest_trade, pos)
+                            else:
+                                actual_reason = 'SYNC(Unknown)'
                         else:
-                            # It's not an SL, so it must be a TP or manual close
-                            actual_reason = "TP"
+                            # Heuristic fallback if no trades found (though exit_price > 0 implies trades usually exist)
+                            actual_reason = 'SYNC(External)'
+
+                        if actual_reason == 'SL':
+                            self.logger.info(f"[{symbol}] Sync detected SL closure. Applying SL Cooldown.")
+                            await self.set_sl_cooldown(symbol)
                         
                         await self.log_trade(pos_key, exit_price, exit_reason=actual_reason)
                         del self.active_positions[pos_key]

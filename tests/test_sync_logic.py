@@ -89,7 +89,7 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         # Verify exit price was captured correctly from history
         call_args = self.trader._clear_db_position.call_args[1]
         self.assertEqual(call_args['exit_price'], 55050.0)
-        self.assertIn("SYNC", call_args['exit_reason'])
+        self.assertEqual(call_args['exit_reason'], 'TP')
         
         self.trader.remove_position.assert_called_once()
         # Verify position was removed from memory if remove_position logic was called
@@ -176,7 +176,80 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         # Check params
         call_args = self.trader._clear_db_position.call_args[1]
         self.assertEqual(call_args['exit_price'], 2950.0)
-        self.assertIn("Deep History", call_args['exit_reason'])
+        self.assertEqual(call_args['exit_reason'], 'TP') # Infered as TP because price went down for SELL side
+
+    async def test_resolve_ghost_uses_bybit_stoploss_field(self):
+        """Verify Bybit stopOrderType='StopLoss' results in 'SL' reason."""
+        symbol = 'ATOM/USDT'
+        pos_key = f"P1_BYBIT_ATOM_USDT"
+        self.trader.active_positions = {
+            pos_key: {
+                'symbol': symbol, 'side': 'SELL', 'status': 'filled', 
+                'entry_price': 1.803, 'sl': 1.85, 'timestamp': int(time.time() * 1000) - 3600000
+            }
+        }
+        
+        self.mock_exchange.fetch_positions = AsyncMock(return_value=[])
+        self.mock_exchange.fetch_open_orders = AsyncMock(return_value=[])
+        exit_trade = {
+            'symbol': symbol, 'side': 'buy', 'price': 1.85, 'amount': 10.0,
+            'timestamp': int(time.time() * 1000) - 60000,
+            'info': {'stopOrderType': 'StopLoss'}
+        }
+        self.mock_exchange.fetch_my_trades = AsyncMock(return_value=[exit_trade])
+        self.trader.set_sl_cooldown = AsyncMock()
+
+        await self.trader.sync_with_exchange()
+        
+        # Verify
+        self.trader._clear_db_position.assert_called_once()
+        call_args = self.trader._clear_db_position.call_args[1]
+        self.assertEqual(call_args['exit_reason'], 'SL')
+        self.trader.set_sl_cooldown.assert_called_once_with(symbol)
+
+    async def test_resolve_ghost_proximity_check(self):
+        """Verify proximity check when exchange info is missing."""
+        symbol = 'BTC/USDT'
+        pos_key = f"P1_BYBIT_BTC_USDT"
+        self.trader.active_positions = {
+            pos_key: {
+                'symbol': symbol, 'side': 'BUY', 'status': 'filled', 
+                'entry_price': 50000.0, 'sl': 49000.0, 'tp': 55000.0,
+                'timestamp': int(time.time() * 1000) - 3600000
+            }
+        }
+        
+        self.mock_exchange.fetch_positions = AsyncMock(return_value=[])
+        self.mock_exchange.fetch_open_orders = AsyncMock(return_value=[])
+        # Exit price is close to SL
+        exit_trade = {
+            'symbol': symbol, 'side': 'sell', 'price': 49010.0, 'amount': 0.1,
+            'timestamp': int(time.time() * 1000) - 60000,
+            'info': {} # Empty info
+        }
+        self.mock_exchange.fetch_my_trades = AsyncMock(return_value=[exit_trade])
+        self.trader.set_sl_cooldown = AsyncMock()
+
+        await self.trader.sync_with_exchange()
+        
+        call_args = self.trader._clear_db_position.call_args[1]
+        self.assertEqual(call_args['exit_reason'], 'SL')
+        self.trader.set_sl_cooldown.assert_called_once_with(symbol)
+
+    async def test_infer_exit_entry_price_zero(self):
+        """Verify fix for SL classification when entry_price is 0."""
+        symbol = 'ETH/USDT'
+        pos_key = f"P1_BYBIT_ETH_USDT"
+        pos = {
+            'symbol': symbol, 'side': 'BUY', 'status': 'filled', 
+            'entry_price': 0, 'sl': 2000.0, 'tp': 2500.0
+        }
+        trade = {
+            'price': 2005.0,
+            'info': {}
+        }
+        reason = self.trader._infer_exit_reason(trade, pos)
+        self.assertEqual(reason, 'SL')
 
 if __name__ == '__main__':
     unittest.main()

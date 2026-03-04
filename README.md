@@ -24,6 +24,7 @@ python3 -m venv .venv
 .venv\Scripts\activate
 source .venv/bin/activate
 python3 src/self_test.py
+.\.venv\Scripts\python.exe launcher.py
 ```
 
 ### 2. Prepare Data & Maintenace

@@ -204,6 +204,10 @@ Allows remote interaction with the bot instance.
 *   **Discovery**: A single sync frequency is either too heavy for the API or too slow for state reconciliation.
 *   **Lesson**: Use **Tiered Frequency**. 60s for ghost detection, 10m for full order/position parity, and 1h for deep historical audit. This balances API safety with high-fidelity state tracking.
 
+18. SL/TP Sync Misclassification (The "Adopted Position" Trap)
+*   **Discovery**: Heuristic price-guessing for SL/TP exits failed during volatility or when `entry_price` was 0 (common for adopted positions).
+*   **Impact**: Bot labeled SL losses as "TP" wins and failed to trigger mandatory SL cooldowns.
+*   **Lesson**: **Prioritize Exchange Metadata.** Use a precision-first resolver (`_infer_exit_reason`) that favors Bybit/Binance native trade categories (e.g., `stopOrderType`) over simple price distance. Cooldowns must be applied in *every* sync path immediately upon SL detection.
 
 ---
 
