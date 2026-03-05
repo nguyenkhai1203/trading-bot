@@ -15,8 +15,8 @@ def get_test_db_path():
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", f"trading_test_{TEST_DB_ID}.db")
 
 # Add src to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.database import DataManager
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+from database import DataManager
 
 @pytest_asyncio.fixture(autouse=True)
 async def cleanup_db():

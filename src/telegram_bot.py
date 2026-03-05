@@ -173,14 +173,27 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                         print(f"[DEBUG {label}] Tickers fetched.")
                     except Exception as e:
                         logging.warning(f"Batch ticker fetch failed for {label}: {e}. Falling back to cached data.")
+                
+                # Build auxiliary lookup: strips '/', ':', '-', '_' from unified symbols
+                # so that Bybit raw symbols (e.g. DOGEUSDT) can match DOGE/USDT:USDT
+                def _raw_sym(s: str) -> str:
+                    return s.replace('/', '').replace(':', '').replace('-', '').replace('_', '').upper()
+                _ticker_by_raw = {_raw_sym(k): v for k, v in tickers.items()}
                         
                 for ep in ex_pos:
                     p_qty = abs(float(ep.get('contracts') or ep.get('amount') or ep.get('qty') or 0))
                     if p_qty > 0:
                         sym = ep['symbol']
                         # Use batched tickers instead of single fetch
-                        ticker = tickers.get(sym)
-                        cur = float(ticker['last']) if ticker and ticker.get('last') else float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
+                        # Try direct key first, then raw-symbol fallback (Bybit: DOGEUSDT vs DOGE/USDT:USDT)
+                        ticker = tickers.get(sym) or _ticker_by_raw.get(_raw_sym(sym))
+                        # Priority: ticker last > position markPrice > entry price (last resort)
+                        mark_price = float(ep.get('markPrice') or ep.get('info', {}).get('markPrice') or 0)
+                        cur = (
+                            float(ticker['last']) if ticker and ticker.get('last')
+                            else mark_price if mark_price > 0
+                            else float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
+                        )
                         entry = float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
                         raw_side = ep.get('side', '')
                         if not raw_side:

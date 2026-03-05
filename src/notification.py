@@ -531,7 +531,10 @@ def format_portfolio_update_v2(
                 lines.append("   _None_\n")
             else:
                 for p in pending_list:
-                    lines.append(format_position_v2(**p, is_pending=True))
+                    # Avoid multiple values for is_pending if it's already in the dict
+                    p_data = p.copy()
+                    is_p = p_data.pop('is_pending', True)
+                    lines.append(format_position_v2(**p_data, is_pending=is_p))
                     lines.append("")
     return "\n".join(lines)
 

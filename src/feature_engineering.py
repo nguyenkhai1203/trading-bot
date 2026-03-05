@@ -12,7 +12,31 @@ if src_dir not in sys.path:
 
 class FeatureEngineer:
     def __init__(self):
-        pass
+        # Signal categorization keywords (must match FeatureEngineer signal column names)
+        # These are used by Analyzer to determine strategy bias (LONG vs SHORT)
+        self.long_keywords = {
+            'cross_21_up', 'gt_200', 'MACD_cross_up', 'MACD_gt_signal',
+            'Bullish', 'oversold', 'TK_Cross_Up', 'Vol_Spike',
+            'Above_VWAP', 'lt_BB_Low', 'bounce_from_support', 'breakout_above_resistance',
+            'Stoch_Oversold', 'K_Cross_Up', 'gt_50'
+        }
+        self.short_keywords = {
+            'cross_21_down', 'lt_200', 'MACD_cross_down', 'MACD_lt_signal',
+            'Bearish', 'overbought', 'TK_Cross_Down', 'Below_VWAP',
+            'gt_BB_Up', 'bounce_from_resistance', 'breakout_below_support',
+            'Stoch_Overbought', 'K_Cross_Down', 'lt_50'
+        }
+
+    @property
+    def long_signals(self):
+        """Returns list of signal names that are inherently LONG-biased."""
+        # This list isn't exhaustive, it's just used for bias detection
+        return [f"signal_{k}" for k in self.long_keywords]
+
+    @property
+    def short_signals(self):
+        """Returns list of signal names that are inherently SHORT-biased."""
+        return [f"signal_{k}" for k in self.short_keywords]
 
     def calculate_features(self, df, portfolio_state=None):
         """

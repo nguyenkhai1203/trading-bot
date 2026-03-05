@@ -334,7 +334,7 @@ async def main():
             
         # Core engines for this profile
         signal_tracker = SignalTracker(db, p['id'], env=p['environment'])
-        trader = Trader(adapter, db, p['id'], profile_name=p['name'], signal_tracker=signal_tracker, dry_run=(p['environment'] == 'TEST'), data_manager=manager)
+        trader = Trader(adapter, db, p['id'], profile_name=p['name'], signal_tracker=signal_tracker, dry_run=(p['environment'] == 'TEST'), data_manager=manager, env=p['environment'])
         risk_manager = RiskManager(db, p['id'], env=p['environment'], exchange_name=p['exchange'])
         
         # Sync metrics
@@ -458,6 +458,10 @@ async def main():
                 if not trader.dry_run:
                     # 0.1 Basic Sync (Fast ghost detection) - Every cycle (throttled to 30s internally)
                     await trader.sync_with_exchange()
+                    
+                    # 0.1.5 SL/TP Guardian — verify every filled position has SL/TP active on exchange
+                    # Throttled internally: each position checked at most once per minute, no extra API calls
+                    await trader.scan_sltp_liveness()
                     
                     # 0.2 Full Reconciliation (Fix missing SL/TP, adopt orphans) - Every 10 minutes
                     if curr_time - trader._last_reconcile_time > 600:

@@ -209,6 +209,21 @@ Allows remote interaction with the bot instance.
 *   **Impact**: Bot labeled SL losses as "TP" wins and failed to trigger mandatory SL cooldowns.
 *   **Lesson**: **Prioritize Exchange Metadata.** Use a precision-first resolver (`_infer_exit_reason`) that favors Bybit/Binance native trade categories (e.g., `stopOrderType`) over simple price distance. Cooldowns must be applied in *every* sync path immediately upon SL detection.
 
+19. DB Status Race Condition (Cancelled vs Closed)
+*   **Discovery**: Orders cancelled or evicted for margin reasons were appearing as "CLOSED" in the DB.
+*   **Cause**: `_clear_db_position` was called *after* removing the position from memory. Without the memory record, it couldn't see the `status='pending'` flag and defaulted to `CLOSED`.
+*   **Lesson**: **DB Updates must precede Memory Deletion.** Always call database finalization methods while the object is still in memory to ensure metadata (status, IDs) is available for accurate state recording. Added string-based fallback for "Cancelled/Eviction" reasons as a safety layer.
+
+20. Position Sizing & Safety Caps (High-Volume Volatility)
+*   **Discovery**: Bot executed trades with $40-41 volume despite a $5 global margin limit.
+*   **Cause**: `CONFIDENCE_TIERS` in `config.py` were misaligned (High tier used $8 margin), and the logic in `strategy.py` bypassed global safety caps when using these global tiers.
+*   **Lesson**: **Enforce Global Caps Universally.** Sizing logic must apply `GLOBAL_MAX_COST_PER_TRADE` and `GLOBAL_MAX_LEVERAGE` as the final step of calculation, regardless of the configuration source. Align tier settings with the most restrictive global limits to prevent accidental over-leveraging.
+
+21. Understanding Notional Volume vs. Margin
+*   **Discovery**: User was confused by $40 volume on Bybit while having only $100 balance. 
+*   **Confirmation**: In Futures, **Notional Volume = Margin x Leverage**. A $40 position with 5x leverage only requires $8.0 of real balance (Margin). This is why the bot can open multiple positions simultaneously without draining the entire $100 balance immediately.
+*   **Logic Status**: The current logic is mathematically correct and aligned with standard Futures trading. Binance appeared "smaller" simply because those specific trades hit lower confidence tiers ($4-$6 margin) or used lower đòn bẩy.
+
 ---
 
 ## 🏷️ Naming & Isolation Standards

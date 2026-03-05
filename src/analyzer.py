@@ -216,7 +216,7 @@ class StrategyAnalyzer:
             
         return results
 
-    def validate_weights(self, df, weights, symbol, timeframe, exchange='BINANCE'):
+    def validate_weights(self, df, weights, symbol, timeframe, exchange='BINANCE', bms_score=None, bms_zone=None):
         """
         LAYER 3: Walk-Forward Validation - OPTIMIZED v2.2
         - FULL GRID SEARCH (không giảm quality!)
@@ -249,8 +249,8 @@ class StrategyAnalyzer:
             if not hasattr(mock_strat, 'config_data') or not mock_strat.config_data:
                 mock_strat.config_data = {}
             mock_strat.config_data['thresholds'] = {'entry_score': thresh}
-            train_signals_cache[thresh] = self._compute_signals(train_df, mock_strat)
-            test_signals_cache[thresh] = self._compute_signals(test_df, mock_strat)
+            train_signals_cache[thresh] = self._compute_signals(train_df, mock_strat, bms_score=bms_score, bms_zone=bms_zone)
+            test_signals_cache[thresh] = self._compute_signals(test_df, mock_strat, bms_score=bms_score, bms_zone=bms_zone)
         
         best_overall = None
         max_combined_pnl = -999999
@@ -308,7 +308,7 @@ class StrategyAnalyzer:
         
         return best_overall
 
-    def _compute_signals(self, df, strat):
+    def _compute_signals(self, df, strat, bms_score=None, bms_zone=None):
         """Pre-compute signals once per threshold."""
         signals = []
         # CRITICAL PERFORMANCE OPTIMIZATION: 
@@ -319,9 +319,13 @@ class StrategyAnalyzer:
         
         for i in range(20, len(fast_rows)):
             row = fast_rows[i]
+            # Use row-specific BMS if available (merged during load_data), fallback to global
+            row_bms_score = row.get('bms_score') or bms_score
+            row_bms_zone = row.get('bms_zone') or bms_zone
+            
             # Do not use adaptive weights during backtest grid search to save aggregation time
             # use_brain=False skips neural network inference for 10x speedup in backtesting.
-            sig = strat.get_signal(row, use_adaptive=False, use_brain=False)
+            sig = strat.get_signal(row, use_adaptive=False, use_brain=False, bms_score=row_bms_score, bms_zone=row_bms_zone)
             signals.append(sig['side'] if sig['side'] in ['BUY', 'SELL'] else None)
         return signals
 
@@ -453,7 +457,7 @@ class StrategyAnalyzer:
         self._features_cache.clear()
         self._validation_cache.clear()
 
-    def run_mini_optimization(self, symbols_to_check, improvement_threshold=0.05):
+    async def run_mini_optimization(self, symbols_to_check, improvement_threshold=0.05):
         """
         MINI-ANALYZER: Lightweight optimization for specific symbols after losses.
         Uses 50 combos instead of 270 for ~30s runtime.
@@ -560,7 +564,7 @@ class StrategyAnalyzer:
                     }
                     
                     # Update config
-                    self.update_config(
+                    await self.update_config(
                         symbol, tf, weights,
                         sl_pct=best_result['sl_pct'],
                         tp_pct=best_result['tp_pct'],
@@ -580,6 +584,47 @@ class StrategyAnalyzer:
         print(f"{'='*50}\n")
         
         return updates
+
+
+
+async def _compute_and_cache_bms(analyzer, env_str: str):
+    """
+    Calculate MTF BMS from downloaded CSV data, persist to DB,
+    and populate analyzer._bms_cache for reuse in load_data().
+    """
+    from btc_analyzer import BTCAnalyzer
+    from database import DataManager
+    from config import ACTIVE_EXCHANGES, TRADING_TIMEFRAMES
+    from feature_engineering import FeatureEngineer
+    
+    db = await DataManager.get_instance(env_str)
+    btc_calc = BTCAnalyzer(analyzer, db)
+    
+    # 1. Persist MTF BMS to DB (for live bot freshness)
+    print("  ↳ Updating BTC sentiment in database...")
+    await btc_calc.update_sentiment('BTC/USDT:USDT')
+    
+    # 2. Pre-populate _bms_cache so load_data() reuses it (no re-computation per symbol)
+    fe = FeatureEngineer()
+    for ex_name in ACTIVE_EXCHANGES:
+        ex_name = ex_name.strip()
+        for tf in TRADING_TIMEFRAMES:
+            btc_df = analyzer.load_data('BTC/USDT:USDT', tf, exchange=ex_name)
+            if btc_df is not None:
+                # Calculate features once for BTC
+                btc_feat_df = fe.calculate_features(btc_df)
+                bms_data = btc_calc.calculate_bulk_sentiment(btc_feat_df)
+                if bms_data is not None:
+                    # Extract and rename columns
+                    bms_subset = bms_data[['timestamp', 'bms', 'zone']].rename(
+                        columns={'bms': 'bms_score', 'zone': 'bms_zone'}
+                    )
+                    cache_key = f"{ex_name}_{tf}"
+                    analyzer._bms_cache[cache_key] = bms_subset
+    
+    # Return the latest aggregated BMS for global filtering
+    sentiment = await db.get_latest_market_sentiment()
+    return sentiment
 
 
 async def run_global_optimization(download=False):
@@ -608,6 +653,22 @@ async def run_global_optimization(download=False):
 
     analyzer = StrategyAnalyzer()
     start_time = time.time()
+
+    # Determine environment
+    import config
+    import sys
+    env_str = 'TEST' if getattr(config, 'DRY_RUN', True) else 'LIVE'
+    if "--live" in sys.argv: env_str = 'LIVE'
+    elif "--dry-run" in sys.argv: env_str = 'TEST'
+    
+    # STEP 0.5: Calculate & Persist BMS
+    print("\n" + "=" * 60)
+    print("[*] STEP 0.5: BTC MACRO SIGNAL (BMS) UPDATE")
+    print("=" * 60)
+    global_bms = await _compute_and_cache_bms(analyzer, env_str)
+    bms_zone = global_bms.get('sentiment_zone', 'YELLOW') if global_bms else 'YELLOW'
+    bms_score = float(global_bms.get('bms', 0.5)) if global_bms else 0.5
+    print(f"  ✅ Global BMS: {bms_score:.2f} | Zone: {bms_zone}")
     
     print("\n" + "=" * 60)
     print("[*] STEP 1: SIGNAL ANALYSIS & OPTIMIZATION")
@@ -673,7 +734,7 @@ async def run_global_optimization(download=False):
         df = analyzer.get_features(symbol, tf, exchange=exchange)
         if df is None:
             return None
-        result = analyzer.validate_weights(df, weights, symbol, tf, exchange=exchange)
+        result = analyzer.validate_weights(df, weights, symbol, tf, exchange=exchange, bms_score=bms_score, bms_zone=bms_zone)
         if result:
             return {
                 'exchange': exchange,
@@ -739,7 +800,21 @@ async def run_global_optimization(download=False):
         
         is_profitable = wr >= MIN_WIN_RATE_TRAIN and test_wr >= MIN_WIN_RATE_TEST
         is_consistent = consistency < MAX_CONSISTENCY
-        is_enabled = is_profitable and is_consistent and cross_tf_support >= MIN_CROSS_TF_SUPPORT
+        
+        # BMS ZONE FILTER: In RED zone, disable LONG-biased configs. In GREEN zone, disable SHORT-biased configs.
+        # We determine bias by checking if LONG weights sum is greater than SHORT weights sum.
+        # Note: weight keys in config don't have 'signal_' prefix, so we check against keywords directly.
+        long_sum = sum([w for s, w in weights.items() if any(k in s for k in analyzer.feature_engineer.long_keywords)])
+        short_sum = sum([w for s, w in weights.items() if any(k in s for k in analyzer.feature_engineer.short_keywords)])
+        
+        bms_override = True
+        if bms_zone == 'RED' and long_sum > short_sum:
+            bms_override = False
+            # We don't print here to avoid cluttering, but it will affect is_enabled
+        elif bms_zone == 'GREEN' and short_sum > long_sum:
+            bms_override = False
+            
+        is_enabled = is_profitable and is_consistent and cross_tf_support >= MIN_CROSS_TF_SUPPORT and bms_override
         
         if is_enabled:
             enabled_count += 1
@@ -749,7 +824,7 @@ async def run_global_optimization(download=False):
         else:
             disabled_count += 1
         
-        analyzer.update_config(
+        await analyzer.update_config(
             symbol, tf, weights if is_enabled else {},
             sl_pct=result['sl_pct'],
             tp_pct=result['tp_pct'],

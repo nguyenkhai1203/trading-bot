@@ -65,6 +65,10 @@ GLOBAL_MAX_LEVERAGE = 5        # Absolute max leverage allowed (User safety)
 STOP_LOSS_PCT = 0.015   # Updated: 5% ROE / 3x Lev ≈ 1.67%
 TAKE_PROFIT_PCT = 0.03  # Updated: 12% ROE / 3x Lev = 4.0%
 
+# SL/TP Guardian: emergency close threshold (spot price move, not PnL %)
+# Default 8% price move = ~40% PnL at x5 leverage — dangerous if unprotected
+SLTP_GUARDIAN_EMERGENCY_PCT = float(os.getenv('SLTP_GUARDIAN_EMERGENCY_PCT', '0.08'))
+
 # Backtesting Friction (Realism)
 TRADING_COMMISSION = 0.0006 # 0.06% per trade (Taker)
 SLIPPAGE_PCT = 0.0005       # 0.05% price impact per trade

@@ -157,8 +157,15 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                         'contracts': size,
                         'side': p.get('side', '').upper(), # 'BUY' or 'SELL'
                         'entryPrice': float(p.get('avgPrice', 0)),
+                        # markPrice is the real-time mark price from Bybit V5 — already returned
+                        # for free in the position list; use as current price fallback
+                        'markPrice': float(p.get('markPrice') or 0),
                         'leverage': float(p.get('leverage', 1)),
                         'unrealizedPnl': float(p.get('unrealisedPnl', 0)),
+                        # Promote attached SL/TP to top-level so Guardian/reconcile can read them
+                        # without digging into info (Bybit V5 position-level SL/TP)
+                        'stopLoss': float(p.get('stopLoss') or 0),
+                        'takeProfit': float(p.get('takeProfit') or 0),
                         'info': p
                     }
                     active_positions.append(normalized)

@@ -96,6 +96,12 @@
 - [ ] Add Profile/Exchange labeling to Telegram notifications
 - [ ] Terminal color-coding for multi-profile differentiation
 - [ ] Map adapter-specific status codes to uniform DB states
+
+### Iteration 10 — Sizing Safety & Cap Enforcement (March 4, 2026)
+- [x] Fix logic bug in `get_sizing_tier` (ignore score issue)
+- [x] Enforce `GLOBAL_MAX` caps universally in sizing logic
+- [x] Align `config.py` tiers with global margin limits
+- [x] Verify tiered sizing and caps with test script
 - [ ] Neural Brain training automation via DB logs
 
 ### Phase 4: Verification & Launch

@@ -112,7 +112,10 @@ class BTCAnalyzer:
         # 3. Volatility Score (Vectorized)
         atr = df.get('ATR', pd.Series(0, index=df.index))
         vol_ratio = atr / df['close']
-        v_score = np.where(vol_ratio > 0.02, -0.8, np.where(vol_ratio > 0.015, -0.4, 0.2))
+        # If momentum is strongly positive (> 0.5), we halve the volatility penalty 
+        # (It's a "good" pump, not a panic crash)
+        v_penalty_scale = np.where(m_score > 0.5, 0.5, 1.0)
+        v_score = np.where(vol_ratio > 0.02, -0.8 * v_penalty_scale, np.where(vol_ratio > 0.015, -0.4 * v_penalty_scale, 0.2))
         df['s_vol'] = v_score
         
         # 4. Dominance Score (Limited vectorized - using change in BTC price as proxy if BTCDOM missing)

@@ -35,7 +35,7 @@ async def test_urgent_protection_tp_passed_buy():
             
             assert result['status'] == 'closed'
             mock_close.assert_called_once()
-            assert "TP passed" in mock_close.call_args[1]['reason']
+            assert "Target Hit: TP" in mock_close.call_args[1]['reason']
 
 @pytest.mark.asyncio
 async def test_urgent_protection_sl_passed_buy():
@@ -69,7 +69,7 @@ async def test_urgent_protection_sl_passed_buy():
             
             assert result['status'] == 'closed'
             mock_close.assert_called_once()
-            assert "SL passed" in mock_close.call_args[1]['reason']
+            assert "Target Hit: SL" in mock_close.call_args[1]['reason']
 
 @pytest.mark.asyncio
 async def test_urgent_protection_tp_passed_sell():
@@ -102,4 +102,4 @@ async def test_urgent_protection_tp_passed_sell():
             
             assert result['status'] == 'closed'
             mock_close.assert_called_once()
-            assert "TP passed" in mock_close.call_args[1]['reason']
+            assert "Target Hit: TP" in mock_close.call_args[1]['reason']

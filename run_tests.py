@@ -2,15 +2,31 @@ import subprocess
 import sys
 import os
 
+# Helper function to check if running in a virtual environment
+def is_venv():
+    return (hasattr(sys, 'real_prefix') or
+            (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
+
 def run_tests():
     """Sets up the environment and runs all tests using pytest."""
     print("🚀 Starting Automated Test Suite...")
     
+    # Check if running in a virtual environment
+    if not is_venv():
+        print("⚠️ Warning: Not running in a virtual environment. It's recommended to run tests within a venv.")
+        # Optionally, you could exit here or prompt the user. For now, just a warning.
+        # sys.exit(1)
+
     # 1. Set up PYTHONPATH to include 'src'
     env = os.environ.copy()
-    src_path = os.path.join(os.getcwd(), "src")
+    
+    # Improve path handling: get the directory of the current script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    src_path = os.path.join(script_dir, "src")
+
+    # Use os.pathsep for cross-platform compatibility
     if "PYTHONPATH" in env:
-        env["PYTHONPATH"] = f"{src_path};{env['PYTHONPATH']}"
+        env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
     else:
         env["PYTHONPATH"] = src_path
 
