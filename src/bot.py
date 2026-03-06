@@ -252,14 +252,23 @@ class TradingBot:
             conf = signal_data['confidence']
             price = float(signal_data['last_row']['close'])
             
+            # Calculate target entry price first
+            if config.USE_LIMIT_ORDERS:
+                entry_target = price * (1 - config.PATIENCE_ENTRY_PCT) if side == 'BUY' else price * (1 + config.PATIENCE_ENTRY_PCT)
+                order_type = 'limit'
+            else:
+                entry_target = price
+                order_type = 'market'
+
             sl_pct, tp_pct = self.strategy.get_dynamic_risk_params(signal_data['last_row'])
-            sl_price = price * (1 - sl_pct) if side == 'BUY' else price * (1 + sl_pct)
-            tp_price = price * (1 + tp_pct) if side == 'BUY' else price * (1 - tp_pct)
+            # SL/TP MUST be calculated from the target entry price, otherwise limit order SL/TP will overlap or be invalid!
+            sl_price = entry_target * (1 - sl_pct) if side == 'BUY' else entry_target * (1 + sl_pct)
+            tp_price = entry_target * (1 + tp_pct) if side == 'BUY' else entry_target * (1 - tp_pct)
             
             # Get tier config for size
             tier = self.strategy.get_sizing_tier(conf * 10)
             target_lev = tier.get('leverage', self.risk_manager.leverage)
-            qty = self.risk_manager.calculate_size_by_cost(price, tier.get('cost_usdt', 10), target_lev)
+            qty = self.risk_manager.calculate_size_by_cost(entry_target, tier.get('cost_usdt', 10), target_lev)
             
             if qty <= 0: return False
             
@@ -276,8 +285,8 @@ class TradingBot:
             
             return await self.trader.place_order(
                 symbol=self.symbol, side=side, qty=qty, timeframe=self.timeframe,
-                order_type='limit' if config.USE_LIMIT_ORDERS else 'market',
-                price=price * (1 - config.PATIENCE_ENTRY_PCT) if side == 'BUY' and config.USE_LIMIT_ORDERS else price * (1 + config.PATIENCE_ENTRY_PCT) if side == 'SELL' and config.USE_LIMIT_ORDERS else None,
+                order_type=order_type,
+                price=entry_target if order_type == 'limit' else None,
                 sl=sl_price, tp=tp_price, leverage=target_lev, signals_used=signal_data.get('comment', ''),
                 entry_confidence=conf, snapshot=snapshot
             )

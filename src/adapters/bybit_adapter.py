@@ -270,10 +270,15 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                 extra_params['positionIdx'] = 0
 
             # SL/TP Parameter Enrichment
-            if 'stopLoss' in params or 'takeProfit' in params:
+            # SL/TP Parameter Enrichment (strictly typed for Bybit V5)
+            if 'stopLoss' in params:
+                params['stopLoss'] = str(self.exchange.price_to_precision(symbol, float(params['stopLoss'])))
+                extra_params['tpslMode'] = 'Full'
+                extra_params['slTriggerBy'] = 'MarkPrice'
+            if 'takeProfit' in params:
+                params['takeProfit'] = str(self.exchange.price_to_precision(symbol, float(params['takeProfit'])))
                 extra_params['tpslMode'] = 'Full'
                 extra_params['tpTriggerBy'] = 'MarkPrice'
-                extra_params['slTriggerBy'] = 'MarkPrice'
 
             combined_params = {**extra_params, **params}
             
@@ -573,8 +578,8 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                 is_validation_err = any(x in err_msg for x in validation_keywords)
                 
                 if ("10001" in err_msg or "110001" in err_msg) and is_validation_err:
-                    self.logger.warning(f"[Bybit] SL/TP suppressed (Validation failure): {err_msg[:120]}. Stopping retries for this cycle.")
-                    return {'sl_set': sl is not None, 'tp_set': tp is not None}
+                    self.logger.warning(f"[Bybit] SL/TP suppressed (Validation failure): {err_msg[:120]}. Returning FALSE.")
+                    return {'sl_set': False, 'tp_set': False}
 
                 self.logger.error(f"[Bybit] set_position_sl_tp failed: {e}")
                 return {'sl_set': False, 'tp_set': False}

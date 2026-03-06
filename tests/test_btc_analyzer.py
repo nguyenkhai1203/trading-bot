@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import asyncio
 from unittest.mock import MagicMock, AsyncMock
-from src.btc_analyzer import BTCAnalyzer
+from btc_analyzer import BTCAnalyzer
 
 @pytest.fixture
 def mock_btc_data():

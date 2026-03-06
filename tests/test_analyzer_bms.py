@@ -2,8 +2,8 @@ import pytest
 import pandas as pd
 import numpy as np
 from unittest.mock import MagicMock
-from src.analyzer import StrategyAnalyzer
-from src.strategy import WeightedScoringStrategy
+from analyzer import StrategyAnalyzer
+from strategy import WeightedScoringStrategy
 
 @pytest.fixture
 def mock_analyzer_data():
@@ -53,30 +53,28 @@ def test_analyzer_grid_search_with_bms(mock_analyzer_data):
         # This is harder to test without deep mocking, but we've seen it run in the trial script.
         pass
 
-def test_analyzer_update_config_with_bms():
+from unittest.mock import patch, AsyncMock
+
+@pytest.mark.asyncio
+async def test_analyzer_update_config_with_bms():
     analyzer = StrategyAnalyzer()
     symbol = 'TEST/USDT'
     tf = '1h'
     weights = {'RSI_14': 1.0}
     
-    # Mock file operations for strategy_config.json
-    import json
-    import os
-    config_path = os.path.join('d:\\code\\tradingBot\\src', 'strategy_config.json')
-    
-    # We won't actually mock the file but we'll check if the method executes without error 
-    # and if it correctly handles the w_btc argument
-    try:
-        analyzer.update_config(symbol, tf, weights, 
-                               sl_pct=0.02, tp_pct=0.04, 
-                               entry_score=5.0, w_btc=0.6)
+    with patch('database.DataManager.get_instance', new_callable=AsyncMock) as mock_get_instance:
+        mock_db = AsyncMock()
+        mock_get_instance.return_value = mock_db
         
-        # Verify it was saved (read the file back)
-        with open(config_path, 'r') as f:
-            data = json.load(f)
-            # Match analyzer.py key: BINANCE_TEST_USDT_1h
-            key = f"BINANCE_TEST_USDT_{tf}"
-            assert data[key]['risk']['w_btc'] == 0.6
-            assert data[key]['risk']['w_alt'] == 0.4
-    except Exception as e:
-        pytest.fail(f"update_config failed: {e}")
+        try:
+            await analyzer.update_config(symbol, tf, weights, 
+                                   sl_pct=0.02, tp_pct=0.04, 
+                                   entry_score=5.0, w_btc=0.6)
+            
+            mock_db.save_strategy_config.assert_called_once()
+            args, kwargs = mock_db.save_strategy_config.call_args
+            config = args[3]
+            assert config['risk']['w_btc'] == 0.6
+            assert config['risk']['w_alt'] == 0.4
+        except Exception as e:
+            pytest.fail(f"update_config failed: {e}")

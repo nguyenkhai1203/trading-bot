@@ -3908,8 +3908,8 @@ class Trader:
                         val_price = current_price
                         
                         if val_price > 0:
-                            # Use 0.8% buffer for Bybit to prevent "Immediate Trigger" rejections
-                            buffer_val = 0.008 if self.exchange_name.upper() == 'BYBIT' else 0.0
+                            # Use 0.2% buffer for Bybit to prevent "Immediate Trigger" rejections but limit deadzone
+                            buffer_val = 0.002 if self.exchange_name.upper() == 'BYBIT' else 0.0
                             
                             if side == 'BUY':
                                 # TP must be above price, SL must be below
