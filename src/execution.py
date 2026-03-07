@@ -972,6 +972,10 @@ class Trader:
         # LIVE LOGIC
         # Prepare params
         params = params or {}
+        tpsl_attached = False
+        if self.exchange_name == 'BYBIT' and (sl or tp):
+            tpsl_attached = True
+
         if sl: params['stopLoss'] = sl
         if tp: params['takeProfit'] = tp
         if reduce_only: 
@@ -1103,7 +1107,9 @@ class Trader:
                     "entry_confidence": confidence,
                     "snapshot": snapshot,
                     "timestamp": order.get('timestamp', 0),
-                    "order_id": order.get('id') # Ensure order_id is saved
+                    "order_id": order.get('id'), # Ensure order_id is saved
+                    "sl_order_id": 'attached' if tpsl_attached else None,
+                    "tp_order_id": 'attached' if tpsl_attached else None
                 }
                 await self._update_db_position(pos_key)
                 
@@ -1230,8 +1236,11 @@ class Trader:
                     "signals_used": signals,
                     "entry_confidence": confidence,
                     "snapshot": snapshot,
-                    "timestamp": order.get('timestamp', 0)
+                    "timestamp": order.get('timestamp', 0),
+                    "sl_order_id": 'attached' if tpsl_attached else None,
+                    "tp_order_id": 'attached' if tpsl_attached else None
                 }
+                self.pending_orders[pos_key] = self.active_positions[pos_key]
                 await self._update_db_position(pos_key)
                 
                 # Proactively update SHARED Class-Level Cache for multi-profile immediate awareness
@@ -2083,8 +2092,15 @@ class Trader:
             ])
             
             if is_already_closed:
-                self.logger.info(f"🚨 [FORCE CLOSE] IDEMPOTENT: {pos_key} already closed on exchange. Clearing state.")
-                # Still record to DB and clear memory to stop the loop
+                self.logger.info(f"🚨 [FORCE CLOSE] IDEMPOTENT: {pos_key} already closed on exchange. Resolving actual exit details.")
+                # FIX: Fetch actual exit price from history instead of using entry_price
+                resolved = await self._resolve_ghost_position(pos_key, hit_likely=True)
+                if resolved:
+                    self.logger.info(f"✅ [FORCE CLOSE] Ghost resolved for {pos_key}. State cleared.")
+                    return True
+                
+                # Fallback if resolution failed
+                self.logger.warning(f"⚠️ [FORCE CLOSE] Could not resolve ghost {pos_key}. Clearing with entry_price fallback.")
                 await self.log_trade(pos_key, pos.get('entry_price', 0), reason)
                 await self._clear_db_position(pos_key, exit_price=pos.get('entry_price', 0), exit_reason=reason)
                 del self.active_positions[pos_key]
@@ -2295,6 +2311,19 @@ class Trader:
         side = position.get('side')
         sl = position.get('sl')
         tp = position.get('tp')
+
+        # Check if SL/TP already attached (Bybit V5 native check)
+        if self.exchange_name == 'BYBIT' and symbol:
+            ex_pos = self._last_ex_pos_map.get(self._normalize_symbol(symbol))
+            if ex_pos:
+                has_sl = float(ex_pos.get('stopLoss') or 0) > 0
+                has_tp = float(ex_pos.get('takeProfit') or 0) > 0
+                if has_sl or has_tp:
+                    self.logger.info(f"✅ [SKIP] {symbol} already has attached SL/TP on Bybit. Skipping separate order creation.")
+                    # Update local state so we don't keep checking
+                    if has_sl: position['sl_order_id'] = 'attached'
+                    if has_tp: position['tp_order_id'] = 'attached'
+                    return {'skipped': True, 'reason': 'attached'}
 
         close_side = 'sell' if side == 'BUY' else 'buy'
         results = {}
@@ -2999,11 +3028,26 @@ class Trader:
                     # After marking filled, ensure SL/TP orders are placed (if not already there)
                     try:
                         if not self.is_margin_throttled():
-                            await self._create_sl_tp_orders_for_position(pos_key)
+                            # Check if SL/TP already attached (Bybit V5)
+                            tpsl_attached_sync = False
+                            p_symbol = pos.get('symbol')
+                            if self.exchange_name == 'BYBIT' and p_symbol:
+                                ex_pos = self._last_ex_pos_map.get(self._normalize_symbol(p_symbol))
+                                if ex_pos and (float(ex_pos.get('stopLoss') or 0) > 0 or float(ex_pos.get('takeProfit') or 0) > 0):
+                                    tpsl_attached_sync = True
+                                    self.logger.info(f"✅ [SYNC] {p_symbol} already has attached SL/TP on Bybit. Skipping.")
+                            
+                            if not tpsl_attached_sync:
+                                await self._create_sl_tp_orders_for_position(pos_key)
+                            else:
+                                # Ensure local state reflects attachment
+                                self.active_positions[pos_key]['sl_order_id'] = 'attached'
+                                self.active_positions[pos_key]['tp_order_id'] = 'attached'
+                                await self._update_db_position(pos_key)
                         else:
                             self.logger.warning(f"[SYNC] Skipping SL/TP creation for {pos_key} due to margin throttling.")
-                    except:
-                        pass
+                    except Exception as e:
+                        self.logger.debug(f"[SYNC] SL/TP setup error: {e}")
                     
                     status = 'filled'
 

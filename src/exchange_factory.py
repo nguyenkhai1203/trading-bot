@@ -73,14 +73,14 @@ def get_active_exchanges_map():
             adapter.set_permissions(can_trade=has_valid_key, can_view_balance=has_valid_key)
             
             if adapter.is_public_only:
-                print(f"📡 [Factory] {name}: Active (Public Mode - Trading Disabled)")
+                print(f"[Factory] {name}: Active (Public Mode - Trading Disabled)")
             else:
-                print(f"🔐 [Factory] {name}: Active (Trading Enabled)")
+                print(f"[Factory] {name}: Active (Trading Enabled)")
                 
             adapters[name] = adapter
             
         except Exception as e:
-            print(f"❌ [Factory] Failed to initialize {name}: {e}")
+            print(f"[Factory] Failed to initialize {name}: {e}")
             
             
     return adapters
