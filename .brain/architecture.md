@@ -15,11 +15,14 @@ The system is decoupled into three distinct layers to ensure scalability and mai
     - **Strategy Engine**: 40+ technical indicators weighted by performance.
     - **Analyzer**: Periodic re-optimization (2x daily) with Parallel Grid Search (8 workers).
     - **Neural Brain**: Lightweight NumPy-based MLP for Veto/Boost confirmed signals.
-3.  **Execution Layer (`Trader`)**: 
-    - **Multi-Profile Dependency Injection**: `bot.py` loads all profiles from the database and injects the same `DataManager` instance into each `Trader`.
+3.  **Execution Layer (Modular `Trader`)**: 
+    - **Orchestrator Pattern**: The `Trader` class acts as a high-level orchestrator, delegating complex logic to specialized sub-managers.
+    - **OrderExecutor**: Manages the full order lifecycle (placement, timeout recovery, limit-fill monitoring, and SL/TP creation).
+    - **CooldownManager**: Handles symbol-level SL cooldowns and account-level margin throttling.
+    - **Multi-Profile Dependency Injection**: `bot.py` loads profiles and injects a shared `DataManager` and account-level caches into each `Trader`.
     - **Safety Locks**: Symbol-level async mutexes (`asyncio.Lock`) serialize entry processes per profile.
-    - **Authoritative Sync**: Database-first reality where `pos_key` is the primary identifier for restoring state. The system reconciles DB status with the exchange on every restart.
-    - **Prefixing**: `pos_key` follows the format `P{ID}_{EXCHANGE}_{SYMBOL}_{TF}` where `P{ID}` links the position to a specific user profile in the database.
+    - **Authoritative Sync**: Database-first reality where `pos_key` is the primary identifier. The system reconciles DB status with the exchange on every restart.
+    - **Prefixing**: `pos_key` format `P{ID}_{EXCHANGE}_{SYMBOL}_{TF}` links positions to specific user profiles.
 
 ---
 
@@ -67,11 +70,16 @@ The system employs a dual-logic approach to manage active positions based on bot
 ## 3. Position & Order Synchronization
 Philosophy: **The Exchange is the Source of Truth.**
 
+### Execution Sub-Managers (Phase 3 Refactor)
+To manage complexity and eliminate circular dependencies, execution logic is split:
+- **`OrderExecutor`**: Encapsulates API interactions, client_id generation, and background monitoring tasks (Limit orders). Implements automatic timeout recovery by polling exchange for client_id.
+- **`CooldownManager`**: Manages circuit breakers. Symbol cooldown (2h) blocks re-entry after SL; Margin cooldown (15m) blocks account-level entries after "Insufficient Margin" errors. Supports persistence to DB risk metrics.
+
 ### Tiered State Reconciliation
 The system employs a three-tier defense against state drift and historical inconsistency:
-1.  **Ghost Detection (60s)**: `sync_with_exchange()` runs every minute to detect positions that were closed externally (TP/SL). It uses a **Precision-First Resolver** (`_infer_exit_reason`) that prioritizes exchange-native metadata (Bybit `stopOrderType`, etc.) over heuristics. This ensures accurate SL/TP classification and reliable cooldown triggering even for adopted positions with `entry_price=0`.
-2.  **Full Reconciliation (10m)**: `reconcile_positions()` runs every 10 minutes to fix missing SL/TP orders, adopt orphans, and ensure 1:1 parity between DB and Exchange. Now integrated with the same precise resolver.
-3.  **Deep History Sync (1h)**: `deep_history_sync()` scans the last 24-48 hours of actual trade history on the exchange to find any exits that were missed by the real-time loops.
+1.  **Ghost Detection (60s)**: `sync_with_exchange()` runs every minute to detect positions that were closed externally (TP/SL). It uses a **Precision-First Resolver** (`_infer_exit_reason`) that prioritizes exchange-native metadata (Bybit `stopOrderType`, etc.).
+2.  **Full Reconciliation (10m)**: `reconcile_positions()` runs every 10 minutes to fix missing SL/TP orders, adopt orphans, and ensure 1:1 parity between DB and Exchange.
+3.  **Deep History Sync (1h)**: `deep_history_sync()` scans the last 24-48 hours of actual trade history to find exits missed by real-time loops.
 
 ### Performance & Multi-Profile Safety
 - **Shared Account Cache**: `Trader` uses a class-level `_shared_account_cache` to track account-wide positions and orders across all profiles. This prevents "blind spots" where Profile B enters a trade because it hasn't yet synced Profile A's new entry.

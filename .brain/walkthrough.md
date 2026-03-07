@@ -26,7 +26,9 @@ Quick map to navigate and debug the project.
 | **`/src`** | **Core Logic** | Main source code for the bot. |
 | ├── `database.py` | Data Persistence | **Core**. SQLite/aiosqlite bridge. Singleton DataManager. |
 | ├── `bot.py` | Heartbeat Loop | Manages main loop, Circuit Breaker, and coordinator. |
-| ├── `execution.py`| Execution Engine | **Critical**. Handles entry/exit, Dynamic SL/TP, and Reconcile. |
+| ├── `execution.py`| Execution Engine | **Critical**. Orchestrates entry/exit and state reconcile. |
+| ├── `order_executor.py`| Order Lifecycle | **New**. Handles placement, recovery, and limit-monitoring. |
+| ├── `cooldown_manager.py`| Risk Circuit Breakers| **New**. Manages SL cooldowns and margin throttling. |
 | ├── `strategy.py` | Weighted Scoring | Calculates signals from indicators and optimized weights. |
 | ├── `neural_brain.py`| AI Veto/Boost | NumPy-based MLP for signal filtering (Veto/Boost logic). |
 | ├── `risk_manager.py` | Risk Control | Position scaling, leverage, and drawdown/daily loss limits. |
@@ -41,7 +43,15 @@ Quick map to navigate and debug the project.
 
 ---
 
-## �🚀 Major Updates
+## 🚀 Major Updates
+
+### Iteration 10 — Codebase Modularization & Refactor (March 7, 2026)
+**Successfully decoupled the core execution engine and cleaned up the project root:**
+- **Modular Execution**: Extracted logic from the 3500-line `Trader` class into specialized `OrderExecutor` (API/Lifecycle) and `CooldownManager` (Risk/Circuit Breakers).
+- **Performance & Circularity**: Resolved critical "Partially Initialized Module" errors via bottom-level import patterns and fixed an `account_key` initialization race condition.
+- **Environment Integrity**: Resolved a hidden `aiosqlite` dependency issue that was causing silent test failures.
+- **Clean Root**: Purged/archived ~15 redundant scripts and centralized utilities in `symbol_helper.py`, `config_manager.py`, and `trade_sync_helper.py`.
+- **Verification**: 28/28 tests passing (100% green).
 
 ### Iteration 9 — Precise SL/TP Sync & Cooldowns (March 4, 2026)
 **Resolved SL/TP misclassification and improper cooldown application:**

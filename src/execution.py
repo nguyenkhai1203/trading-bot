@@ -30,6 +30,7 @@ import requests
 from urllib.parse import urlencode
 from utils.symbol_helper import to_api_format, to_display_format
 
+
 # Logger Adapter for Exchange Prefix
 class BotJSONEncoder(json.JSONEncoder):
     """Custom JSON encoder for non-serializable types like Timestamp and numpy types."""
@@ -59,6 +60,24 @@ class ExchangeLoggerAdapter(logging.LoggerAdapter):
 SL_COOLDOWN_SECONDS = 2 * 3600  # 2 hours cooldown after stop loss
 
 class Trader:
+    """
+    Principal Orchestrator for trade execution and state synchronization.
+
+    The Trader class acts as the bridge between signal-generating strategies and 
+    the low-level exchange adapters. It manages internal state, enforces risk controls, 
+    and delegates complex operations to specialized sub-managers:
+    
+    Sub-Managers:
+    - OrderExecutor: Handles the lifecycle of individual orders and timeout recovery.
+    - CooldownManager: Manages SL-based re-entry blocks and margin-based rejection throttling.
+    - DataManager (external): Handles persistence of trade history and market data.
+
+    Design Patterns:
+    - Delegation: Most 'Place' and 'Cancel' logic is delegated to OrderExecutor.
+    - Shared State: Uses class-level `_shared_account_cache` to coordinate multiple profiles.
+    - Idempotency: Uses Client Order IDs for robust order recovery.
+    - Reconciliation: Authoritative periodic sync with exchange API to resolve 'ghost' positions.
+    """
     # Class-level shared cache for account-wide status to prevent multi-profile order duplication
     # Format: {account_key: {'pos_symbols': set(), 'open_order_symbols': set(), 'timestamp': 0}}
     _shared_account_cache = {}
@@ -100,13 +119,6 @@ class Trader:
         self.pending_orders = {}  # Track pending limit orders: {pos_key: {'order_id': id, 'symbol': symbol, 'side': side, 'price': price}}
         self._symbol_locks = {}  # Per-symbol locks to prevent entry race conditions
         self._position_locks = {}  # Per-position locks for SL/TP recreation
-        self._sl_cooldowns = {}  # To be synced via db.get_risk_metric if needed
-        self.default_leverage = LEVERAGE
-        self._missing_order_counts = {} # { order_id: missing_cycle_count }
-        self._pos_action_timestamps = {} # { pos_key_action: timestamp_ms } to prevent rapid spam
-        self._last_sync_time = 0       # Throttling for sync_with_exchange (60s)
-        self._last_reconcile_time = 0  # Throttling for reconcile_positions (10m)
-        self._last_history_sync_time = 0 # Throttling for history_sync (1h)
         
         # Performance Cache for account-level state (populated by sync_with_exchange)
         self._last_ex_pos_map = {}            # {norm_symbol: position_data}
@@ -123,6 +135,17 @@ class Trader:
                 'last_balance': None,
                 'margin_cooldown_until': 0
             }
+
+
+        self.cooldown_manager = CooldownManager(db, self.logger, env)
+        self.order_executor = OrderExecutor(self)
+        
+        self.default_leverage = LEVERAGE
+        self._missing_order_counts = {} # { order_id: missing_cycle_count }
+        self._pos_action_timestamps = {} # { pos_key_action: timestamp_ms } to prevent rapid spam
+        self._last_sync_time = 0       # Throttling for sync_with_exchange (60s)
+        self._last_reconcile_time = 0  # Throttling for reconcile_positions (10m)
+        self._last_history_sync_time = 0 # Throttling for history_sync (1h)
         
     def _get_account_key(self):
         """Uniquely identify the account to share state across multiple profiles."""
@@ -211,12 +234,7 @@ class Trader:
         """
         msg = str(error_msg).lower()
         if "insufficient margin" in msg or "-2019" in msg or "insufficient balance" in msg:
-            shared = self.__class__._shared_account_cache.get(self.account_key)
-            shared['margin_cooldown_until'] = time.time() + 900  # 15 minute cooldown
-            self.logger.warning(
-                f"[{self.exchange_name}] Insufficient margin detected. "
-                f"Throttling entries for 15 minutes."
-            )
+            await self.cooldown_manager.handle_margin_error(self.account_key, self.__class__._shared_account_cache, self.exchange_name)
 
             try:
                 # All cancellable pending orders (status=pending, have an order_id)
@@ -281,8 +299,7 @@ class Trader:
 
     def is_margin_throttled(self):
         """Check if we are currently in a margin-rejection cooldown."""
-        shared = Trader._shared_account_cache.get(self.account_key)
-        return time.time() < shared.get('margin_cooldown_until', 0)
+        return self.cooldown_manager.is_margin_throttled(self.account_key, self.__class__._shared_account_cache)
 
     async def sync_from_db(self):
         """Authoritative sync: Load active positions and pending orders from the database."""
@@ -302,20 +319,9 @@ class Trader:
             self.pending_orders = {k: v for k, v in self.active_positions.items() if v.get('status') == 'pending'}
             
             # 3. SL Cooldowns
-            try:
-                import os
-                env = os.getenv('ENV', 'test').upper()
-                raw_data = await self.db.get_risk_metric(self.profile_id, 'sl_cooldowns_json', env=env)
-                if raw_data:
-                    cooldowns = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
-                    now = time.time()
-                    self._sl_cooldowns = {k: v for k, v in cooldowns.items() if v > now}
-                else:
-                    self._sl_cooldowns = {}
-            except Exception as e:
-                self.logger.warning(f"Failed to sync cooldowns from DB: {e}")
-                
-            self.logger.info(f"Synced {len(self.active_positions)} positions and {len(self._sl_cooldowns)} cooldowns from DB for Profile {self.profile_id}")
+            await self.cooldown_manager.sync_from_db(self.profile_id)
+            
+            self.logger.info(f"Synced {len(self.active_positions)} positions and cooldowns from DB for Profile {self.profile_id}")
         except Exception as e:
             self.logger.error(f"Failed to sync from DB: {e}")
 
@@ -577,18 +583,10 @@ class Trader:
             self.logger.warning(f"Failed to save cooldowns to DB: {e}")
 
     async def set_sl_cooldown(self, symbol, custom_duration: Optional[int] = None):
-        """Set cooldown after a stop loss hit or other rejection for this symbol.
-        Also immediately cancels all open exchange orders and purges local pending entries
-        so that no in-flight order can fill during the cooldown window.
-        """
-        duration = custom_duration if custom_duration is not None else SL_COOLDOWN_SECONDS
-        expiry = time.time() + duration
-        key = f"{self.exchange_name}:{symbol}"
-        self._sl_cooldowns[key] = expiry
-        await self._async_save_cooldowns()
-        hours = duration / 3600
-        self.logger.info(f"[COOLDOWN] {key} blocked for {hours:.1f} hours")
-        print(f"[{self.exchange_name}] [{symbol}] Cooldown activated for {hours:.1f} hours")
+        """Set cooldown after a stop loss hit or other rejection for this symbol."""
+        await self.cooldown_manager.set_sl_cooldown(self.exchange_name, symbol, self.profile_id, custom_duration)
+        
+        # Immediately cancel all open orders on exchange for this symbol
 
         # Immediately cancel all open orders on exchange for this symbol
         # to prevent any already-submitted pending entry from filling.
@@ -612,25 +610,11 @@ class Trader:
 
     async def is_in_cooldown(self, symbol):
         """Check if symbol is in cooldown period after SL."""
-        key = f"{self.exchange_name}:{symbol}"
-        if key not in self._sl_cooldowns:
-            return False
-        
-        if time.time() >= self._sl_cooldowns[key]:
-            # Cooldown expired, remove it
-            del self._sl_cooldowns[key]
-            await self._async_save_cooldowns()
-            return False
-        
-        return True
+        return self.cooldown_manager.is_in_cooldown(self.exchange_name, symbol)
 
     def get_cooldown_remaining(self, symbol):
         """Get remaining cooldown time in minutes."""
-        key = f"{self.exchange_name}:{symbol}"
-        if key not in self._sl_cooldowns:
-            return 0
-        remaining = self._sl_cooldowns[key] - time.time()
-        return max(0, remaining / 60)  # Return minutes
+        return self.cooldown_manager.get_remaining_minutes(self.exchange_name, symbol)
 
     async def check_pending_limit_fills(self, symbol, timeframe, current_price):
         """
@@ -791,779 +775,193 @@ class Trader:
 
     async def place_order(self, symbol, side, qty, timeframe=None, order_type='market', price=None, sl=None, tp=None, timeout=None, leverage=10, signals_used=None, entry_confidence=None, snapshot=None, reduce_only=False, params=None):
         """Places an order and updates persistent storage. For limit orders, monitors fill in background."""
-        
-        # Determine if TP/SL are attached (for scope safety)
-        tpsl_attached = (
-            getattr(self, 'exchange_name', '').upper() == 'BYBIT'
-            and bool(sl) and bool(tp)
-        )
-        
-        # Validate qty - reject invalid orders
-        if qty is None or qty <= 0:
-            self.logger.warning(f"Rejected order: invalid qty={qty} for {symbol}")
-            return None
+        try:
+            # Determine if TP/SL are attached (for scope safety)
+            tpsl_attached = (
+                getattr(self, 'exchange_name', '').upper() == 'BYBIT'
+                and bool(sl) and bool(tp)
+            )
+            
+            # Validate qty - reject invalid orders
+            if qty is None or qty <= 0:
+                self.logger.warning(f"Rejected order: invalid qty={qty} for {symbol}")
+                return None
         
         # Dynamic decimal places based on exchange metadata
-        qty = float(qty)  # Ensure native float (not np.float64) for API compatibility
-        try:
-            # Delegate to adapter's precision handling (handles Bybit Swap vs Spot key discrepancy)
-            qty_rounded = self.exchange.round_qty(symbol, qty)
-            qty_str = str(qty_rounded)
-            
-            # [DEBUG] Check if rounding changed it significantly
-            if abs(qty - qty_rounded) > (qty * 0.001):
-                self.logger.info(f"Qty rounded: {qty} -> {qty_rounded} via adapter.round_qty")
+            qty = float(qty)  # Ensure native float (not np.float64) for API compatibility
+            try:
+                # Delegate to adapter's precision handling (handles Bybit Swap vs Spot key discrepancy)
+                qty_rounded = self.exchange.round_qty(symbol, qty)
+                qty_str = str(qty_rounded)
                 
-        except Exception as e:
-            self.logger.warning(f"round_qty failed for {symbol}: {e}. Fallback to naive rounding.")
-            # Fallback
-            qty_decimals = 6 if price and price > 1000 else 3
-            qty_rounded = round(qty, qty_decimals)
-            qty_str = str(qty_rounded)
-            
-        # Validate minimum qty after rounding
-        if qty_rounded <= 0:
-            self.logger.warning(f"Rejected order: qty too small after rounding ({qty:.8f} -> {qty_rounded}) for {symbol}")
-            print(f"⏹️ [{self.exchange_name}] [{symbol}] Qty {qty:.8f} below min step after rounding. Skipping.")
-            return None
-
-
-            
-        # UPDATE QTY TO ROUNDED VALUE FOR API CALLS
-        qty = qty_rounded 
-        
-        # STRICT NOTIONAL CHECK (Safety against exchange rejections/spam)
-        price_to_check = price
-        if not price_to_check or price_to_check <= 0:
-            # Try to estimate price if missing (market order)
-             try:
-                 ticker = await self.exchange.fetch_ticker(symbol)
-                 price_to_check = ticker['last']
-             except: pass
-            
-        if price_to_check and price_to_check > 0:
-            is_valid, reason, notional = self._check_min_notional(symbol, price_to_check, qty)
-            if not is_valid:
-                msg = f"Rejected order {symbol}: {reason}"
-                self.logger.warning(msg)
-                print(f"⚠️ [{self.exchange_name}] [{symbol}] Order rejected: {reason} (Notional: ${notional:.2f})")
+                # [DEBUG] Check if rounding changed it significantly
+                if abs(qty - qty_rounded) > (qty * 0.001):
+                    self.logger.info(f"Qty rounded: {qty} -> {qty_rounded} via adapter.round_qty")
+                    
+            except Exception as e:
+                self.logger.warning(f"round_qty failed for {symbol}: {e}. Fallback to naive rounding.")
+                # Fallback
+                qty_decimals = 6 if price and price > 1000 else 3
+                qty_rounded = round(qty, qty_decimals)
+                qty_str = str(qty_rounded)
                 
-                # Apply SL cooldown to prevent continuous loop rejections for the same signal
-                asyncio.create_task(self.set_sl_cooldown(symbol, custom_duration=86400))
-                
-                return None
-        
-        exchange_name = getattr(self.exchange, 'name', self.exchange_name)
-        pos_key = self._get_pos_key(symbol, timeframe)
-        signals = signals_used or []
-        confidence = entry_confidence or 0.5
-
-        # Symbol-level guard: reject if any position for this symbol is already active or pending.
-        # pos_key is per-symbol+timeframe, but we must prevent duplicate symbol exposure
-        # across ALL timeframes (e.g. NEAR 1h active + NEAR 15m trying to enter).
-        if not reduce_only:
-            existing = [
-                (k, p) for k, p in self.active_positions.items()
-                if p.get('symbol') == symbol and p.get('status') in ('filled', 'pending')
-            ]
-            if existing:
-                ek, ep = existing[0]
-                self.logger.info(
-                    f"[GUARD] Blocked {symbol} new order: already have "
-                    f"{ep['status'].upper()} position on {ek}"
-                )
+            # Validate minimum qty after rounding
+            if qty_rounded <= 0:
+                self.logger.warning(f"Rejected order: qty too small after rounding ({qty:.8f} -> {qty_rounded}) for {symbol}")
+                print(f"⏹️ [{self.exchange_name}] [{symbol}] Qty {qty:.8f} below min step after rounding. Skipping.")
                 return None
 
-        # Use string quantity for API (if available) to ensure exact precision.
-        # Falls back to float `qty` if string generation failed.
-        api_qty = qty_str if 'qty_str' in locals() and qty_str else qty
-        print(f"🔧 [{exchange_name}] Sending Order: {side} {symbol} Qty={api_qty} (Type={api_qty.__class__.__name__}) @ {price or 'MARKET'}")
 
-        if self.dry_run or not self.exchange.can_trade:
-            if not self.exchange.can_trade:
-                print(f"🛡️ [PUBLIC MODE] Simulating {side} {symbol} ({timeframe}) - Simulation Active.")
-            
-            self.logger.info(f"[SIMULATION] {side} {symbol} ({timeframe}): Qty={qty}, SL={sl}, TP={tp}")
-            
-            # Determine status based on order type
-            is_limit = order_type == 'limit'
-            status = 'pending' if is_limit else 'filled'
-            
-            if self.dry_run:
-                print(f"[{self.exchange_name}] [DRY RUN] Placed {side} {symbol} {timeframe} {qty} [{status.upper()}]")
-            
-            self.active_positions[pos_key] = {
-                "symbol": symbol,
-                "side": side.upper(),
-                "qty": qty_rounded,
-                "entry_price": round(price, 3) if isinstance(price, (int, float)) else price,
-                "sl": round(sl, 3) if sl else None,
-                "tp": round(tp, 3) if tp else None,
-                "timeframe": timeframe,
-                "order_type": order_type,
-                "status": status,
-                "leverage": leverage,
-                "signals_used": signals,
-                "entry_confidence": confidence,
-                "snapshot": snapshot,
-                "timestamp": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
-            }
-            await self._update_db_position(pos_key)
-            
-            # Send notification
-            _, tg_msg = format_pending_order(
-                symbol, timeframe, side, price, sl, tp, confidence, leverage, self.dry_run,
-                exchange_name=self.exchange_name, profile_label=self.profile_name
-            ) if is_limit else format_position_filled(
-                symbol, timeframe, side, price, qty_rounded, price * qty_rounded, sl, tp, confidence, leverage, self.dry_run,
-                exchange_name=self.exchange_name, profile_label=self.profile_name
-            )
-            await send_telegram_message(tg_msg)
-            
-            return {'id': 'dry_run_id', 'status': 'closed' if not is_limit else 'open', 'filled': qty if not is_limit else 0}
-
-        # LIVE LOGIC
-        # Prepare params
-        params = params or {}
-        tpsl_attached = False
-        if self.exchange_name == 'BYBIT' and (sl or tp):
-            tpsl_attached = True
-
-        if sl: params['stopLoss'] = sl
-        if tp: params['takeProfit'] = tp
-        if reduce_only: 
-            params['reduceOnly'] = True
-
-
-
-        # Determine and clamp leverage to allowed range
-        use_leverage = self._clamp_leverage(leverage)
-        
-        # Issue 10: Strict Spot Filtering Safeguard
-        if self.exchange.is_spot(symbol):
-            self.logger.error(f"❌ [ABORT] Detected Spot symbol {symbol} during Futures trade attempt on {self.exchange_name}! Aborting.")
-            return None
-
-        # Margin Throttling Check (v4.0)
-        if not self.dry_run and self.is_margin_throttled():
-            self.logger.warning(f"❌ [THROTTLED] Skip order for {symbol} due to recent insufficient margin.")
-            return None
-
-        # Ensure margin mode & leverage set on exchange for LIVE orders
-        if not self.dry_run and self.exchange.can_trade:
-            await self._ensure_isolated_and_leverage(symbol, use_leverage)
-
-        try:
-            if order_type == 'market':
-                # Generate Client Order ID for recovery (Unique format: P{id}_{symbol}_{side}_{ms})
-                api_symbol = self._normalize_symbol(symbol)
-                prefix = f"P{self.profile_id}_"
-                client_id = f"{prefix}{api_symbol}_{side.upper()}_{int(time.time()*1000)}"
-                params['newClientOrderId'] = client_id
                 
-                # Debug log: attempting market order
-                try:
-                    self._debug_log('place_order:market', {'symbol': symbol, 'side': side, 'qty': qty, 'params': params, 'leverage': use_leverage, 'client_id': client_id})
-                except Exception:
-                    pass
+            # UPDATE QTY TO ROUNDED VALUE FOR API CALLS
+            qty = qty_rounded 
+            
+            # STRICT NOTIONAL CHECK (Safety against exchange rejections/spam)
+            price_to_check = price
+            if not price_to_check or price_to_check <= 0:
+                # Try to estimate price if missing (market order)
+                 try:
+                     ticker = await self.exchange.fetch_ticker(symbol)
+                     price_to_check = ticker['last']
+                 except: pass
                 
-                order = None
-                try:
-                    self.logger.debug(f"[ORDER REQ] create_order {symbol} {order_type} {side} {qty} {price} {params}")
+            if price_to_check and price_to_check > 0:
+                is_valid, reason, notional = self._check_min_notional(symbol, price_to_check, qty)
+                if not is_valid:
+                    msg = f"Rejected order {symbol}: {reason}"
+                    self.logger.warning(msg)
+                    print(f"⚠️ [{self.exchange_name}] [{symbol}] Order rejected: {reason} (Notional: ${notional:.2f})")
+                    
+                    # Apply SL cooldown to prevent continuous loop rejections for the same signal
+                    asyncio.create_task(self.set_sl_cooldown(symbol, custom_duration=86400))
+                    
+                    return None
+            
+            exchange_name = getattr(self.exchange, 'name', self.exchange_name)
+            pos_key = self._get_pos_key(symbol, timeframe)
+            signals = signals_used or []
+            confidence = entry_confidence or 0.5
 
-                    order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, order_type, side.lower(), qty, price, params=params
+            # Symbol-level guard: reject if any position for this symbol is already active or pending.
+            # pos_key is per-symbol+timeframe, but we must prevent duplicate symbol exposure
+            # across ALL timeframes (e.g. NEAR 1h active + NEAR 15m trying to enter).
+            if not reduce_only:
+                existing = [
+                    (k, p) for k, p in self.active_positions.items()
+                    if p.get('symbol') == symbol and p.get('status') in ('filled', 'pending')
+                ]
+                if existing:
+                    ek, ep = existing[0]
+                    self.logger.info(
+                        f"[GUARD] Blocked {symbol} new order: already have "
+                        f"{ep['status'].upper()} position on {ek}"
                     )
-                    self.logger.debug(f"[ORDER RES] {order.get('id')} -> {order}")
-                except Exception as e:
-                    # TIMEOUT RECOVERY: If request timed out, check if order was actually placed using client_id
-                    self.logger.warning(f"Order creation failed/timed out for {client_id}. Attempting recovery... Error: {e}")
-                    
-                    # Wait briefly before verifying
-                    await asyncio.sleep(1)
-                    
-                    try:
-                        # RECOVERY GUARD: Only attempt recovery for Network/Timeout errors.
-                        # Do not attempt recovery for Logic errors (Side invalid, Insufficient balance, etc.)
-                        err_str = str(e).lower()
-                        is_logic_error = any(x in err_str for x in ["10001", "side invalid", "insufficient", "170131", "403", "401"])
-                        if is_logic_error:
-                            self.logger.info(f"[{symbol}] Skipping recovery for logic error: {e}")
-                            raise e
-
-                        found_order = None
-                        try:
-                            # Agnostic fetch: Pass client_id to adapter.
-                            # Adapter handles exchange-specific mapping (Bybit category:linear, etc.)
-                            # We omit origClientOrderId here as it's Binance-specific and can cause errors on other exchanges.
-                            # If an exchange needs it, it should be handled inside the adapter.
-                            found_order = await self.exchange.fetch_order(client_id, symbol)
-                        except Exception:
-                            # Attempt 2: Scan open orders
-                            open_orders = await self.exchange.fetch_open_orders(symbol)
-                            for o in open_orders:
-                                if o.get('clientOrderId') == client_id or o.get('info', {}).get('clientOrderId') == client_id:
-                                    found_order = o
-                                    break
-                        
-                        if found_order:
-                            self.logger.info(f"✅ RECOVERED order {client_id} from timeout! ID: {found_order['id']}")
-                            print(f"✅ RECOVERED order {client_id} from timeout!")
-                            order = found_order
-                        else:
-                            raise e # Re-raise original error if not found (failed for real)
-                            
-                    except Exception as recovery_error:
-                        self.logger.error(f"[{symbol}] Recovery failed for {client_id}: {recovery_error}")
-                        # Check if this failure is due to insufficient margin
-                        await self.check_margin_error(recovery_error)
-                        # If insufficient balance, log current balance to help debug
-                        if "insufficient balance" in str(e).lower() or "170131" in str(e):
-                            try:
-                                # CALL ADAPTER fetch_balance
-                                bal = await self.exchange.fetch_balance()
-                                curr_bal = bal.get('total', {}).get('USDT', 'N/A')
-                                # Calculate approximate required margin
-                                req_margin = "N/A"
-                                try:
-                                    # qty * price / leverage
-                                    # price might be None if market order fails at different stage, using current price if possible
-                                    req_margin = (qty * (price or 0)) / (leverage or 1)
-                                    req_margin = f"${req_margin:.2f}"
-                                except: pass
-                                
-                                self.logger.error(f"❌ [INSUFFICIENT BALANCE] Exchange: {self.exchange_name} | Required Margin: ~{req_margin} | Available Equity: {curr_bal} USDT")
-                                print(f"❌ [{self.exchange_name}] Insufficient balance: Need ~{req_margin}, have {curr_bal} USDT")
-                            except Exception as bal_err:
-                                self.logger.error(f"Diagnostics: fetch_balance failed: {bal_err}")
-                        await self.check_margin_error(e, new_confidence=confidence)
-                        raise e # Re-raise original error
-                
-                try:
-                    self._debug_log('place_order:market:response', order)
-                except Exception:
-                    pass
-
-                # Save filled position immediately (use the leverage we enforced)
-                self.active_positions[pos_key] = {
-                    "symbol": symbol,
-                    "side": side.upper(),
-                    "qty": round(qty, 3),
-                    "entry_price": round(order.get('average', price), 3),
-                    "sl": round(sl, 3) if sl else None,
-                    "tp": round(tp, 3) if tp else None,
-                    "timeframe": timeframe,
-                    "order_type": "market",
-                    "status": "filled",
-                    "leverage": use_leverage,
-                    "signals_used": signals,
-                    "entry_confidence": confidence,
-                    "snapshot": snapshot,
-                    "timestamp": order.get('timestamp', 0),
-                    "order_id": order.get('id'), # Ensure order_id is saved
-                    "sl_order_id": 'attached' if tpsl_attached else None,
-                    "tp_order_id": 'attached' if tpsl_attached else None
-                }
-                await self._update_db_position(pos_key)
-                
-                # Proactively update SHARED Class-Level Cache for multi-profile immediate awareness
-                shared = self.__class__._shared_account_cache.get(self.account_key, {'pos_symbols': set(), 'open_order_symbols': set()})
-                shared['pos_symbols'].add(api_symbol)
-                shared['timestamp'] = time.time()
-                self.__class__._shared_account_cache[self.account_key] = shared
-                # Create SL/TP reduce-only orders for the freshly opened position
-                # SKIP if already attached (Bybit V5)
-                if not tpsl_attached:
-                    try:
-                        await self._create_sl_tp_orders_for_position(pos_key)
-                    except Exception as e:
-                        self.logger.warning(f"Failed to auto-create SL/TP for market entry {pos_key}: {e}")
-                else:
-                    self.logger.info(f"[{symbol}] TP/SL already attached to primary order, skipping secondary creation.")
-                
-                # Send telegram notification for filled market order
-                from notification import send_telegram_message, format_position_filled
-                _, tg_msg = format_position_filled(
-                    symbol, timeframe, side, order.get('average', price), qty, 
-                    order.get('average', price) * qty, sl, tp, confidence, use_leverage, False,
-                    exchange_name=self.exchange_name, profile_label=self.profile_name
-                )
-                asyncio.create_task(send_telegram_message(tg_msg))
-
-            else:
-                # Limit order - place and track as pending
-                
-                # Generate Client Order ID for recovery (Unique format: P{id}_{symbol}_{side}_{ms})
-                api_symbol = self._normalize_symbol(symbol)
-                prefix = f"P{self.profile_id}_"
-                client_id = f"{prefix}{api_symbol}_{side.upper()}_{int(time.time()*1000)}"
-                params['newClientOrderId'] = client_id
-                
-                try:
-                    self._debug_log('place_order:limit', {'symbol': symbol, 'side': side, 'qty': qty, 'price': price, 'params': params, 'leverage': use_leverage, 'client_id': client_id})
-                except Exception:
-                    pass
-                    
-                order = None
-                try:
-                    order = await self._execute_with_timestamp_retry(
-                        self.exchange.create_order, symbol, order_type, side.lower(), qty, price, params=params
-                    )
-                except Exception as e:
-                    # TIMEOUT RECOVERY for Limit Order
-                    self.logger.warning(f"Limit Order creation failed/timed out for {client_id}. Attempting recovery... Error: {e}")
-                    print(f"⚠️ Limit Order request failed/timed out. Verifying {client_id}...")
-                    
-                    await asyncio.sleep(1)
-                    
-                    try:
-                        # RECOVERY GUARD: Only attempt recovery for Network/Timeout errors.
-                        err_str = str(e).lower()
-                        is_logic_error = any(x in err_str for x in ["10001", "side invalid", "insufficient", "403"])
-                        if is_logic_error:
-                            raise e
-
-                        found_order = None
-                        try:
-                            found_order = await self.exchange.fetch_order(client_id, symbol)
-                        except Exception:
-                            open_orders = await self.exchange.fetch_open_orders(symbol)
-                            for o in open_orders:
-                                if o.get('clientOrderId') == client_id or o.get('info', {}).get('clientOrderId') == client_id:
-                                    found_order = o
-                                    break
-                        
-                        if found_order:
-                            self.logger.info(f"✅ RECOVERED limit order {client_id} from timeout! ID: {found_order['id']}")
-                            print(f"✅ RECOVERED limit order {client_id} from timeout!")
-                            order = found_order
-                        else:
-                            raise e 
-                    except Exception as recovery_error:
-                        self.logger.error(f"Recovery failed for {client_id}: {recovery_error}")
-                        await self.check_margin_error(recovery_error, new_confidence=confidence)
-                        raise e
-
-                try:
-                    self._debug_log('place_order:limit:response', order)
-                except Exception:
-                    pass
-                    
-                # SAFETY CHECK: Ensure we have a valid order ID
-                if not order or not order.get('id'):
-                    self.logger.error(f"❌ Failed to get valid order ID for {symbol} limit order. Request may have failed silently.")
                     return None
 
-                order_id = order['id']
+            # Use string quantity for API (if available) to ensure exact precision.
+            # Falls back to float `qty` if string generation failed.
+            api_qty = qty_str if 'qty_str' in locals() and qty_str else qty
+            print(f"🔧 [{exchange_name}] Sending Order: {side} {symbol} Qty={api_qty} (Type={api_qty.__class__.__name__}) @ {price or 'MARKET'}")
 
-                # Save to pending orders (in-memory)
-                self.pending_orders[pos_key] = {
-                    'order_id': order_id,
-                    'symbol': symbol,
-                    'side': side.upper(),
-                    'qty': qty,
-                    'price': price,
-                    'sl': sl,
-                    'tp': tp,
-                    'timeframe': timeframe,
-                    'leverage': use_leverage,
-                    'signals_used': signals,
-                    'entry_confidence': confidence,
-                    'snapshot': snapshot,
-                    'timestamp': order.get('timestamp', 0)
-                }
-
-                # Also save to active_positions with status='pending' AND persist order_id
+            if self.dry_run or not self.exchange.can_trade:
+                if not self.exchange.can_trade:
+                    print(f"🛡️ [PUBLIC MODE] Simulating {side} {symbol} ({timeframe}) - Simulation Active.")
+                
+                self.logger.info(f"[SIMULATION] {side} {symbol} ({timeframe}): Qty={qty}, SL={sl}, TP={tp}")
+                
+                # Determine status based on order type
+                is_limit = order_type == 'limit'
+                status = 'pending' if is_limit else 'filled'
+                
+                if self.dry_run:
+                    print(f"[{self.exchange_name}] [DRY RUN] Placed {side} {symbol} {timeframe} {qty} [{status.upper()}]")
+                
                 self.active_positions[pos_key] = {
                     "symbol": symbol,
                     "side": side.upper(),
-                    "qty": round(qty, 3),
+                    "qty": qty_rounded,
                     "entry_price": round(price, 3) if isinstance(price, (int, float)) else price,
                     "sl": round(sl, 3) if sl else None,
                     "tp": round(tp, 3) if tp else None,
                     "timeframe": timeframe,
-                    "order_type": "limit",
-                    "status": "pending",
-                    "leverage": use_leverage,
-                    "order_id": order_id,
+                    "order_type": order_type,
+                    "status": status,
+                    "leverage": leverage,
                     "signals_used": signals,
                     "entry_confidence": confidence,
                     "snapshot": snapshot,
-                    "timestamp": order.get('timestamp', 0),
-                    "sl_order_id": 'attached' if tpsl_attached else None,
-                    "tp_order_id": 'attached' if tpsl_attached else None
+                    "timestamp": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
                 }
-                self.pending_orders[pos_key] = self.active_positions[pos_key]
                 await self._update_db_position(pos_key)
                 
-                # Proactively update SHARED Class-Level Cache for multi-profile immediate awareness
-                shared = self.__class__._shared_account_cache.get(self.account_key, {'pos_symbols': set(), 'open_order_symbols': set()})
-                shared['open_order_symbols'].add(api_symbol)
-                shared['timestamp'] = time.time()
-                self.__class__._shared_account_cache[self.account_key] = shared
-
-                print(f"📋 [{self.exchange_name}] Limit order placed: {order_id} | {side} {symbol} @ {price:.3f} (waiting for fill...)")
-                self.logger.info(f"Limit order {order_id} placed, monitoring for fill")
-                
-                # Send telegram notification
-                from notification import send_telegram_message, format_pending_order
+                # Send notification
                 _, tg_msg = format_pending_order(
-                    symbol, timeframe, side, price, sl, tp, confidence, use_leverage, False,
+                    symbol, timeframe, side, price, sl, tp, confidence, leverage, self.dry_run,
+                    exchange_name=self.exchange_name, profile_label=self.profile_name
+                ) if is_limit else format_position_filled(
+                    symbol, timeframe, side, price, qty_rounded, price * qty_rounded, sl, tp, confidence, leverage, self.dry_run,
                     exchange_name=self.exchange_name, profile_label=self.profile_name
                 )
-                asyncio.create_task(send_telegram_message(tg_msg))
+                await send_telegram_message(tg_msg)
                 
-                # Start background task to monitor fill
-                asyncio.create_task(self._monitor_limit_order_fill(pos_key, order_id, symbol))
-                
-                # Create SL/TP for pending order (with proper ID tracking)
-                # This allows cancel_pending_order() to clean up SL/TP when cancelling entry
-                # SKIP if already attached (Bybit V5)
-                if not tpsl_attached:
-                    try:
-                        asyncio.create_task(self.setup_sl_tp_for_pending(symbol, timeframe))
-                    except Exception as e:
-                        self.logger.warning(f"Failed to setup SL/TP for pending {pos_key}: {e}")
-                else:
-                    self.logger.info(f"[{symbol}] TP/SL already attached to pending order, skipping secondary setup.")
+                return {'id': 'dry_run_id', 'status': 'closed' if not is_limit else 'open', 'filled': qty if not is_limit else 0}
 
-            self.logger.info(f"Order placed: {order['id']}")
-            return order
+            # LIVE LOGIC
+            # Prepare params
+            params = params or {}
+            tpsl_attached = False
+            if self.exchange_name == 'BYBIT' and (sl or tp):
+                tpsl_attached = True
+
+            if sl: params['stopLoss'] = sl
+            if tp: params['takeProfit'] = tp
+            if reduce_only: 
+                params['reduceOnly'] = True
+
+
+
+            # Determine and clamp leverage to allowed range
+            use_leverage = self._clamp_leverage(leverage)
+            
+            # Issue 10: Strict Spot Filtering Safeguard
+            if self.exchange.is_spot(symbol):
+                self.logger.error(f"❌ [ABORT] Detected Spot symbol {symbol} during Futures trade attempt on {self.exchange_name}! Aborting.")
+                return None
+
+            # Margin Throttling Check (v4.0)
+            if not self.dry_run and self.is_margin_throttled():
+                self.logger.warning(f"❌ [THROTTLED] Skip order for {symbol} due to recent insufficient margin.")
+                return None
+
+            # Ensure margin mode & leverage set on exchange for LIVE orders
+            if not self.dry_run and self.exchange.can_trade:
+                await self._ensure_isolated_and_leverage(symbol, use_leverage)
+                
+                # Delegate LIVE execution to OrderExecutor
+                return await self.order_executor.place_order(
+                    symbol, timeframe, side, qty, price, order_type, sl, tp, 
+                    confidence, signals, snapshot, params, reduce_only, use_leverage, qty_rounded
+                )
+
+            self.logger.info(f"Order placed: simulation_id")
+            return {'id': 'simulation'}
         except Exception as e:
             self.logger.error(f"Failed to place order: {e}")
-            try:
-                self._debug_log('place_order:error', str(e))
-            except Exception:
-                pass
             return None
 
-    async def _monitor_limit_order_fill(self, pos_key, order_id, symbol):
-        """Background task to monitor a limit order fill; can resume using persisted order_id."""
-        fill_check_interval = 3  # seconds
-        local_order_id = order_id
 
-        try:
-            while True:
-                await asyncio.sleep(fill_check_interval)
 
-                # Refresh order_id if missing in memory but present in active_positions
-                if pos_key in self.pending_orders:
-                    local_order_id = self.pending_orders[pos_key].get('order_id', local_order_id)
-                else:
-                    active = self.active_positions.get(pos_key, {})
-                    if not active or active.get('status') != 'pending':
-                        # No longer pending on disk -> stop monitoring
-                        break
-                    local_order_id = active.get('order_id', local_order_id)
 
-                if not local_order_id:
-                    break
 
-                try:
-                    order_status = await self._execute_with_timestamp_retry(
-                        self.exchange.fetch_order, local_order_id, symbol
-                    )
-                except Exception as e:
-                    err_str = str(e).lower()
-                    # Bybit Specific: If order is outside last 500, scan open orders
-                    if "last 500 orders" in err_str or "acknowledged" in err_str:
-                        try:
-                            self.logger.info(f"[{symbol}] Order {local_order_id} outside last 500 orders history. Checking open orders...")
-                            open_orders = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol)
-                            found_o = next((o for o in open_orders if str(o.get('id')) == str(local_order_id) or str(o.get('clientOrderId')) == str(local_order_id)), None)
-                            if found_o:
-                                order_status = found_o
-                            else:
-                                # Not in open orders, and too old for fetchOrder history -> Verify against reality
-                                self.logger.warning(f"[{symbol}] Order {local_order_id} not found in open orders and too old for Bybit history. Verifying Position/History...")
-                                
-                                # 1. Check if position exists
-                                found_pos = False
-                                try:
-                                    ex_positions = await self._execute_with_timestamp_retry(self.exchange.fetch_positions)
-                                    # Normalize symbol for lookup
-                                    norm_symbol = self._normalize_symbol(symbol)
-                                    for p in ex_positions:
-                                        if self._normalize_symbol(p.get('symbol')) == norm_symbol:
-                                            p_qty = abs(self._safe_float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('positionAmt'), 0))
-                                            if p_qty > 0:
-                                                self.logger.info(f"[{symbol}] Found position for missing order {local_order_id}. Treating as FILLED.")
-                                                # Create a fake order_status to trigger the fill logic below
-                                                order_status = {
-                                                    'status': 'filled',
-                                                    'filled': p_qty,
-                                                    'average': self._safe_float(p.get('entryPrice')),
-                                                    'id': local_order_id,
-                                                    'timestamp': self.exchange.milliseconds()
-                                                }
-                                                found_pos = True
-                                                break
-                                except Exception as pos_err:
-                                    self.logger.warning(f"[{symbol}] Position verify failed: {pos_err}")
-
-                                if not found_pos:
-                                    # 2. Check Trade History (Fast SL case)
-                                    try:
-                                        self.logger.info(f"[{symbol}] No position found. Checking trade history for fast closure...")
-                                        since = active.get('timestamp') if 'active' in locals() else None
-                                        if not since:
-                                            since = int((time.time() - 3600) * 1000) # 1 hour back
-                                        
-                                        recent_trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=since)
-                                        order_trades = [t for t in recent_trades if str(t.get('order') or t.get('orderId')) == str(local_order_id)]
-                                        
-                                        if order_trades:
-                                            self.logger.info(f"[{symbol}] Detected fill for {local_order_id} in history. Checking for fast SL...")
-                                            # If we are here, it means entry was filled but position is gone -> SL/TP hit
-                                            # We let reconcile_positions or further logic handle the formal logging
-                                            # For now, we clear the local state to stay clean
-                                            if pos_key in self.pending_orders: del self.pending_orders[pos_key]
-                                            if pos_key in self.active_positions: del self.active_positions[pos_key]
-                                            break
-                                    except Exception as hist_err:
-                                        self.logger.warning(f"[{symbol}] History verify failed: {hist_err}")
-
-                                    # 3. Last Resort: Assume Cancelled/Expired
-                                    self.logger.warning(f"[{symbol}] Order {local_order_id} definitively gone. Purging state.")
-                                    if pos_key in self.pending_orders: del self.pending_orders[pos_key]
-                                    if pos_key in self.active_positions: 
-                                        await self._cancel_stale_position_in_db(pos_key, reason="order_history_exhausted")
-                                        del self.active_positions[pos_key]
-                                    break
-                        except Exception as fb_e:
-                            self.logger.warning(f"[{symbol}] Fallback check for {local_order_id} failed: {fb_e}")
-                            continue
-                    else:
-                        # Check if order simply doesn't exist (expired/cancelled)
-                        is_not_found = (
-                            "-2013" in err_str or "-2011" in err_str or
-                            "order does not exist" in err_str or
-                            "orderdoesnotexist" in err_str or
-                            "ordernotfound" in err_str
-                        )
-                        if is_not_found:
-                            print(f"🗑️ [{self.exchange_name}] [{symbol}] Order {local_order_id} no longer exists (expired/cancelled). Clearing position.")
-                            if pos_key in self.pending_orders: del self.pending_orders[pos_key]
-                            if pos_key in self.active_positions:
-                                await self._cancel_stale_position_in_db(pos_key, reason="order_not_found")
-                                del self.active_positions[pos_key]
-                            break  # Stop monitor loop — position cleaned up
-                        self.logger.error(f"[{symbol}] Error fetching order {local_order_id}: {e}")
-                        continue
-
-                # Determine filled qty and compare
-                filled_qty = order_status.get('filled', 0) or order_status.get('amount', 0)
-                expected_qty = None
-                if pos_key in self.pending_orders:
-                    expected_qty = self.pending_orders[pos_key].get('qty')
-                else:
-                    # fallback to active_positions stored qty
-                    active = self.active_positions.get(pos_key, {})
-                    expected_qty = active.get('qty')
-
-                # STRICT FILLED CHECK - Prevent false positives
-                # Must satisfy ALL conditions:
-                # 1. Status is explicitly 'closed' or 'filled'
-                # 2. filled_qty > 0 (actually filled something)
-                # 3. filled_qty >= 99% of expected (allow small rounding)
-                status = order_status.get('status', '').lower()
-                is_filled_status = status in ('closed', 'filled')
-                has_filled_qty = filled_qty and float(filled_qty) > 0
-                is_fully_filled = False
-                fill_ratio = 0.0  # Initialize to avoid NameError
-                
-                if has_filled_qty and expected_qty:
-                    fill_ratio = float(filled_qty) / float(expected_qty)
-                    is_fully_filled = fill_ratio >= 0.99  # 99% threshold for rounding tolerance
-                
-                # Log for debugging
-                if pos_key:
-                    self.logger.debug(f"[FILL CHECK] {pos_key} | Status: {status} | Filled: {filled_qty}/{expected_qty} | Ratio: {fill_ratio:.2f}")
-                
-                # ONLY mark as filled if ALL conditions met
-                if is_filled_status and has_filled_qty and is_fully_filled:
-                    # Choose pending details if available, else read from active_positions
-                    pending = self.pending_orders.get(pos_key) or self.active_positions.get(pos_key, {})
-                    fill_price = order_status.get('average') or pending.get('price') or pending.get('entry_price')
-                    # Move to filled — preserve order_id so exchange_order_id is persisted to DB
-                    self.active_positions[pos_key] = {
-                        "symbol": pending.get('symbol', symbol),
-                        "side": pending.get('side', 'BUY'),
-                        "qty": round(pending.get('qty', 0), 3),
-                        "entry_price": round(fill_price, 3) if isinstance(fill_price, (int, float)) else fill_price,
-                        "sl": round(pending.get('sl', 3), 3) if pending.get('sl') else None,
-                        "tp": round(pending.get('tp', 3), 3) if pending.get('tp') else None,
-                        "timeframe": pending.get('timeframe'),
-                        "order_type": "limit",
-                        "status": "filled",
-                        "leverage": pending.get('leverage', self.default_leverage),
-                        "signals_used": pending.get('signals_used', []),
-                        "entry_confidence": pending.get('entry_confidence', 0.5),
-                        "snapshot": pending.get('snapshot'),
-                        "timestamp": order_status.get('timestamp', pending.get('timestamp')),
-                        "order_id": order_status.get('id', local_order_id),  # BUG-3: preserve exchange_order_id
-                        "sl_id": pending.get('sl_order_id'),
-                        "tp_id": pending.get('tp_order_id'),
-                    }
-                    # Persist and cleanup
-                    await self._update_db_position(pos_key)
-                    
-                    # Notify fill
-                    _, tg_msg = format_position_filled(
-                        symbol, pending.get('timeframe', '1h'), pending.get('side', 'BUY'), fill_price, pending.get('qty', 0),
-                        fill_price * pending.get('qty', 0), pending.get('sl'), pending.get('tp'),
-                        pending.get('entry_confidence'), pending.get('leverage'), self.dry_run,
-                        exchange_name=self.exchange_name, profile_label=self.profile_name
-                    )
-                    await send_telegram_message(tg_msg)
-                    # After marking filled, ensure SL/TP conditional orders are placed
-                    try:
-                        await self._create_sl_tp_orders_for_position(pos_key)
-                    except Exception as e:
-                        self.logger.warning(f"Failed to create SL/TP after fill for {pos_key}: {e}")
-                    if pos_key in self.pending_orders:
-                        del self.pending_orders[pos_key]
-
-                    print(f"✅ [{self.exchange_name}] Limit order FILLED: {symbol} {self.active_positions[pos_key]['side']} @ {self.active_positions[pos_key]['entry_price']:.3f}")
-                    self.logger.info(f"Limit order {local_order_id} filled at {self.active_positions[pos_key]['entry_price']}")
-                    break
-
-                # If cancelled externally
-                if order_status.get('status') in ('canceled', 'cancelled'):
-                    self.logger.info(f"Limit order {local_order_id} for {symbol} was cancelled on exchange. Purging state.")
-                    # Trigger full cleanup including SL/TP and notifications
-                    await self.cancel_pending_order(pos_key, reason="Cancelled on Exchange")
-                    break
-
-        except Exception as e:
-            self.logger.error(f"Error in limit order monitor for {pos_key}: {e}")
 
     async def cancel_pending_order(self, pos_key, reason="Technical invalidation"):
-        """Cancels a pending limit order AND its associated TP/SL orders."""
-        if pos_key not in self.pending_orders and pos_key not in self.active_positions:
-            # FALLBACK: If we have a symbol but order not in memory, try to purge by symbol
-            try:
-                _, symbol, _ = self._parse_pos_key(pos_key)
-                if symbol:
-                    self.logger.warning(f"Order {pos_key} not in memory for cancellation. Purging all orders for {symbol} as safety fallback.")
-                    await self.cancel_all_orders(symbol)
-                    return True
-            except:
-                pass
-            return False
-        
-        # Get order info from either source
-        pending = self.pending_orders.get(pos_key)
-        if pending:
-            order_id = pending['order_id']
-            symbol = pending['symbol']
-            sl_order_id = pending.get('sl_order_id')
-            tp_order_id = pending.get('tp_order_id')
-        else:
-            # Dry run: position is in active_positions with status='pending'
-            active_pos = self.active_positions.get(pos_key)
-            if not active_pos or active_pos.get('status') != 'pending':
-                return False
-            order_id = 'dry_run_id'
-            symbol = active_pos['symbol']
-            sl_order_id = active_pos.get('sl_order_id')
-            tp_order_id = active_pos.get('tp_order_id')
-        
-        try:
-            if not self.dry_run and (pending or pos_key == 'FORCE'):
-                # 1. Cancel limit order (Standard)
-                if order_id:
-                    try:
-                        await self._execute_with_timestamp_retry(
-                            self.cancel_order, order_id, symbol
-                        )
-                    except Exception as e:
-                        err_str = str(e).lower()
-                        # Handle Bybit "Order not found" by retrying as conditional/trigger order
-                        if "order not found" in err_str and self.exchange_name.upper() == 'BYBIT':
-                            try:
-                                self.logger.info(f"Retrying Bybit cancel for {order_id} as conditional order...")
-                                await self._execute_with_timestamp_retry(
-                                    self.cancel_order, order_id, symbol, params={'trigger': True}
-                                )
-                            except Exception as trigger_e:
-                                if "order not found" in str(trigger_e).lower() or "already" in str(trigger_e).lower():
-                                    self.logger.info(f"Bybit order {order_id} already gone (trigger attempt).")
-                                else:
-                                    self.logger.warning(f"Bybit trigger cancel failed: {trigger_e}")
-                        
-                        elif "order not found" in err_str or "already" in err_str or "not exist" in err_str:
-                            # 🚨 SAFETY FALLBACK: ID might be wrong/stale, but order might still exist as "Ghost"
-                            # If we are effectively cancelling a PENDING entry, we should purge ALL orders for this symbol
-                            # to prevent unintended fills.
-                            self.logger.warning(f"⚠️ [SAFETY] Order {order_id} not found, but might be ghost. Triggering SAFETY PURGE for {symbol}.")
-                            print(f"🧹 [SAFETY] Order {order_id} not found. Purging ALL orders for {symbol} to be safe.")
-                            try:
-                                await self.cancel_all_orders(symbol)
-                            except Exception as purge_e:
-                                self.logger.error(f"[SAFETY] Purge failed: {purge_e}")
-                        else:
-                            self.logger.warning(f"Non-fatal order cancel error for {order_id}: {e}")
-                
-                # 2. Cancel SL order if exists (Algo/Conditional)
-                if sl_order_id:
-                    try:
-                        # Pass both Binance (is_algo) and Bybit (trigger) flags for safety
-                        await self._execute_with_timestamp_retry(
-                            self.cancel_order, sl_order_id, symbol, params={'is_algo': True, 'trigger': True}
-                        )
-                    except Exception as e:
-                        if "order not found" not in str(e).lower() and "already" not in str(e).lower():
-                            self.logger.warning(f"Failed to cancel SL {sl_order_id}: {e}")
-                
-                # 3. Cancel TP order if exists (Algo/Conditional)
-                if tp_order_id:
-                    try:
-                        await self._execute_with_timestamp_retry(
-                            self.cancel_order, tp_order_id, symbol, params={'is_algo': True, 'trigger': True}
-                        )
-                    except Exception as e:
-                        if "order not found" not in str(e).lower() and "already" not in str(e).lower():
-                            self.logger.warning(f"Failed to cancel TP {tp_order_id}: {e}")
-            
-            # BUG-2: Cache position data BEFORE deleting from memory
-            # pending may be None for DRY RUN (stored in active_positions only)
-            active_pos_snapshot = self.active_positions.get(pos_key)
-            pos_info = pending or active_pos_snapshot  # use whichever is available
+        """Delegates pending order cancellation to OrderExecutor."""
+        return await self.order_executor.cancel_pending_order(pos_key, reason)
 
-            # Clear from DB FIRST while still in memory to preserve status (PENDING -> CANCELLED)
-            await self._clear_db_position(pos_key, exit_reason=reason)
+    async def setup_sl_tp_for_pending(self, symbol, timeframe):
+        """Delegates SL/TP setup for pending orders to OrderExecutor."""
+        return await self.order_executor.setup_sl_tp_for_pending(symbol, timeframe)
 
-            # Clean up from both sources to prevent loops
-            if pos_key in self.pending_orders:
-                del self.pending_orders[pos_key]
-            
-            # CRITICAL: Also remove from active_positions if it's a pending status
-            if pos_key in self.active_positions:
-                pos = self.active_positions[pos_key]
-                if pos.get('status') == 'pending':
-                    self.logger.info(f"Clearing pending position state for {pos_key}")
-                # Clear from memory
-                del self.active_positions[pos_key]
-            
-            print(f"❌ [{self.exchange_name}] Cancelled pending order: {symbol} | Reason: {reason}")
-            
-            # Notify cancellation — use pos_info (cached before deletion)
-            _, tg_msg = format_order_cancelled(
-                symbol,
-                pos_info.get('timeframe', '1h') if pos_info else '?',
-                pos_info.get('side', 'BUY') if pos_info else '?',
-                pos_info.get('price', pos_info.get('entry_price', 0)) if pos_info else 0,
-                reason, self.dry_run, exchange_name=self.exchange_name
-            )
-            asyncio.create_task(send_telegram_message(tg_msg))
-            
-            self.logger.info(f"Cancelled limit order {order_id}: {reason}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to cancel order {order_id}: {e}")
-            return False
 
     async def cancel_order(self, order_id, symbol, params={}):
         if not self.exchange.can_trade:
@@ -4151,3 +3549,7 @@ if __name__ == "__main__":
         await trader.remove_position('BTC/USDT')
         print(f"After removal: {trader.active_positions}")
     asyncio.run(main())
+
+# Bottom of file to prevent circular imports
+from cooldown_manager import CooldownManager
+from order_executor import OrderExecutor

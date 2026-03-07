@@ -16,6 +16,8 @@ graph TD
         B --> E[WeightedScoringStrategy]
         E --> F[Neural Brain]
         B --> G[Trader]
+        G --> G1[OrderExecutor]
+        G --> G2[CooldownManager]
         G --> H[RiskManager]
         G --> Z[Exchange Adapters]
     end
@@ -223,6 +225,18 @@ Allows remote interaction with the bot instance.
 *   **Discovery**: User was confused by $40 volume on Bybit while having only $100 balance. 
 *   **Confirmation**: In Futures, **Notional Volume = Margin x Leverage**. A $40 position with 5x leverage only requires $8.0 of real balance (Margin). This is why the bot can open multiple positions simultaneously without draining the entire $100 balance immediately.
 *   **Logic Status**: The current logic is mathematically correct and aligned with standard Futures trading. Binance appeared "smaller" simply because those specific trades hit lower confidence tiers ($4-$6 margin) or used lower đòn bẩy.
+
+### 22. Circular Dependency Loop Resolution
+*   **Discovery**: `Trader` depends on `OrderExecutor`, and `OrderExecutor` needs a reference to its parent `Trader` to access state. Top-level imports cause `Partially Initialized Module` errors.
+*   **Lesson**: **Use Bottom-Level or Delayed Imports.** Move imports of sub-managers to the very end of `execution.py` (after the `Trader` class is fully defined) or import them locally inside `__init__`.
+
+### 23. Core Dependency Integrity (`aiosqlite`)
+*   **Discovery**: The transition to asynchronous DB management requires `aiosqlite`. If this is missing from the environment, the entire `Trader` initialization (and tests) will fail silently or with `ImportError`.
+*   **Lesson**: **Verify Environment before Execution.** Ensure `aiosqlite` is in the `requirements.txt` and verified in CI/CD pipelines.
+
+### 24. Modular Execution Pattern (Orchestrator Pattern)
+*   **Discovery**: `execution.py` exceeded 3000 lines, making it prone to side-effect bugs and hard to test.
+*   **Lesson**: **Delegate to Specialized Managers.** Splitting logic into `OrderExecutor` (API/Lifecycle) and `CooldownManager` (Risk/Throttling) allows for isolated unit testing and cleaner state orchestration in the main `Trader` class.
 
 ---
 
