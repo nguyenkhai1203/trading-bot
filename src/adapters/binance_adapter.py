@@ -11,6 +11,7 @@ import logging
 from base_exchange_client import BaseExchangeClient
 from .base_adapter import BaseAdapter
 from config import BINANCE_API_KEY, BINANCE_API_SECRET
+from utils.symbol_helper import to_api_format
 
 class BinanceAdapter(BaseExchangeClient, BaseAdapter):
     """
@@ -59,10 +60,6 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         )
 
 
-    def _get_api_symbol(self, symbol: str) -> str:
-        """Standard help to normalize CCXT symbol to Binance native symbol (e.g. BTC/USDT:USDT -> BTCUSDT)."""
-        if not symbol: return ""
-        return symbol.split(':')[0].replace('/', '').upper()
 
     async def fetch_ticker(self, symbol: str) -> Dict:
         """Fetch ticker with retry logic."""
@@ -82,8 +79,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
     async def fetch_algo_orders(self, symbol: Optional[str] = None) -> List[Dict]:
         """Fetch algo orders (Stop Loss, Take Profit, Trailing Stop) via REST."""
         try:
-            api_symbol = self._get_api_symbol(symbol)
-            algo_params = {'symbol': api_symbol} if api_symbol else {}
+            algo_params = {'symbol': to_api_format(symbol)} if symbol else {}
             return await self._execute_with_timestamp_retry(self.exchange.fapiPrivateGetOpenAlgoOrders, algo_params)
         except Exception as e:
             self.logger.warning(f"[BinanceAdapter] Failed to fetch algo orders for {symbol}: {e}")
@@ -105,7 +101,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
 
             # 2. Algo Orders (Binance Futures Specific)
             # fapiPrivateGetOpenAlgoOrders works globally or per symbol
-            algo_params = {'symbol': self._get_api_symbol(symbol)} if symbol else {}
+            algo_params = {'symbol': to_api_format(symbol)} if symbol else {}
             tasks.append(self._execute_with_timestamp_retry(self.exchange.fapiPrivateGetOpenAlgoOrders, algo_params))
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -166,7 +162,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         
         # Normalize symbol for Binance API (e.g. BTC/USDT:USDT -> BTCUSDT)
         # Use split(':') and then replace '/' to be safest
-        api_symbol = self._get_api_symbol(symbol)
+        api_symbol = to_api_format(symbol)
         
         is_algo = params.get('is_algo', False) or params.get('algoType') is not None or 'stopLoss' in params or 'takeProfit' in params or 'stopPrice' in params
         
@@ -227,7 +223,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
 
     async def cancel_all_orders(self, symbol: str):
         """Cancel ALL orders for a symbol, including standard and algo orders."""
-        api_symbol = self._get_api_symbol(symbol)
+        api_symbol = to_api_format(symbol)
         self.logger.info(f"[Binance] Purging all orders for {symbol} ({api_symbol})...")
         
         # 1. Cancel standard orders
@@ -255,7 +251,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         base = 'https://fapi.binance.com'
         # Merge with passed params if any
         payload = {
-            'symbol': self._get_api_symbol(symbol),
+            'symbol': to_api_format(symbol),
             'leverage': int(leverage),
             'recvWindow': 60000,
             'timestamp': self.get_synced_timestamp()
@@ -268,7 +264,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         path = '/fapi/v1/marginType'
         base = 'https://fapi.binance.com'
         payload = {
-            'symbol': self._get_api_symbol(symbol),
+            'symbol': to_api_format(symbol),
             'marginType': mode.upper(), # ISOLATED or CROSSED
             'recvWindow': 60000,
             'timestamp': self.get_synced_timestamp()
@@ -366,7 +362,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
                 if is_algo_hint:
                     self.logger.info(f"[Binance] Order {order_id} not found in standard queue. Checking Algo orders...")
                     try:
-                        algo_params = {'symbol': self._get_api_symbol(symbol)} if symbol else {}
+                        algo_params = {'symbol': to_api_format(symbol)} if symbol else {}
                         open_algos = await self._execute_with_timestamp_retry(
                             self.exchange.fapiPrivateGetOpenAlgoOrders, algo_params
                         )
@@ -454,7 +450,7 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         Cancel existing SL and/or TP orders on Binance Futures.
         Tries standard cancel first, then falls back to algo-order cancel.
         """
-        api_symbol = self._get_api_symbol(symbol)
+        api_symbol = to_api_format(symbol)
 
         for oid in filter(None, [sl_id, tp_id]):
             cancelled = False

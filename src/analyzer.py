@@ -27,6 +27,7 @@ from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES, MAX_WORKERS, GLOBAL_MAX_
 from feature_engineering import FeatureEngineer
 import subprocess
 from train_brain import run_nn_training
+from utils.symbol_helper import to_api_format
 
 class StrategyAnalyzer:
     def __init__(self, data_dir=None):
@@ -50,8 +51,8 @@ class StrategyAnalyzer:
         if cache_key in self._data_cache:
             return self._data_cache[cache_key]
         
-        # Strip :USDT suffix first, then remove /  -> BTC/USDT:USDT -> BTCUSDT
-        safe_symbol = symbol.split(':')[0].replace('/', '')
+        # Standardize symbol for file path (e.g. BTC/USDT:USDT -> BTCUSDT)
+        safe_symbol = to_api_format(symbol)
         # Data files: {EXCHANGE}_{SYMBOL}_{TF}.csv  OR legacy  {SYMBOL}_{TF}.csv
         file_path = os.path.join(self.data_dir, f"{exchange}_{safe_symbol}_{timeframe}.csv")
         

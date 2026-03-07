@@ -28,6 +28,7 @@ import hmac
 import hashlib
 import requests
 from urllib.parse import urlencode
+from utils.symbol_helper import to_api_format, to_display_format
 
 # Logger Adapter for Exchange Prefix
 class BotJSONEncoder(json.JSONEncoder):
@@ -511,9 +512,7 @@ class Trader:
 
     def _normalize_symbol(self, symbol):
         """Standardize symbol format for reliable comparison (ARBUSDT style)."""
-        if not symbol: return ""
-        # Remove :USDT suffix (CCXT linear) then remove slashes
-        return symbol.split(':')[0].replace('/', '').upper()
+        return to_api_format(symbol)
 
     def _is_spot(self, symbol):
         """Check if a symbol is a spot market symbol on the current exchange."""
@@ -556,7 +555,7 @@ class Trader:
         exchange_name = self.exchange_name
         # Extract base/quote and replace slashes with underscores (e.g., BTC/USDT -> BTC_USDT)
         # Handle settlement info if present (e.g. BTC/USDT:USDT -> discard the :USDT part)
-        clean_symbol = symbol.split(':')[0].replace('/', '_').upper()
+        clean_symbol = to_display_format(symbol).replace('/', '_')
         base_key = f"P{self.profile_id}_{exchange_name}_{clean_symbol}"
         if timeframe:
             return f"{base_key}_{timeframe}"

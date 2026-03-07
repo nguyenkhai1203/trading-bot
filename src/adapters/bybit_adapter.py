@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Any
 from .base_adapter import BaseAdapter
 from base_exchange_client import BaseExchangeClient
 from config import BYBIT_API_KEY, BYBIT_API_SECRET
+from utils.symbol_helper import to_api_format, to_display_format
 
 class BybitAdapter(BaseExchangeClient, BaseAdapter):
     """
@@ -377,9 +378,9 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             # Resolve to native Bybit ID (e.g. LTCUSDT) for V5 API compatibility
             try:
                 market = self.exchange.market(symbol)
-                native_symbol = market.get('id', symbol)
+                native_symbol = market.get('id', to_api_format(symbol))
             except:
-                native_symbol = symbol.replace('/', '').replace(':USDT', '')
+                native_symbol = to_api_format(symbol)
 
             # Merge with passed params if any
             extra = {'category': 'linear'}
@@ -414,9 +415,9 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         # Resolve to native Bybit ID (e.g. LTCUSDT)
         try:
             market = self.exchange.market(symbol)
-            native_symbol = market.get('id', symbol)
+            native_symbol = market.get('id', to_api_format(symbol))
         except:
-            native_symbol = symbol.replace('/', '').replace(':USDT', '')
+            native_symbol = to_api_format(symbol)
 
         # Try lowercase as required by CCXT and Bybit V5
         m = mode.lower()
@@ -539,7 +540,7 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         
         async def _attempt_set(current_mode):
             market_info = self.exchange.market(symbol)
-            api_symbol = market_info.get('id') or symbol.replace('/', '').split(':')[0]
+            api_symbol = market_info.get('id') or to_api_format(symbol)
             
             idx = 0
             if current_mode == 'BothSide':
@@ -678,10 +679,6 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         if market and market.get('spot'): return True
         return False
 
-    def _normalize_symbol(self, symbol: str) -> str:
-        """Standardize symbol names for matching (e.g. BTC/USDT:USDT -> BTC/USDT)."""
-        if not symbol: return ""
-        return symbol.split(':')[0]
 
     async def close(self):
         """Close exchange connection."""

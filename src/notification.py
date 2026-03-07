@@ -4,6 +4,7 @@ import os
 import time
 import ssl
 import certifi
+from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -134,6 +135,7 @@ Emoji Standards:
 
 from typing import Tuple, Optional
 from datetime import datetime
+from utils.symbol_helper import to_display_format, get_base_currency
 
 # Mode labels
 def get_mode_label(dry_run: bool) -> str:
@@ -153,10 +155,8 @@ def get_direction_label(side: str) -> str:
 def format_symbol(symbol: str) -> str:
     """Format symbol for display (ensure it uses / and removes :USDT)."""
     if not symbol: return "UNKNOWN"
-    # Remove Bybit suffix like :USDT
-    fixed = symbol.split(':')[0]
-    # Replace separators with standard /
-    return fixed.replace('-', '/').replace('_', '/')
+    # Use helper and replace internal delimiters with /
+    return to_display_format(symbol).replace('-', '/').replace('_', '/')
 
 def format_price(price: float) -> str:
     """Format price with appropriate decimal places or return 'MARKET' if 0."""
@@ -177,7 +177,7 @@ def format_size(size: float, symbol: str) -> str:
     - BTC/ETH: 4 decimals
     - Most altcoins: 2 decimals
     """
-    base = symbol.split('/')[0]
+    base = get_base_currency(symbol)
     if base in ['BTC', 'ETH']:
         return f"{size:.4f}"
     else:
@@ -267,7 +267,7 @@ def format_position_filled(
     dir_emoji = get_direction_emoji(side)
     dir_label = get_direction_label(side)
     safe_symbol = format_symbol(symbol)
-    base_currency = symbol.split('/')[0]
+    base_currency = get_base_currency(symbol)
     mode = get_mode_label(dry_run)
     
     ex_tag = f" | {profile_label if profile_label else exchange_name.upper() if exchange_name else ''}"
@@ -446,6 +446,54 @@ def format_status_update(
     telegram = "\n".join(telegram_parts)
     
     return (terminal, telegram)
+
+def map_exchange_position_to_v2(ex_pos: dict, ticker: Optional[dict], local_match: dict) -> dict:
+    """
+    Map raw exchange position data to notification v2 format.
+    Handles field differences between Binance/Bybit.
+    """
+    p_qty = abs(float(ex_pos.get('contracts') or ex_pos.get('amount') or ex_pos.get('qty') or 0))
+    # Priority: ticker last > position markPrice > entry price (last resort)
+    mark_price = float(ex_pos.get('markPrice') or ex_pos.get('info', {}).get('markPrice') or 0)
+    entry = float(ex_pos.get('entryPrice') or ex_pos.get('avgPrice') or ex_pos.get('info', {}).get('entryPrice') or ex_pos.get('info', {}).get('avgEntryPrice') or 0)
+    
+    cur = (
+        float(ticker['last']) if ticker and ticker.get('last')
+        else mark_price if mark_price > 0
+        else entry
+    )
+    
+    raw_side = str(ex_pos.get('side', '')).upper()
+    if not raw_side:
+        raw_side = str(ex_pos.get('info', {}).get('side', '')).upper()
+    if not raw_side:
+        pos_amt = float(ex_pos.get('info', {}).get('positionAmt', 0))
+        raw_side = 'LONG' if pos_amt > 0 else 'SHORT' if pos_amt < 0 else ''
+    
+    side = 'BUY' if raw_side in ['LONG', 'BUY'] else 'SELL' if raw_side in ['SHORT', 'SELL'] else ''
+    lev = ex_pos.get('leverage') or ex_pos.get('info', {}).get('leverage') or local_match.get('leverage', 1)
+    
+    pnl_usd = (cur - entry) * p_qty if side == 'BUY' else (entry - cur) * p_qty
+    roe = ((cur - entry) / entry * 100 * float(lev)) if entry > 0 else 0
+    if side == 'SELL': roe = -roe
+    
+    return {
+        'symbol': ex_pos['symbol'], 'side': side, 'leverage': lev,
+        'entry_price': entry, 'current_price': cur,
+        'roe': roe, 'pnl_usd': pnl_usd, 
+        'tp': local_match.get('tp', 0), 'sl': local_match.get('sl', 0)
+    }
+
+def map_exchange_order_to_v2(ex_order: dict, ticker: Optional[dict]) -> dict:
+    """Map raw exchange order data to notification v2 format."""
+    cur = float(ticker['last']) if ticker and ticker.get('last') else 0
+    return {
+        'symbol': ex_order['symbol'], 'side': ex_order['side'].upper(), 'leverage': 1,
+        'entry_price': ex_order.get('price') or ex_order.get('stopPrice') or 0, 
+        'current_price': cur,
+        'roe': 0, 'pnl_usd': 0, 'tp': 0, 'sl': 0,
+        'is_pending': True
+    }
 
 
 def format_position_v2(

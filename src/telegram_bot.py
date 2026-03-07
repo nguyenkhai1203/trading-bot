@@ -31,7 +31,11 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
-from notification import format_position_v2, format_portfolio_update_v2, format_bms_report
+from notification import (
+    format_position_v2, format_portfolio_update_v2, format_bms_report,
+    map_exchange_position_to_v2, map_exchange_order_to_v2
+)
+from utils.symbol_helper import to_raw_format
 from database import DataManager
 from data_manager import MarketDataManager
 from exchange_factory import create_adapter_from_profile
@@ -148,14 +152,8 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
         # For DRY_RUN, we still rely on memory as there is no remote exchange state.
         if not t.dry_run:
             try:
-                print(f"[DEBUG {label}] Fetching positions...")
-                # Add overall timeout to prevent complete bot hang
                 ex_pos = await asyncio.wait_for(t.exchange.fetch_positions(), timeout=10)
-                print(f"[DEBUG {label}] Positions fetched: {len(ex_pos)}")
-                
-                print(f"[DEBUG {label}] Fetching open orders...")
                 ex_orders = await asyncio.wait_for(t.exchange.fetch_open_orders(), timeout=10)
-                print(f"[DEBUG {label}] Open orders fetched: {len(ex_orders)}")
                 
                 # Pre-fetch all needed tickers for THIS exchange efficiently
                 all_symbols = set()
@@ -168,79 +166,35 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                 tickers = {}
                 if all_symbols:
                     try:
-                        print(f"[DEBUG {label}] Fetching {len(all_symbols)} tickers...")
                         tickers = await asyncio.wait_for(t.exchange.fetch_tickers(list(all_symbols)), timeout=10)
-                        print(f"[DEBUG {label}] Tickers fetched.")
                     except Exception as e:
                         logging.warning(f"Batch ticker fetch failed for {label}: {e}. Falling back to cached data.")
                 
                 # Build auxiliary lookup: strips '/', ':', '-', '_' from unified symbols
                 # so that Bybit raw symbols (e.g. DOGEUSDT) can match DOGE/USDT:USDT
-                def _raw_sym(s: str) -> str:
-                    return s.replace('/', '').replace(':', '').replace('-', '').replace('_', '').upper()
-                _ticker_by_raw = {_raw_sym(k): v for k, v in tickers.items()}
+                _ticker_by_raw = {to_raw_format(k): v for k, v in tickers.items()}
                         
                 for ep in ex_pos:
-                    p_qty = abs(float(ep.get('contracts') or ep.get('amount') or ep.get('qty') or 0))
-                    if p_qty > 0:
+                    if abs(float(ep.get('contracts') or ep.get('amount') or ep.get('qty') or 0)) > 0:
                         sym = ep['symbol']
-                        # Use batched tickers instead of single fetch
-                        # Try direct key first, then raw-symbol fallback (Bybit: DOGEUSDT vs DOGE/USDT:USDT)
-                        ticker = tickers.get(sym) or _ticker_by_raw.get(_raw_sym(sym))
-                        # Priority: ticker last > position markPrice > entry price (last resort)
-                        mark_price = float(ep.get('markPrice') or ep.get('info', {}).get('markPrice') or 0)
-                        cur = (
-                            float(ticker['last']) if ticker and ticker.get('last')
-                            else mark_price if mark_price > 0
-                            else float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
-                        )
-                        entry = float(ep.get('entryPrice') or ep.get('avgPrice') or ep.get('info', {}).get('entryPrice') or ep.get('info', {}).get('avgEntryPrice') or 0)
-                        raw_side = ep.get('side', '')
-                        if not raw_side:
-                            raw_side = ep.get('info', {}).get('side', '')
-                        if not raw_side:
-                            pos_amt = float(ep.get('info', {}).get('positionAmt', 0))
-                            raw_side = 'LONG' if pos_amt > 0 else 'SHORT' if pos_amt < 0 else ''
-                        side = raw_side.upper()
-                        if side == 'LONG': side = 'BUY'
-                        elif side == 'SHORT': side = 'SELL'
+                        ticker = tickers.get(sym) or _ticker_by_raw.get(to_raw_format(sym))
                         
-                        # Find corresponding local pos for SL/TP and leverage fallback
-                        # Prioritize a local match that actually has a TP or SL configured
+                        # Find local match for SL/TP
                         matches = [lp for lp in t.active_positions.values() if t._normalize_symbol(lp['symbol']) == t._normalize_symbol(sym)]
                         local_match = next((lp for lp in matches if lp.get('tp') or lp.get('sl')), matches[0] if matches else {})
                         
-                        lev = ep.get('leverage') or ep.get('info', {}).get('leverage') or local_match.get('leverage', 1)
-                        
-                        pnl_usd = (cur - entry) * p_qty if side == 'BUY' else (entry - cur) * p_qty
-                        roe = ((cur - entry) / entry * 100 * float(lev)) if entry > 0 else 0
-                        if side == 'SELL': roe = -roe
-                        
-                        exchanges_payload[label]['active'].append({
-                            'symbol': sym, 'side': side, 'leverage': lev,
-                            'entry_price': entry, 'current_price': cur,
-                            'roe': roe, 'pnl_usd': pnl_usd, 
-                            'tp': local_match.get('tp', 0), 'sl': local_match.get('sl', 0)
-                        })
+                        pos_v2 = map_exchange_position_to_v2(ep, ticker, local_match)
+                        exchanges_payload[label]['active'].append(pos_v2)
                         total_active += 1
-                        print(f"[DEBUG {label}] ACTIVE POS added: {sym}")
                         
                 # Also fetch pending orders for full visibility
                 for eo in ex_orders:
-                    # Logic to identify ENTRY orders (not SL/TP)
                     o_type = str(eo.get('type') or '').upper()
                     is_reduce = eo.get('reduceOnly') or eo.get('info', {}).get('reduceOnly') == 'true'
                     if 'STOP' not in o_type and 'TAKE' not in o_type and not is_reduce:
-                        sym = eo['symbol']
-                        ticker = tickers.get(sym)
-                        cur = float(ticker['last']) if ticker and ticker.get('last') else 0
-                        exchanges_payload[label]['pending'].append({
-                            'symbol': eo['symbol'], 'side': eo['side'].upper(), 'leverage': 1, # leverage unknown for order
-                            'entry_price': eo.get('price') or eo.get('stopPrice') or 0, 
-                            'current_price': cur,
-                            'roe': 0, 'pnl_usd': 0, 'tp': 0, 'sl': 0,
-                            'is_pending': True
-                        })
+                        ticker = tickers.get(eo['symbol'])
+                        order_v2 = map_exchange_order_to_v2(eo, ticker)
+                        exchanges_payload[label]['pending'].append(order_v2)
                         total_pending += 1
             except Exception as e:
                 err_msg = str(e)
