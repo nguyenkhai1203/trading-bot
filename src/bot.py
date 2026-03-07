@@ -325,7 +325,9 @@ async def main():
     
     # 2. Pre-load Strategy Configs into Cache
     print("📥 Syncing strategy configurations from database...")
-    all_configs = await db.get_all_strategy_configs()
+    from config_manager import ConfigManager
+    config_mgr = await ConfigManager.get_instance(env_str)
+    all_configs = await config_mgr.get_all_configs()
     WeightedScoringStrategy.update_cache(all_configs)
     
     # 3. Setup Profile Groups

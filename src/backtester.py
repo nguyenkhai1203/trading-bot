@@ -359,15 +359,15 @@ class Backtester:
 async def main():
     print("[*] Starting Global Backtest Session (ENABLED CONFIGS ONLY)...")
     from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES
-    import json
+    # Load strategy config to get ENABLED status from DB
+    from config_manager import ConfigManager
+    # Environment heuristic: if --test or --dry-run in args
+    env = 'TEST' if ('--test' in sys.argv or '--dry-run' in sys.argv) else 'LIVE'
+    mgr = await ConfigManager.get_instance(env)
+    strategy_configs = await mgr.get_all_configs()
     
-    # Load strategy config to get ENABLED status
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
-    try:
-        with open(config_path, 'r') as f:
-            strategy_config = json.load(f)
-    except:
-        strategy_config = {}
+    # Map from tuple key to config for easy lookup
+    config_map = {(c['exchange'], c['symbol'], c['timeframe']): c for c in strategy_configs}
     
     all_results = []
     enabled_results = []
@@ -385,12 +385,8 @@ async def main():
         symbols = exchange_symbols.get(exchange, TRADING_SYMBOLS)
         for s in symbols:
             for tf in TRADING_TIMEFRAMES:
-                clean_sym = s.split(':')[0].replace('/', '_').upper()
-                # Try exchange-prefixed key first, then legacy key
-                key_ex = f"{exchange}_{clean_sym}_{tf}"
-                key_legacy = f"{s}_{tf}"
-                
-                config = strategy_config.get(key_ex) or strategy_config.get(key_legacy, {})
+                # Lookup in DB-backed config map
+                config = config_map.get((exchange, s, tf), {})
                 is_enabled = config.get('enabled', False)
                 status = config.get('status', 'UNKNOWN')
                 

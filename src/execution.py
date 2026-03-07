@@ -287,40 +287,16 @@ class Trader:
     async def sync_from_db(self):
         """Authoritative sync: Load active positions and pending orders from the database."""
         try:
-            # 1. Load active positions
+            # 1. Load active positions using TradeSyncHelper
+            from trade_sync_helper import TradeSyncHelper
             active_list = await self.db.get_active_positions(self.profile_id)
             self.active_positions = {}
-            for p in active_list:
-                # Use pos_key as the primary slot identifier
-                pos_key = p.get('pos_key')
+            for row in active_list:
+                pos = TradeSyncHelper.map_db_to_execution(row, default_leverage=self.default_leverage)
+                pos_key = pos['pos_key']
                 if not pos_key:
-                    pos_key = self._get_pos_key(p['symbol'], p['timeframe'])
-                
-                # Transform DB row to execution engine format
-                status_raw = p.get('status', 'ACTIVE').upper()
-                mapped_status = 'pending' if status_raw == 'OPENED' else 'filled'
-                
-                # Parse signals_used from meta_json if available, or fallback to p['signals_used'] if it existed
-                meta = p.get('meta') or {}
-                
-                self.active_positions[pos_key] = {
-                    "symbol": p['symbol'],
-                    "side": p['side'],
-                    "qty": p['qty'],
-                    "entry_price": p['entry_price'],
-                    "sl": p['sl_price'],
-                    "tp": p['tp_price'],
-                    "timeframe": p['timeframe'],
-                    "status": mapped_status,
-                    "leverage": p.get('leverage', self.default_leverage),
-                    "order_id": p.get('exchange_order_id'),
-                    "sl_order_id": p.get('sl_order_id'),
-                    "tp_order_id": p.get('tp_order_id'),
-                    "timestamp": p.get('entry_time', 0),
-                    "signals_used": meta.get('signals_used', []),
-                    "entry_confidence": meta.get('entry_confidence', 0.5),
-                    "snapshot": meta.get('snapshot')
-                }
+                     pos_key = self._get_pos_key(pos['symbol'], pos['timeframe'])
+                self.active_positions[pos_key] = pos
 
             # 2. Update pending orders subset
             self.pending_orders = {k: v for k, v in self.active_positions.items() if v.get('status') == 'pending'}
@@ -370,30 +346,8 @@ class Trader:
             db_status = 'ACTIVE'
 
         try:
-            trade_data = {
-                'id': pos.get('id'),
-                'profile_id': self.profile_id,
-                'pos_key': pos_key,
-                'exchange_order_id': pos.get('order_id'),
-                'exchange': self.exchange_name,
-                'symbol': pos.get('symbol'),
-                'side': pos.get('side'),
-                'entry_price': pos.get('entry_price'),  # None for pending/adopted orders
-                'qty': pos.get('qty', 0),
-                'leverage': pos.get('leverage', self.default_leverage),
-                'status': db_status,
-                'sl_price': pos.get('sl'),
-                'tp_price': pos.get('tp'),
-                'timeframe': pos.get('timeframe'),
-                'sl_order_id': pos.get('sl_order_id'),
-                'tp_order_id': pos.get('tp_order_id'),
-                'entry_time': pos.get('timestamp'),
-                'meta': {
-                    'signals_used': pos.get('signals_used', []),
-                    'entry_confidence': pos.get('entry_confidence', 0.5),
-                    'snapshot': pos.get('snapshot')
-                }
-            }
+            from trade_sync_helper import TradeSyncHelper
+            trade_data = TradeSyncHelper.map_execution_to_db(pos_key, pos, self.profile_id, self.exchange_name)
             trade_id = await self.db.save_position(trade_data)
             pos['id'] = trade_id
             

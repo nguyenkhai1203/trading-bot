@@ -488,15 +488,13 @@ class StrategyAnalyzer:
                 print(f"  Checking {symbol} {tf}...")
                 
                 # Get current config
-                config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'strategy_config.json')
+                # Get current config
+                from config_manager import ConfigManager
+                mgr = await ConfigManager.get_instance(self.env)
+                config_data = await mgr.get_config(symbol, tf, getattr(self, 'exchange_name', 'BINANCE'))
                 current_pnl = 0
-                if os.path.exists(config_path):
-                    with open(config_path, 'r') as f:
-                        config = json.load(f)
-                    exchange_name = getattr(self, 'exchange_name', 'BINANCE')
-                    key = f"{exchange_name}_{symbol}_{tf}"
-                    if key in config and 'performance' in config[key]:
-                        current_pnl = config[key]['performance'].get('pnl_sim', 0)
+                if config_data and 'performance' in config_data:
+                    current_pnl = config_data['performance'].get('pnl_sim', 0)
                 
                 # Analyze and validate
                 weights = self.analyze(symbol, timeframe=tf, horizon=15)
