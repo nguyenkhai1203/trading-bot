@@ -43,3 +43,31 @@ def sample_ohlcv_data():
     })
     
     return df
+
+@pytest.fixture
+def mock_exchange():
+    """Mock CCXT async exchange with basic order/position state."""
+    exchange = MagicMock()
+    exchange.fetch_balance = MagicMock(return_value={'free': {'USDT': 10000}, 'total': {'USDT': 10000}})
+    exchange.fetch_positions = MagicMock(return_value=[])
+    exchange.create_order = MagicMock(return_value={'id': 'test_order_123', 'status': 'open'})
+    exchange.cancel_order = MagicMock(return_value={'id': 'test_order_123', 'status': 'canceled'})
+    return exchange
+
+@pytest.fixture
+async def mock_db():
+    """Provides an in-memory DataManager instance for testing."""
+    from src.infrastructure.repository.database import DataManager
+    # Clear existing instances to ensure isolation
+    await DataManager.clear_instances()
+    db = await DataManager.get_instance(env='TEST')
+    yield db
+    await DataManager.clear_instances()
+
+@pytest.fixture
+def strategy_analyzer(tmp_path):
+    """Initialized StrategyAnalyzer with a temporary data directory."""
+    from src.analyzer import StrategyAnalyzer
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    return StrategyAnalyzer(data_dir=str(data_dir))

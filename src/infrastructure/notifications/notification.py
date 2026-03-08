@@ -477,12 +477,28 @@ def map_exchange_position_to_v2(ex_pos: dict, ticker: Optional[dict], local_matc
     roe = ((cur - entry) / entry * 100 * float(lev)) if entry > 0 else 0
     if side == 'SELL': roe = -roe
     
+    # Fix SL/TP Swaps and Recovery
+    tp = ex_pos.get('takeProfit') or ex_pos.get('tp') or local_match.get('tp', 0)
+    sl = ex_pos.get('stopLoss') or ex_pos.get('sl') or local_match.get('sl', 0)
+    
+    # Direction-aware sanity check to prevent swapped labels for SHORT positions
+    if entry > 0 and tp > 0 and sl > 0:
+        if side == 'SELL':
+            # For Short: TP should be LESS than Entry, SL should be GREATER than Entry.
+            # If swapped, flip them back for correct UI display.
+            if tp > entry and sl < entry:
+                tp, sl = sl, tp
+        elif side == 'BUY':
+            # For Long: TP should be GREATER than Entry, SL should be LESS than Entry.
+            if tp < entry and sl > entry:
+                tp, sl = sl, tp
+
     return {
         'symbol': ex_pos['symbol'], 'side': side, 'leverage': lev,
         'entry_price': entry, 'current_price': cur,
         'roe': roe, 'pnl_usd': pnl_usd, 
-        'tp': ex_pos.get('takeProfit') or ex_pos.get('tp') or local_match.get('tp', 0),
-        'sl': ex_pos.get('stopLoss') or ex_pos.get('sl') or local_match.get('sl', 0)
+        'tp': tp,
+        'sl': sl
     }
 
 def map_exchange_order_to_v2(ex_order: dict, ticker: Optional[dict], local_match: dict = {}) -> dict:

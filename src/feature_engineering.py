@@ -359,6 +359,22 @@ class FeatureEngineer:
             new_features['state_leverage'] = 0.0
             new_features['state_equity_ratio'] = 1.0
 
+        # --- BMS Integration (Macro Context) ---
+        if 'bms_score' in df.columns:
+            new_features['norm_BMS'] = df['bms_score'].fillna(0.5)
+            # Add sub-scores if available
+            for sub in ['s_trend', 's_momentum', 's_vol', 's_dom']:
+                if sub in df.columns:
+                    # Map -1 to 1 into 0-1
+                    new_features[f'norm_BMS_{sub.replace("s_", "")}'] = (df[sub].fillna(0.0) + 1.0) / 2.0
+                else:
+                    new_features[f'norm_BMS_{sub.replace("s_", "")}'] = 0.5
+        else:
+            # Defaults for consistency
+            new_features['norm_BMS'] = 0.5
+            for sub in ['trend', 'momentum', 'vol', 'dom']:
+                new_features[f'norm_BMS_{sub}'] = 0.5
+
         # CONSOLIDATE: Use pd.concat once at the end
         # Convert dict to DataFrame
         features_df = pd.DataFrame(new_features, index=df.index)

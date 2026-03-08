@@ -258,6 +258,19 @@ class DataManager:
             WHERE id=?
         """, (status, exit_price, pnl, exit_reason, exit_time, trade_id))
 
+    async def get_daily_realized_pnl(self, profile_id: int) -> float:
+        """Calculate sum of PnL for trades closed today (since 00:00 UTC)."""
+        db = await self.get_db()
+        # Start of day in ms
+        today_start_ms = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+        
+        async with db.execute("""
+            SELECT SUM(pnl) FROM trades 
+            WHERE profile_id = ? AND status = 'CLOSED' AND exit_time >= ?
+        """, (profile_id, today_start_ms)) as cursor:
+            row = await cursor.fetchone()
+            return float(row[0] or 0.0)
+
     async def get_active_positions(self, profile_id: int) -> List[dict]:
         """Fetch all ACTIVE or OPENED positions for a profile."""
         db = await self.get_db()

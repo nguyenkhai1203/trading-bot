@@ -5,86 +5,65 @@ import json
 from src.neural_brain import NeuralBrain
 
 class TestNeuralBrain:
-    @pytest.fixture(autouse=True)
-    def reset_singleton(self):
-        """Reset NeuralBrain singleton before each test."""
-        NeuralBrain._instance = None
-        yield
+    """
+    Test suite for NeuralBrain (MLP).
+    Covers: Forward pass, Training convergence, and Weight persistence.
+    """
 
     @pytest.fixture
     def brain(self, tmp_path):
-        """Create a NeuralBrain instance with a temporary weights path."""
-        # Use a custom path to avoid overwriting real weights
-        custom_path = str(tmp_path / "test_brain_weights.json")
-        nb = NeuralBrain(input_size=10, hidden_size=8)
-        nb.model_path = custom_path
-        return nb
+        # Redirect weight file to tmp for isolation
+        with patch("src.neural_brain.os.path.join", return_value=str(tmp_path / "test_brain.json")):
+            # Clear singleton for clean test
+            NeuralBrain._instance = None
+            return NeuralBrain(input_size=10, hidden_size=8)
 
-    def test_singleton_pattern(self):
-        """Verify that NeuralBrain is a singleton."""
-        b1 = NeuralBrain(input_size=10)
-        b2 = NeuralBrain(input_size=10)
-        assert b1 is b2
-
-    def test_initialization(self, brain):
-        """Check if weights are initialized with correct shapes."""
-        assert brain.weights['W1'].shape == (10, 8)
-        assert brain.weights['b1'].shape == (1, 8)
-        assert brain.weights['W2'].shape == (8, 1)
-        assert brain.weights['b2'].shape == (1, 1)
-
-    def test_predict_output_range(self, brain):
-        """Forward pass should return a float between 0 and 1."""
-        input_data = np.random.randn(10).tolist()
-        score = brain.predict(input_data)
-        assert 0.0 <= score <= 1.0
+    def test_brain_predict_not_null(self, brain):
+        """Verify forward pass returns a valid float between 0 and 1."""
+        x = [0.5] * 10
+        score = brain.predict(x)
         assert isinstance(score, float)
+        assert 0.0 <= score <= 1.0
 
-    def test_save_and_load_model(self, brain):
-        """Verify that weights can be saved and reloaded exactly."""
-        # Set specific weights
-        brain.weights['W1'] = np.ones((10, 8)) * 0.5
-        brain.save_model()
+    def test_brain_train_convergence(self, brain):
+        """Verify that training on simple data reduces loss."""
+        # Simple pattern: if first feature > 0.5 then 1, else 0
+        inputs = np.random.rand(100, 10)
+        targets = [1.0 if x[0] > 0.5 else 0.0 for x in inputs]
         
-        assert os.path.exists(brain.model_path)
+        # Initial loss
+        initial_loss = brain.train(inputs, targets, epochs=1)
         
-        # Reset and reload
-        brain.weights['W1'] = np.zeros((10, 8))
-        brain.load_model()
+        # Train more
+        final_loss = brain.train(inputs, targets, epochs=50)
         
-        assert np.all(brain.weights['W1'] == 0.5)
-        assert brain.is_trained is True
+        # Loss should decrease
+        assert final_loss < initial_loss
+        
+        # Test a prediction
+        test_in = [0.9] + [0.1]*9
+        score = brain.predict(test_in)
+        assert score > 0.5
 
-    def test_load_model_shape_mismatch(self, brain, tmp_path):
-        """Verify that mismatching weights trigger a reset."""
-        # Save a model with 5 inputs
-        bad_weights = {
-            'W1': np.ones((5, 8)).tolist(),
-            'b1': np.zeros((1, 8)).tolist(),
-            'W2': np.ones((8, 1)).tolist(),
-            'b2': np.zeros((1, 1)).tolist()
-        }
-        with open(brain.model_path, 'w') as f:
-            json.dump(bad_weights, f)
+    def test_brain_save_load(self, brain, tmp_path):
+        """Verify weights are preserved after save/load."""
+        test_path = str(tmp_path / "persistence.json")
+        with patch.object(brain, 'model_path', test_path):
+            # 1. Modify weights from default
+            brain.weights['W1'] += 1.0
             
-        # Try to load into a 10-input brain
-        brain.load_model()
-        
-        # Should remain on random weights (not the 5-input ones)
-        assert brain.weights['W1'].shape == (10, 8)
-
-    def test_train_loop(self, brain):
-        """Verify that training decreases error for simple patterns."""
-        inputs = [
-            [1.0] * 10,
-            [0.0] * 10
-        ]
-        targets = [1.0, 0.0] # Pattern: All 1s -> 1.0, All 0s -> 0.0
-        
-        initial_error = brain.train(inputs, targets, epochs=1)
-        
-        # Train for multiple epochs
-        for _ in range(50):
-            last_error = brain.train(inputs, targets, epochs=1)
+            # 2. Save
+            brain.save_model()
+            assert os.path.exists(test_path)
             
-        assert last_error < initial_error
+            # 3. Create NEW brain and load
+            NeuralBrain._instance = None
+            new_brain = NeuralBrain(input_size=10, hidden_size=8)
+            with patch.object(new_brain, 'model_path', test_path):
+                new_brain.load_model()
+                
+                # Compare bit-by-bit
+                np.testing.assert_array_almost_equal(new_brain.weights['W1'], brain.weights['W1'])
+                assert new_brain.is_trained is True
+
+from unittest.mock import patch

@@ -126,7 +126,11 @@ class Trader:
             self.__class__._shared_account_cache[self.account_key] = {
                 'last_balance_check': 0,
                 'last_balance': None,
-                'margin_cooldown_until': 0
+                'margin_cooldown_until': 0,
+                'leverage_cache': {}, # Issue 8: {symbol: (leverage, timestamp)}
+                'pos_symbols': set(),
+                'open_order_symbols': set(),
+                'timestamp': 0
             }
 
 
@@ -499,11 +503,27 @@ class Trader:
         exchange_name = self.exchange_name
         # Extract base/quote and replace slashes with underscores (e.g., BTC/USDT -> BTC_USDT)
         # Handle settlement info if present (e.g. BTC/USDT:USDT -> discard the :USDT part)
-        clean_symbol = to_display_format(symbol).replace('/', '_')
+        clean_symbol = to_display_format(symbol).replace('/', '_').replace(':', '_')
         base_key = f"P{self.profile_id}_{exchange_name}_{clean_symbol}"
         if timeframe:
             return f"{base_key}_{timeframe}"
         return base_key
+
+    def _check_min_notional(self, symbol, price, qty):
+        """
+        Verify if the order meets the exchange's minimum notional value requirements.
+        Prevents API errors for tiny orders.
+        """
+        notional = price * qty
+        # Use CCXT markets if available to get exact min notional (cost limit)
+        min_notional = 5.0 # default fallback
+        if hasattr(self.exchange, 'exchange') and hasattr(self.exchange.exchange, 'markets') and symbol in self.exchange.exchange.markets:
+             market = self.exchange.exchange.markets[symbol]
+             min_notional = market.get('limits', {}).get('cost', {}).get('min', 5.0)
+        
+        if notional < min_notional:
+            return False, f"Notional {notional:.2f} < min {min_notional}", notional
+        return True, "OK", notional
 
     def _parse_pos_key(self, pos_key):
         """
@@ -741,7 +761,7 @@ class Trader:
                 self.logger.warning(f"Rejected order: invalid qty={qty} for {symbol}")
                 return None
         
-        # Dynamic decimal places based on exchange metadata
+            # Dynamic decimal places based on exchange metadata
             qty = float(qty)  # Ensure native float (not np.float64) for API compatibility
             try:
                 # Delegate to adapter's precision handling (handles Bybit Swap vs Spot key discrepancy)
@@ -765,8 +785,6 @@ class Trader:
                 print(f"⏹️ [{self.exchange_name}] [{symbol}] Qty {qty:.8f} below min step after rounding. Skipping.")
                 return None
 
-
-                
             # UPDATE QTY TO ROUNDED VALUE FOR API CALLS
             qty = qty_rounded 
             
@@ -796,6 +814,18 @@ class Trader:
             signals = signals_used or []
             confidence = entry_confidence or 0.5
 
+            # Safety Enhancement: Max Daily Loss Protection
+            if not reduce_only and hasattr(config, 'MAX_DAILY_LOSS_USD'):
+                try:
+                    # Get today's realized PnL from DataManager (DB)
+                    daily_pnl = await self.db.get_daily_realized_pnl(self.profile_id)
+                    if daily_pnl <= -config.MAX_DAILY_LOSS_USD:
+                        self.logger.warning(f"❌ [SAFETY] Blocked {symbol} order: Daily loss threshold reached (${daily_pnl:.2f} <= -${config.MAX_DAILY_LOSS_USD:.2f})")
+                        print(f"🛑 [{self.exchange_name}] Max Daily Loss hit (${daily_pnl:.2f}). Skipping.")
+                        return None
+                except Exception as pnl_err:
+                    self.logger.warning(f"Could not verify daily PnL: {pnl_err}")
+
             # Symbol-level guard: reject if any position for this symbol is already active or pending.
             # pos_key is per-symbol+timeframe, but we must prevent duplicate symbol exposure
             # across ALL timeframes (e.g. NEAR 1h active + NEAR 15m trying to enter).
@@ -818,6 +848,11 @@ class Trader:
             print(f"🔧 [{exchange_name}] Sending Order: {side} {symbol} Qty={api_qty} (Type={api_qty.__class__.__name__}) @ {price or 'MARKET'}")
 
             if self.dry_run or not self.exchange.can_trade:
+                # For simulation notifications, we need a price even if it's a market order
+                sim_price = price
+                if not sim_price or sim_price <= 0:
+                    sim_price = price_to_check or 0
+                
                 if not self.exchange.can_trade:
                     print(f"🛡️ [PUBLIC MODE] Simulating {side} {symbol} ({timeframe}) - Simulation Active.")
                 
@@ -834,7 +869,7 @@ class Trader:
                     "symbol": symbol,
                     "side": side.upper(),
                     "qty": qty_rounded,
-                    "entry_price": round(price, 3) if isinstance(price, (int, float)) else price,
+                    "entry_price": round(sim_price, 3) if isinstance(sim_price, (int, float)) else sim_price,
                     "sl": round(sl, 3) if sl else None,
                     "tp": round(tp, 3) if tp else None,
                     "timeframe": timeframe,
@@ -850,10 +885,10 @@ class Trader:
                 
                 # Send notification
                 _, tg_msg = format_pending_order(
-                    symbol, timeframe, side, price, sl, tp, confidence, leverage, self.dry_run,
+                    symbol, timeframe, side, sim_price, sl, tp, confidence, leverage, self.dry_run,
                     exchange_name=self.exchange_name, profile_label=self.profile_name
                 ) if is_limit else format_position_filled(
-                    symbol, timeframe, side, price, qty_rounded, price * qty_rounded, sl, tp, confidence, leverage, self.dry_run,
+                    symbol, timeframe, side, sim_price, qty_rounded, sim_price * qty_rounded, sl, tp, confidence, leverage, self.dry_run,
                     exchange_name=self.exchange_name, profile_label=self.profile_name
                 )
                 await send_telegram_message(tg_msg)
@@ -870,8 +905,6 @@ class Trader:
             if reduce_only: 
                 params['reduceOnly'] = True
 
-
-
             # Determine and clamp config.LEVERAGE to allowed range
             use_leverage = self._clamp_leverage(config.LEVERAGE)
             
@@ -885,7 +918,7 @@ class Trader:
                 self.logger.warning(f"❌ [THROTTLED] Skip order for {symbol} due to recent insufficient margin.")
                 return None
 
-            # Ensure margin mode & config.LEVERAGE set on exchange for LIVE orders
+            # Ensure margin mode & leverage set on exchange for LIVE orders
             if not self.dry_run and self.exchange.can_trade:
                 await self._ensure_isolated_and_leverage(symbol, use_leverage)
                 
@@ -1549,10 +1582,27 @@ class Trader:
             return False
 
     async def _ensure_isolated_and_leverage(self, symbol, leverage):
-        """Delegates to adapter's ensure_isolated_and_leverage."""
+        """Delegates to adapter's ensure_isolated_and_leverage with 1h caching (Issue 8)."""
         if self.dry_run or not self.exchange.can_trade:
             return
+            
+        shared = self.__class__._shared_account_cache.get(self.account_key, {})
+        cache = shared.setdefault('leverage_cache', {})
+        
+        cached_val = cache.get(symbol)
+        now = time.time()
+        
+        # If cached and matches and less than 1 hour old, skip API call
+        if cached_val and cached_val[0] == leverage and (now - cached_val[1] < 3600):
+            return
+            
         await self.exchange.ensure_isolated_and_leverage(symbol, leverage)
+        
+        # Update cache
+        cache[symbol] = (leverage, now)
+        shared['leverage_cache'] = cache
+        self.__class__._shared_account_cache[self.account_key] = shared
+        self.logger.debug(f"[CACHE] Updated leverage cache for {symbol}: {leverage}x")
 
     async def _binance_batch_create(self, symbol, orders):
         """Redirected to adapter's batch_create_orders."""
@@ -1621,6 +1671,9 @@ class Trader:
             await self._update_db_position(pos_key)
             return results
         except Exception as e:
+            print(f"DEBUG: OrderExecutor.place_order Exception: {e}")
+            import traceback
+            traceback.print_exc()
             self.logger.error(f"Failed to create SL/TP for {pos_key}: {e}")
             return None
 
@@ -1800,14 +1853,33 @@ class Trader:
         entry_time = pos.get('timestamp') or 0
         
         try:
-            # Fetch recent trades
-            trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, limit=20)
-            
-            # Find the most recent closing trade for this side
+            # Ghost Resolution (Issue 2): Using 24h lookback and pagination
+            since = (entry_time - 86400000) if entry_time > 0 else (int(time.time() * 1000) - 86400000)
             target_side = 'sell' if side == 'BUY' else 'buy'
             close_trade = None
             
-            for t in reversed(trades or []):
+            all_trades = []
+            current_since = since
+            
+            # Pagination loop for deep history search
+            max_pages = 5
+            for page in range(max_pages):
+                self.logger.debug(f"[SYNC] Fetching trades for {symbol} (Page {page+1}, since={current_since})")
+                trades = await self._execute_with_timestamp_retry(self.exchange.fetch_my_trades, symbol, since=current_since)
+                if not trades:
+                    break
+                
+                all_trades.extend(trades)
+                # If we got a full page (assuming 1000), fetch next starting from last trade's timestamp + 1ms
+                if len(trades) >= 1000:
+                    current_since = trades[-1]['timestamp'] + 1
+                else:
+                    break
+                # Short sleep to prevent rate limits during intense pagination
+                await asyncio.sleep(0.5)
+
+            # Find the most recent closing trade for this side
+            for t in reversed(all_trades):
                 # Trade must be newer than entry (with small buffer for time drift)
                 if t['timestamp'] >= (entry_time - 1000) and t['side'].lower() == target_side:
                     close_trade = t
@@ -1845,8 +1917,15 @@ class Trader:
     async def deep_history_sync(self, lookback_hours=24):
         """
         Exhaustive sync scanning history for all active positions to catch missed closures.
-        Runs periodically (e.g., every 1 hour).
+        Runs periodically (e.g., every 1 hour) with Issue 4 rate limiting.
         """
+        now = time.time()
+        # Issue 4: Throttling deep sync to once per hour
+        if now - self._last_history_sync_time < 3600:
+            self.logger.debug("[SYNC] Skipping deep sync (last run < 1h ago)")
+            return
+            
+        self._last_history_sync_time = now
         self.logger.info(f"🔄 [SYNC] Starting deep history sync (lookback {lookback_hours}h)...")
         
         # 1. Fetch all active positions in DB
@@ -1905,11 +1984,11 @@ class Trader:
                             total_fixed += 1
                             del active_map[key]
                 
-                # Add delay after each symbol fetch to prevent rate limit spikes
-                await asyncio.sleep(0.5)
+                # Issue 4: Random delay after each symbol fetch to prevent rate limit spikes (429)
+                await asyncio.sleep(1 + (time.time() % 2))
             except Exception as e:
                 self.logger.error(f"Error in deep sync for {symbol}: {e}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 
         if total_fixed > 0:
             self.logger.info(f"✨ [SYNC] Deep sync completed. Fixed {total_fixed} positions.")
@@ -2035,19 +2114,26 @@ class Trader:
                     # Calculate entry price
                     entry_price = self._safe_float(p.get('entryPrice') or p.get('avgPrice') or p.get('info', {}).get('entryPrice') or p.get('info', {}).get('avgEntryPrice'), default=0)
                     
+                    # Issue 5: Adoption Validation (Contracts > 0 and Side check)
+                    pos_amt = self._safe_float(p.get('contracts') or p.get('amount') or p.get('info', {}).get('positionAmt', 0))
+                    if abs(pos_amt) <= 0:
+                        self.logger.debug(f"[ADOPT] Skipping {original_sym} - zero size.")
+                        continue
+
                     raw_side = p.get('side', '')
                     if not raw_side:
                         raw_side = p.get('info', {}).get('side', '')
                     if not raw_side:
-                        pos_amt = self._safe_float(p.get('info', {}).get('positionAmt', 0))
                         raw_side = 'LONG' if pos_amt > 0 else 'SHORT' if pos_amt < 0 else ''
                         
                     raw_side = raw_side.upper()
                     # Normalize side to BUY/SELL
-                    if raw_side == 'LONG': side = 'BUY'
-                    elif raw_side == 'SHORT': side = 'SELL'
+                    if raw_side == 'LONG' or (not raw_side and pos_amt > 0): side = 'BUY'
+                    elif raw_side == 'SHORT' or (not raw_side and pos_amt < 0): side = 'SELL'
                     elif raw_side: side = raw_side
-                    else: side = 'BUY' # Fallback to prevent crash, though qty > 0 should guarantee side
+                    else: 
+                        self.logger.warning(f"[ADOPT] Could not determine side for {original_sym}. Skipping.")
+                        continue
                     
                     # Initialize SL/TP placeholders
                     auto_sl = None
@@ -3048,19 +3134,44 @@ class Trader:
             if current_price > 0:
                 is_hit = False
                 reason = ""
-                # Add a 0.1% safety buffer for Bybit to prevent immediate trigger rejections
-                buffer = 0.001 if self.exchange_name.upper() == 'BYBIT' else 0.0
+                
+                # Issue 3: Dynamic Buffer based on ATR (Volatility)
+                # Fetch ATR from DataManager/Analyzer if available
+                buffer_val = 0.001 # Default 0.1% fallback
+                try:
+                    # Attempt to fetch ATR(14) for 1h or 15m timeframe
+                    # DataManager store keys: {exchange}_{symbol}_{tf}
+                    tf_to_check = pos.get('timeframe') or '1h'
+                    cache_key = f"{self.exchange_name}_{symbol}_{tf_to_check}"
+                    df = self.data_manager.data_store.get(cache_key)
+                    if df is not None and len(df) >= 14:
+                        # Simple ATR calculation if 'atr' column missing
+                        if 'atr' in df.columns:
+                            latest_atr = float(df['atr'].iloc[-1])
+                        else:
+                            high_low = df['high'] - df['low']
+                            high_close = (df['high'] - df['close'].shift()).abs()
+                            low_close = (df['low'] - df['close'].shift()).abs()
+                            ranges = np.max([high_low, high_close, low_close], axis=0)
+                            latest_atr = np.mean(ranges[-14:])
+                        
+                        # Use ATR * 0.5 as buffer (clamped between 0.05% and 0.5% for safety)
+                        buffer_pct = (latest_atr * 0.5) / current_price
+                        buffer_val = max(0.0005, min(0.005, buffer_pct))
+                        self.logger.debug(f"[SYNC] Using dynamic ATR buffer for {symbol}: {buffer_val:.4f} (ATR: {latest_atr:.2f})")
+                except Exception as atr_err:
+                    self.logger.debug(f"[SYNC] Could not calculate dynamic buffer for {symbol}: {atr_err}. Using fallback 0.1%")
                 
                 if side == 'BUY':
-                    if tp and current_price >= tp * (1 - buffer):
-                        is_hit, reason = True, f"TP passed or within 0.1% buffer ({current_price} >= {tp * (1 - buffer):.5f})"
-                    elif sl and current_price <= sl * (1 + buffer):
-                        is_hit, reason = True, f"SL passed or within 0.1% buffer ({current_price} <= {sl * (1 + buffer):.5f})"
+                    if tp and current_price >= tp * (1 - buffer_val):
+                        is_hit, reason = True, f"TP passed or within {buffer_val*100:.2f}% buffer ({current_price} >= {tp * (1 - buffer_val):.5f})"
+                    elif sl and current_price <= sl * (1 + buffer_val):
+                        is_hit, reason = True, f"SL passed or within {buffer_val*100:.2f}% buffer ({current_price} <= {sl * (1 + buffer_val):.5f})"
                 else: # SELL
-                    if tp and current_price <= tp * (1 + buffer):
-                        is_hit, reason = True, f"TP passed or within 0.1% buffer ({current_price} <= {tp * (1 + buffer):.5f})"
-                    elif sl and current_price >= sl * (1 - buffer):
-                        is_hit, reason = True, f"SL passed or within 0.1% buffer ({current_price} >= {sl * (1 - buffer):.5f})"
+                    if tp and current_price <= tp * (1 + buffer_val):
+                        is_hit, reason = True, f"TP passed or within {buffer_val*100:.2f}% buffer ({current_price} <= {tp * (1 + buffer_val):.5f})"
+                    elif sl and current_price >= sl * (1 - buffer_val):
+                        is_hit, reason = True, f"SL passed or within {buffer_val*100:.2f}% buffer ({current_price} >= {sl * (1 - buffer_val):.5f})"
                 
                 if is_hit:
                     self.logger.warning(f"🚀 [URGENT] {pos_key} target hit locally ({reason}). Closing at Market.")

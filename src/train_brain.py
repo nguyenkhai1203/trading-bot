@@ -17,7 +17,7 @@ async def load_training_data(env='LIVE'):
     
     # Join with trades to get the actual result (WIN/LOSS)
     query = """
-        SELECT l.snapshot_json, l.entry_confidence, t.status, t.pnl, t.exit_reason
+        SELECT l.trade_id, l.snapshot_json, l.entry_confidence, t.status, t.pnl, t.exit_reason
         FROM ai_training_logs l
         JOIN trades t ON l.trade_id = t.id
         WHERE t.status IN ('CLOSED', 'ACTIVE')
@@ -67,11 +67,13 @@ async def load_training_data(env='LIVE'):
                 feature_vector = [0.5 if (x is None or not np.isfinite(x)) else float(x) for x in feature_vector]
                 
                 # Target: WIN if PnL > 0, else LOSS
-                # Note: For ACTIVE trades, this is technically "ongoing", but usually we only train on CLOSED.
-                if row['status'] == 'CLOSED':
-                    target = 1.0 if row['pnl'] > 0 else 0.0
+                # Only train on CLOSED trades with a valid PnL
+                if row['status'] == 'CLOSED' and row['pnl'] is not None:
+                    target = 1.0 if float(row['pnl']) > 0 else 0.0
                     inputs.append(feature_vector)
                     targets.append(target)
+                elif row['status'] == 'CLOSED' and row['pnl'] is None:
+                    print(f"⚠️ Missing PnL for closed trade {row['trade_id']}")
             except Exception as e:
                 print(f"⚠️ Skipping bad record: {e}")
                 continue

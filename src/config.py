@@ -81,7 +81,9 @@ AUTO_CREATE_SL_TP = True
 USE_LIMIT_ORDERS = True  # Use limit orders for better entry price
 PATIENCE_ENTRY_PCT = 0.01   # 1.0% better entry price target (reduced from 1.5% to fill faster)
 GLOBAL_MAX_COST_PER_TRADE = 5.0 # Absolute max USDT margin per position
-LIMIT_ORDER_TIMEOUT = 300  # 5 minutes timeout for limit orders (seconds)
+LIMIT_ORDER_TIMEOUT = 90  # Changed from 300 to 90 seconds for better capital efficiency
+DAILY_LOSS_LIMIT_PCT = 0.05  # Max daily drawdown (5% of equity)
+TRAILING_STOP_PCT = 0.02   # 2% Trailing Stop
 REQUIRE_TECHNICAL_CONFIRMATION = False  # Require Fibo/S/R alignment before entry (disabled for now)
 
 # Signal Quality Filter
@@ -131,3 +133,17 @@ MIN_WIN_RATE_TRAIN = 0.55      # Minimum win rate on training set to enable (55%
 MIN_WIN_RATE_TEST = 0.55       # Minimum win rate on test set to enable (55%)
 MAX_CONSISTENCY = 0.25         # Maximum consistency (train/test difference)
 MIN_CROSS_TF_SUPPORT = 1       # Minimum number of other timeframes that must be profitable
+
+# BMS v2.0 Config
+BMS_CONFIG = {
+    'VETO_THRESHOLD_STRONG': 0.70,
+    'VETO_THRESHOLD_EXTREME': 0.85,
+    'VOLATILITY_WINDOW': 200,      # Rolling window for adaptive volatility
+    'DOMINANCE_WINDOW': 50,        # Rolling window for dominance Z-score
+    'MTF_WEIGHTS': {'1h': 0.3, '4h': 0.4, '1d': 0.3}
+}
+
+# Add BTCDOM to Binance symbols to ensure download_data fetches it
+if 'BTCDOM/USDT:USDT' not in BINANCE_SYMBOLS:
+    BINANCE_SYMBOLS.append('BTCDOM/USDT:USDT')
+    TRADING_SYMBOLS = list(set(BINANCE_SYMBOLS + BYBIT_SYMBOLS))

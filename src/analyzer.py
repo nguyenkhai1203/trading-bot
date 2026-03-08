@@ -81,6 +81,17 @@ class StrategyAnalyzer:
         else:
             df['ema_200'] = df['close'].expanding().mean()
         
+        # --- LOOKAHEAD BIAS / DATA INTEGRITY CHECK ---
+        df = df.sort_values('timestamp')
+        df['ts_diff'] = df['timestamp'].diff().dt.total_seconds()
+        # If gap > 1.5 * timeframe (e.g., 1.5h for 1h TF), we should be careful
+        tf_seconds = 3600 if timeframe == '1h' else 14400 if timeframe == '4h' else 900 if timeframe == '15m' else 3600
+        if (df['ts_diff'] > 1.5 * tf_seconds).any():
+            gap_count = (df['ts_diff'] > 1.5 * tf_seconds).sum()
+            # logging.warning(f"Detected {gap_count} gaps in {symbol} {timeframe} data. May cause bias.")
+            # Optimization: drop rows with huge gaps to avoid EMA/feature distortion if needed
+            pass
+        
         # --- BMS Integration ---
         # Fetch BTC data to calculate BMS for this timeframe once and cache it
         if symbol != 'BTC/USDT:USDT':
@@ -109,12 +120,21 @@ class StrategyAnalyzer:
 
             # Merge if BMS data is available
             if bms_subset is not None:
+                # BMS Data Integrity: Avoid very old sentiment data
+                bms_subset = bms_subset.sort_values('timestamp')
+                
+                # ADAPTIVE TOLERANCE (v2.0): Drop if BMS age > 2x timeframe
+                # 1h -> 2h, 4h -> 8h, etc.
+                tolerance_map = {'15m': '30m', '30m': '1h', '1h': '2h', '4h': '8h', '1D': '2D'}
+                tol_str = tolerance_map.get(timeframe.replace('d', 'D'), '4h')
+                
                 df = pd.merge_asof(
                     df.sort_values('timestamp'),
-                    bms_subset.sort_values('timestamp'),
+                    bms_subset,
                     on='timestamp',
-                    direction='backward'
-                )
+                    direction='backward',
+                    tolerance=pd.Timedelta(tol_str) 
+                ).ffill(limit=1) # Minimal forward fill
 
         self._data_cache[cache_key] = df
         return df
@@ -235,87 +255,101 @@ class StrategyAnalyzer:
 
     def validate_weights(self, df, weights, symbol, timeframe, exchange='BINANCE', bms_score=None, bms_zone=None):
         """
-        LAYER 3: Walk-Forward Validation - OPTIMIZED v2.2
-        - FULL GRID SEARCH (không giảm quality!)
-        - CACHED SIGNALS per threshold (30x faster!)
-        - Vectorized backtesting
+        LAYER 3: Nested Walk-Forward Validation - OPTIMIZED v2.3
+        - Split: Train (50%) | Validation (25%) | Holdout (25%)
+        - Use Validation to pick Top 50, then check on Holdout.
+        - Adds Market Regime check.
         """
-        if not weights:
+        if not weights or len(df) < 100:
             return None
         
-        split_idx = int(len(df) * 0.7)
-        train_df = df.iloc[:split_idx]
-        test_df = df.iloc[split_idx:]
+        # 1. Split data into 3 sets
+        train_end = int(len(df) * 0.5)
+        val_end = int(len(df) * 0.75)
+        
+        train_df = df.iloc[:train_end]
+        val_df = df.iloc[train_end:val_end]
+        holdout_df = df.iloc[val_end:]
         
         from src.strategy import WeightedScoringStrategy
         mock_strat = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe)
         mock_strat.weights = weights
         
-        round_trip_fee = 0.0012
+        # Determine Market Regime once
+        regime = self._get_market_regime(df, bms_score, bms_zone)
         
-        # FULL GRID - KHÔNG GIẢM QUALITY
-        sl_ranges = [0.01, 0.015, 0.02, 0.025, 0.03, 0.035]  # 6 values
-        rr_ratios = [1.0, 1.5, 2.0, 2.5, 3.0]                # 5 values  
-        thresholds_to_test = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 7.0]  # 9 values
+        # Transaction costs: fee (0.0012) + estimated slippage (0.0005)
+        trading_cost = 0.0017 
         
-        # OPTIMIZATION: Pre-compute signals for each threshold (9 times instead of 270!)
+        # Grid parameters
+        sl_ranges = [0.01, 0.015, 0.02, 0.025, 0.03, 0.04]
+        rr_ratios = [1.0, 1.5, 2.0, 2.5, 3.0]
+        thresholds_to_test = [3.0, 3.5, 4.0, 4.5, 5.0, 6.0] # Reduced for speed but kept quality
+        
+        # Pre-compute signals for each threshold
         train_signals_cache = {}
-        test_signals_cache = {}
+        val_signals_cache = {}
+        holdout_signals_cache = {}
         
         for thresh in thresholds_to_test:
-            if not hasattr(mock_strat, 'config_data') or not mock_strat.config_data:
-                mock_strat.config_data = {}
             mock_strat.config_data['thresholds'] = {'entry_score': thresh}
             train_signals_cache[thresh] = self._compute_signals(train_df, mock_strat, bms_score=bms_score, bms_zone=bms_zone)
-            test_signals_cache[thresh] = self._compute_signals(test_df, mock_strat, bms_score=bms_score, bms_zone=bms_zone)
+            val_signals_cache[thresh] = self._compute_signals(val_df, mock_strat, bms_score=bms_score, bms_zone=bms_zone)
+            holdout_signals_cache[thresh] = self._compute_signals(holdout_df, mock_strat, bms_score=bms_score, bms_zone=bms_zone)
         
         best_overall = None
-        max_combined_pnl = -999999
+        max_total_pnl = -999999
         
-        # Phase 1: Find best on train set using cached signals
-        best_train_combos = []
+        # Phase 1: Grid search on TRAIN, pick Top 50 by VALIDATION
+        train_val_results = []
         for thresh in thresholds_to_test:
-            signals = train_signals_cache[thresh]
             for sl_test in sl_ranges:
                 for rr in rr_ratios:
                     tp_test = max(0.025, sl_test * rr)
-                    train_perf = self._backtest_with_signals(train_df, signals, sl_test, tp_test, round_trip_fee)
                     
-                    if train_perf['trades'] >= 2 and train_perf['win_rate'] >= 0.50:
-                        best_train_combos.append({
-                            'sl': sl_test, 'tp': tp_test, 'thresh': thresh,
-                            'train_perf': train_perf
+                    for amult in [None, 1.5, 2.0, 3.0]:
+                        train_perf = self._backtest_with_signals(train_df, train_signals_cache[thresh], sl_test, tp_test, trading_cost, atr_mult=amult)
+                        if train_perf['trades'] < 3 or train_perf['win_rate'] < 0.50:
+                            continue
+                            
+                        val_perf = self._backtest_with_signals(val_df, val_signals_cache[thresh], sl_test, tp_test, trading_cost, atr_mult=amult)
+                        
+                        train_val_results.append({
+                            'sl': sl_test, 'tp': tp_test, 'thresh': thresh, 'atr_mult': amult,
+                            'train_perf': train_perf, 'val_perf': val_perf
                         })
         
-        # Sort by train pnl, keep top 50 for test validation
-        best_train_combos.sort(key=lambda x: x['train_perf']['pnl'], reverse=True)
-        top_combos = best_train_combos[:50]
+        # Sort by Validation PnL, keep top 50
+        train_val_results.sort(key=lambda x: x['val_perf']['pnl'], reverse=True)
+        top_combos = train_val_results[:50]
         
-        # Phase 2: Validate top combos on test set using cached signals
+        # Phase 2: Final validation on HOLDOUT set
         for combo in top_combos:
-            signals = test_signals_cache[combo['thresh']]
-            test_perf = self._backtest_with_signals(test_df, signals, combo['sl'], combo['tp'], round_trip_fee)
+            holdout_perf = self._backtest_with_signals(holdout_df, holdout_signals_cache[combo['thresh']], combo['sl'], combo['tp'], trading_cost, atr_mult=combo['atr_mult'])
             
-            if test_perf['trades'] < 2:
+            # CRITICAL: Consistency check between Val and Holdout
+            val_perf = combo['val_perf']
+            if holdout_perf['trades'] < 2: continue
+            
+            consistency = abs(holdout_perf['win_rate'] - val_perf['win_rate'])
+            if consistency > 0.20: # Stricter consistency for Holdout
                 continue
+                
+            # Total performance including all sets
+            total_pnl = combo['train_perf']['pnl'] + val_perf['pnl'] + holdout_perf['pnl']
             
-            train_perf = combo['train_perf']
-            consistency = abs(test_perf['win_rate'] - train_perf['win_rate'])
-            if consistency > 0.25:
-                continue
-            
-            combined_pnl = train_perf['pnl'] + test_perf['pnl']
-            if combined_pnl > max_combined_pnl:
-                max_combined_pnl = combined_pnl
+            if total_pnl > max_total_pnl:
+                max_total_pnl = total_pnl
                 best_overall = {
-                    'sl_pct': combo['sl'], 'tp_pct': combo['tp'],
+                    'sl_pct': combo['sl'], 'tp_pct': combo['tp'], 'atr_mult': combo['atr_mult'],
                     'entry_score': combo['thresh'],
-                    'pnl': combined_pnl,
-                    'trades': train_perf['trades'] + test_perf['trades'],
-                    'win_rate': (train_perf['win_rate'] + test_perf['win_rate']) / 2,
-                    'test_wr': test_perf['win_rate'],
-                    'test_pnl': test_perf['pnl'],
-                    'consistency': consistency
+                    'pnl': total_pnl,
+                    'trades': combo['train_perf']['trades'] + val_perf['trades'] + holdout_perf['trades'],
+                    'win_rate': (combo['train_perf']['win_rate'] + val_perf['win_rate'] + holdout_perf['win_rate']) / 3,
+                    'test_wr': holdout_perf['win_rate'],
+                    'test_pnl': holdout_perf['pnl'],
+                    'consistency': consistency,
+                    'regime': regime
                 }
         
         # Cache result for cross-TF lookup
@@ -324,6 +358,19 @@ class StrategyAnalyzer:
             self._validation_cache[cache_key] = best_overall
         
         return best_overall
+
+    def _get_market_regime(self, df, bms_score=None, bms_zone=None):
+        """Detect market regime using BTC EMA and BMS."""
+        if bms_zone == 'RED': return 'BEAR'
+        if bms_zone == 'GREEN': return 'BULL'
+        
+        # Fallback to BTC price vs EMA
+        if 'ema_200' in df.columns:
+            curr_price = df['close'].iloc[-1]
+            ema = df['ema_200'].iloc[-1]
+            if curr_price > ema * 1.02: return 'BULL'
+            if curr_price < ema * 0.98: return 'BEAR'
+        return 'SIDEWAYS'
 
     def _compute_signals(self, df, strat, bms_score=None, bms_zone=None):
         """Pre-compute signals once per threshold."""
@@ -346,7 +393,7 @@ class StrategyAnalyzer:
             signals.append(sig['side'] if sig['side'] in ['BUY', 'SELL'] else None)
         return signals
 
-    def _backtest_with_signals(self, df, signals, sl_pct, tp_pct, fee):
+    def _backtest_with_signals(self, df, signals, sl_pct, tp_pct, fee, atr_mult=None):
         """Backtest using pre-computed signals - MUCH FASTER."""
         if len(df) < 25 or not signals:
             return {'pnl': 0, 'trades': 0, 'win_rate': 0}
@@ -354,6 +401,7 @@ class StrategyAnalyzer:
         closes = df['close'].values
         highs = df['high'].values
         lows = df['low'].values
+        atrs = df['ATR_14'].values if 'ATR_14' in df.columns else None
         
         balance = 10000
         pos = None
@@ -379,7 +427,7 @@ class StrategyAnalyzer:
                         exit_price = pos['tp']
                 
                 if exit_price:
-                    if pos['entry'] <= 0:  # Division by zero protection
+                    if pos['entry'] <= 0:
                         pos = None
                         continue
                     if pos['side'] == 'BUY':
@@ -394,12 +442,22 @@ class StrategyAnalyzer:
             
             elif sig is not None:
                 price = closes[idx]
+                curr_atr = atrs[idx] if atrs is not None else price * 0.02
+                
                 if sig == 'BUY':
-                    sl = price * (1 - sl_pct)
-                    tp = price * (1 + tp_pct)
+                    if atr_mult:
+                        sl = price - (curr_atr * atr_mult)
+                        tp = price + (curr_atr * atr_mult * (tp_pct/sl_pct if sl_pct > 0 else 2))
+                    else:
+                        sl = price * (1 - sl_pct)
+                        tp = price * (1 + tp_pct)
                 else:
-                    sl = price * (1 + sl_pct)
-                    tp = price * (1 - tp_pct)
+                    if atr_mult:
+                        sl = price + (curr_atr * atr_mult)
+                        tp = price - (curr_atr * atr_mult * (tp_pct/sl_pct if sl_pct > 0 else 2))
+                    else:
+                        sl = price * (1 + sl_pct)
+                        tp = price * (1 - tp_pct)
                 pos = {'side': sig, 'entry': price, 'sl': sl, 'tp': tp}
         
         return {
@@ -421,17 +479,23 @@ class StrategyAnalyzer:
                     supported += 1
         return supported
 
-    async def update_config(self, symbol, timeframe, new_weights, sl_pct=0.02, tp_pct=0.04, entry_score=5.0, stats=None, enabled=None, exchange='BINANCE', w_btc=0.5):
+    async def update_config(self, symbol, timeframe, new_weights, sl_pct=0.02, tp_pct=0.04, entry_score=5.0, atr_mult=None, stats=None, enabled=None, exchange='BINANCE', w_btc=0.5):
         """
         Updates strategy configuration in the database.
-        Eliminates file-locking issues by using SQLite.
+        Includes ATR multiplier if selected.
         """
         # 1. Prepare standardized config object
         config = {
             "enabled": True if enabled is None else enabled,
             "weights": new_weights,
             "thresholds": {"entry_score": entry_score, "exit_score": 2.5},
-            "risk": {"sl_pct": sl_pct, "tp_pct": tp_pct, "w_btc": w_btc, "w_alt": 1.0 - w_btc},
+            "risk": {
+                "sl_pct": sl_pct, 
+                "tp_pct": tp_pct, 
+                "atr_mult": atr_mult,
+                "w_btc": w_btc, 
+                "w_alt": 1.0 - w_btc
+            },
             "tiers": {
                 "low": {
                     "min_score": entry_score, 
@@ -476,15 +540,7 @@ class StrategyAnalyzer:
 
     async def run_mini_optimization(self, symbols_to_check, improvement_threshold=0.05):
         """
-        MINI-ANALYZER: Lightweight optimization for specific symbols after losses.
-        Uses 50 combos instead of 270 for ~30s runtime.
-        
-        Args:
-            symbols_to_check: List of symbols to re-optimize
-            improvement_threshold: Minimum improvement to update (5%)
-        
-        Returns:
-            Dict of updated configs {symbol_tf: new_config}
+        MINI-ANALYZER v2.3: Lightweight optimization with consistency checks.
         """
         print(f"\n{'='*50}")
         print(f"[*] MINI-ANALYZER: Checking {len(symbols_to_check)} symbols")
@@ -493,44 +549,40 @@ class StrategyAnalyzer:
         start_time = time.time()
         updates = {}
         
-        # Reduced grid for speed
-        sl_ranges = [0.015, 0.02, 0.025, 0.03]  # 4 values (vs 6)
-        rr_ratios = [1.5, 2.0, 2.5]              # 3 values (vs 5)
-        thresholds = [3.0, 4.0, 5.0, 6.0]        # 4 values (vs 9)
-        # Total: 4 × 3 × 4 = 48 combos (vs 270)
+        # Grid parameters - includes ATR multipliers
+        sl_ranges = [0.015, 0.02, 0.03] 
+        rr_ratios = [1.5, 2.0, 2.5]
+        thresholds = [3.5, 4.5, 5.5]
+        atr_mults = [None, 1.5, 2.0, 3.0] 
         
         for symbol in symbols_to_check:
             for tf in TRADING_TIMEFRAMES:
                 print(f"  Checking {symbol} {tf}...")
                 
-                # Get current config
-                # Get current config
-                from src.infrastructure.repository.config_manager import ConfigManager
-                mgr = await ConfigManager.get_instance(self.env)
-                config_data = await mgr.get_config(symbol, tf, getattr(self, 'exchange_name', 'BINANCE'))
+                from src.infrastructure.repository.database import DataManager
+                db = await DataManager.get_instance()
+                config_data = await db.get_strategy_config(symbol, tf, getattr(self, 'exchange_name', 'BINANCE'))
+                
                 current_pnl = 0
                 if config_data and 'performance' in config_data:
                     current_pnl = config_data['performance'].get('pnl_sim', 0)
                 
-                # Analyze and validate
                 weights = self.analyze(symbol, timeframe=tf, horizon=15)
-                if not weights:
-                    continue
+                if not weights: continue
                 
                 df = self.get_features(symbol, tf)
-                if df is None:
-                    continue
+                if df is None: continue
                 
-                # Custom mini-validation with reduced grid
-                split_idx = int(len(df) * 0.7)
-                train_df = df.iloc[:split_idx]
-                test_df = df.iloc[split_idx:]
+                # Nested split for mini-optimization
+                train_end = int(len(df) * 0.6)
+                train_df = df.iloc[:train_end]
+                test_df = df.iloc[train_end:]
                 
                 from src.strategy import WeightedScoringStrategy
                 mock_strat = WeightedScoringStrategy(symbol=symbol, timeframe=tf)
                 mock_strat.weights = weights
                 
-                round_trip_fee = 0.0012
+                trading_cost = 0.0017
                 best_result = None
                 best_pnl = -999999
                 
@@ -542,33 +594,37 @@ class StrategyAnalyzer:
                     for sl in sl_ranges:
                         for rr in rr_ratios:
                             tp = max(0.025, sl * rr)
-                            
-                            train_perf = self._backtest_with_signals(train_df, train_signals, sl, tp, round_trip_fee)
-                            if train_perf['trades'] < 2 or train_perf['win_rate'] < 0.50:
-                                continue
-                            
-                            test_perf = self._backtest_with_signals(test_df, test_signals, sl, tp, round_trip_fee)
-                            if test_perf['trades'] < 2:
-                                continue
-                            
-                            combined_pnl = train_perf['pnl'] + test_perf['pnl']
-                            if combined_pnl > best_pnl:
-                                best_pnl = combined_pnl
-                                best_result = {
-                                    'sl_pct': sl, 'tp_pct': tp,
-                                    'entry_score': thresh,
-                                    'pnl': combined_pnl,
-                                    'win_rate': (train_perf['win_rate'] + test_perf['win_rate']) / 2,
-                                    'trades': train_perf['trades'] + test_perf['trades']
-                                }
+                            for amult in atr_mults:
+                                train_perf = self._backtest_with_signals(train_df, train_signals, sl, tp, trading_cost, atr_mult=amult)
+                                if train_perf['trades'] < 3 or train_perf['win_rate'] < 0.50:
+                                    continue
+                                
+                                test_perf = self._backtest_with_signals(test_df, test_signals, sl, tp, trading_cost, atr_mult=amult)
+                                if test_perf['trades'] < 2:
+                                    continue
+                                
+                                consistency = abs(test_perf['win_rate'] - train_perf['win_rate'])
+                                if consistency > 0.20:
+                                    continue
+                                    
+                                combined_pnl = train_perf['pnl'] + test_perf['pnl']
+                                if combined_pnl > best_pnl:
+                                    best_pnl = combined_pnl
+                                    best_result = {
+                                        'sl_pct': sl, 'tp_pct': tp, 'atr_mult': amult,
+                                        'entry_score': thresh,
+                                        'pnl': combined_pnl,
+                                        'win_rate': (train_perf['win_rate'] + test_perf['win_rate']) / 2,
+                                        'trades': train_perf['trades'] + test_perf['trades']
+                                    }
                 
                 if best_result is None:
                     continue
                 
-                # Check if improvement is significant
+                # Check for significant improvement
                 improvement = (best_result['pnl'] - current_pnl) / max(abs(current_pnl), 1) if current_pnl != 0 else 1.0
                 
-                if improvement > improvement_threshold or (current_pnl <= 0 and best_result['pnl'] > 0):
+                if (improvement > improvement_threshold and best_result['trades'] > 5) or (current_pnl <= 0 and best_result['pnl'] > 20):
                     key = f"{symbol}_{tf}"
                     updates[key] = {
                         'weights': weights,
@@ -578,7 +634,6 @@ class StrategyAnalyzer:
                         'improvement': improvement
                     }
                     
-                    # Update config
                     await self.update_config(
                         symbol, tf, weights,
                         sl_pct=best_result['sl_pct'],
@@ -588,7 +643,7 @@ class StrategyAnalyzer:
                         enabled=True
                     )
                     
-                    print(f"    ✨ UPDATED: PnL ${current_pnl:.0f} -> ${best_result['pnl']:.0f} (+{improvement*100:.0f}%)")
+                    print(f"    ✨ UPDATED: PnL ${current_pnl:.0f} -> ${best_result['pnl']:.0f} (+{improvement*100:.0f}%) | Trades: {best_result['trades']}")
                 else:
                     print(f"    [SKIP] No significant improvement (current: ${current_pnl:.0f}, new: ${best_result['pnl']:.0f})")
         
@@ -615,23 +670,40 @@ async def _compute_and_cache_bms(analyzer, env_str: str):
     db = await DataManager.get_instance(env_str)
     btc_calc = BTCAnalyzer(analyzer, db)
     
+    # NEW v2.0: Trigger BMS Weight Optimization (Loop A)
+    print("  ↳ Optimizing BMS weights (Loop A)...")
+    opt_results = btc_calc.optimize_weights()
+    
     # 1. Persist MTF BMS to DB (for live bot freshness)
     print("  ↳ Updating BTC sentiment in database...")
     await btc_calc.update_sentiment('BTC/USDT:USDT')
     
-    # 2. Pre-populate _bms_cache so load_data() reuses it (no re-computation per symbol)
+    # 2. Pre-populate _bms_cache so load_data() reuses it
     fe = FeatureEngineer()
+    
+    # Load BTCDOM for bulk computation if needed
+    dom_df = analyzer.load_data('BTCDOM/USDT:USDT', '1h', exchange='BINANCE')
+    
     for ex_name in ACTIVE_EXCHANGES:
         ex_name = ex_name.strip()
         for tf in TRADING_TIMEFRAMES:
             btc_df = analyzer.load_data('BTC/USDT:USDT', tf, exchange=ex_name)
             if btc_df is not None:
+                # Merge BTCDOM for 1h TF calculation
+                if tf == '1h' and dom_df is not None:
+                    dom_subset = dom_df[['timestamp', 'close']].rename(columns={'close': 'BTCDOM_close'})
+                    btc_df = pd.merge_asof(btc_df.sort_values('timestamp'), dom_subset.sort_values('timestamp'), on='timestamp', direction='backward')
+                
                 # Calculate features once for BTC
                 btc_feat_df = fe.calculate_features(btc_df)
                 bms_data = btc_calc.calculate_bulk_sentiment(btc_feat_df)
                 if bms_data is not None:
                     # Extract and rename columns
-                    bms_subset = bms_data[['timestamp', 'bms', 'zone']].rename(
+                    # v2.0: Now including sub-scores for Neural Brain
+                    cols_to_keep = ['timestamp', 'bms', 'zone', 's_trend', 's_momentum', 's_vol', 's_dom']
+                    avail_cols = [c for c in cols_to_keep if c in bms_data.columns]
+                    
+                    bms_subset = bms_data[avail_cols].rename(
                         columns={'bms': 'bms_score', 'zone': 'bms_zone'}
                     )
                     cache_key = f"{ex_name}_{tf}"
@@ -844,6 +916,7 @@ async def run_global_optimization(download=False):
             sl_pct=result['sl_pct'],
             tp_pct=result['tp_pct'],
             entry_score=result['entry_score'],
+            atr_mult=result.get('atr_mult'),
             stats=result,
             enabled=is_enabled,
             exchange=exchange

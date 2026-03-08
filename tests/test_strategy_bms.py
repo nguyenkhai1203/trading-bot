@@ -26,9 +26,9 @@ def test_strategy_bms_weighting():
     # Case 2: Bullish BMS (0.9) - Boosts Long
     sig2 = strategy.get_signal(row, use_brain=False, bms_score=0.9, bms_zone='GREEN')
     # w_btc_adj = 0.6 * 1.2 = 0.72, w_alt_adj = 0.28
-    # Long: (5.0 * 0.28) + (0.9 * 10 * 0.72) = 1.4 + 6.48 = 7.88
+    # Long: (5.0 * 0.4) + (0.9 * 10 * 0.6) = 2.0 + 5.4 = 7.4
     assert sig2['side'] == 'BUY'
-    assert abs(sig2['confidence'] - 0.788) < 0.01
+    assert abs(sig2['confidence'] - 0.74) < 0.01
 
     # Case 3: Bearish BMS (0.1) - RED Zone Veto Long
     sig3 = strategy.get_signal(row, use_brain=False, bms_score=0.1, bms_zone='RED')
@@ -64,7 +64,7 @@ def test_strategy_short_bms():
 
     # Case 4: Strong Bullish BMS (0.9) - GREEN Zone Veto Short
     sig4 = strategy.get_signal(row, use_brain=False, bms_score=0.9, bms_zone='GREEN')
-    # Score Short is Vetoed to 0.0
-    # Score Long: (0.0 * 0.28) + (0.9 * 10 * 0.72) = 6.48
+    # Score Short is Vetoed to 0.0 (5.0 < 7.0)
+    # Score Long: (0.0 * 0.4) + (0.9 * 10 * 0.6) = 5.4
     assert sig4['side'] == 'BUY'
-    assert abs(sig4['confidence'] - 0.648) < 0.01
+    assert abs(sig4['confidence'] - 0.54) < 0.01

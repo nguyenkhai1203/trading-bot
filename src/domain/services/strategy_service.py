@@ -67,38 +67,48 @@ class StrategyService:
     @staticmethod
     def apply_bms_weighting(score_long, score_short, bms_score, bms_zone, w_btc, w_alt):
         """
-        Adjust scores based on BTC Market Structure (BMS).
+        Adjust scores based on BTC Market Structure (BMS) v2.0.
         """
-        # Apply 1.2x BTC weight boost ONLY in GREEN zone as per test expectations
-        if bms_zone == 'GREEN':
-            w_btc_adj = min(0.95, w_btc * 1.2)
-            w_alt_adj = 1.0 - w_btc_adj
-        else:
-            w_btc_adj = w_btc
-            w_alt_adj = w_alt
+        from src.config import BMS_CONFIG
+        veto_strong = BMS_CONFIG.get('VETO_THRESHOLD_STRONG', 0.70)
+        veto_extreme = BMS_CONFIG.get('VETO_THRESHOLD_EXTREME', 0.85)
 
+        # 1. EXTREME ZONE VETO (Total counter-trend block)
+        if bms_score < (1 - veto_extreme):
+            # Extreme BEAR market: Kill ALL Longs
+            score_long = 0.0
+        elif bms_score > veto_extreme:
+            # Extreme BULL market: Kill ALL Shorts
+            score_short = 0.0
+
+        # 2. STRONGER VETO Logic for RED/GREEN zones
         if bms_zone == 'RED':
-            # Soften veto: Allow LONG if altcoin signal is very strong (> 0.8)
-            if score_long < 0.8:
+            # In RED zone, require VERY strong Altcoin signal to allow LONG
+            # Stricter: only allow if score > 7.0 (was 0.8 in v1.0)
+            if score_long < 7.0:
                 score_long = 0.0
             else:
-                score_long *= 0.8 # Small penalty for counter-trend
+                score_long *= 0.6 # Heavy penalty for counter-trend
                 
+            # Boost SHORTs based on BMS bearishness
             btc_short_bias = (1.0 - bms_score) * 10.0
-            score_short = (score_short * w_alt_adj) + (btc_short_bias * w_btc_adj)
+            score_short = (score_short * w_alt) + (btc_short_bias * w_btc)
+            
         elif bms_zone == 'GREEN':
-            # Soften veto: Allow SHORT if altcoin signal is very strong (> 0.8)
-            if score_short < 0.8:
+            # In GREEN zone, require VERY strong Altcoin signal to allow SHORT
+            if score_short < 7.0:
                 score_short = 0.0
             else:
-                score_short *= 0.8 # Small penalty for counter-trend
+                score_short *= 0.6 # Heavy penalty for counter-trend
                 
+            # Boost LONGs based on BMS bullishness
             btc_long_bias = bms_score * 10.0
-            score_long = (score_long * w_alt_adj) + (btc_long_bias * w_btc_adj)
-        else:
+            score_long = (score_long * w_alt) + (btc_long_bias * w_btc)
+            
+        else: # YELLOW zone
             btc_long_bias = bms_score * 10.0
             btc_short_bias = (1.0 - bms_score) * 10.0
-            score_long = (score_long * w_alt_adj) + (btc_long_bias * w_btc_adj)
-            score_short = (score_short * w_alt_adj) + (btc_short_bias * w_btc_adj)
+            score_long = (score_long * w_alt) + (btc_long_bias * w_btc)
+            score_short = (score_short * w_alt) + (btc_short_bias * w_btc)
             
         return score_long, score_short

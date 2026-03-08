@@ -186,6 +186,31 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                         matches = [lp for lp in t.active_positions.values() if t._normalize_symbol(lp['symbol']) == t._normalize_symbol(sym)]
                         local_match = next((lp for lp in matches if lp.get('tp') or lp.get('sl')), matches[0] if matches else {})
                         
+                        # Enhanced recovery: If TP/SL missing from both exchange position and local state,
+                        # check open orders (Standard & Algo) directly.
+                        ep_tp = ep.get('takeProfit') or ep.get('tp') or local_match.get('tp') or 0
+                        ep_sl = ep.get('stopLoss') or ep.get('sl') or local_match.get('sl') or 0
+                        
+                        if (not ep_tp or not ep_sl) and ex_orders:
+                            side = str(ep.get('side', '')).upper()
+                            expected_close_side = 'SELL' if side in ['BUY', 'LONG'] else 'BUY'
+                            
+                            for o in ex_orders:
+                                if t._normalize_symbol(o.get('symbol')) == t._normalize_symbol(sym) and o.get('side', '').upper() == expected_close_side:
+                                    o_type = str(o.get('type') or '').upper()
+                                    o_price = float(o.get('stopPrice') or o.get('price') or 0)
+                                    if o_price > 0:
+                                        if 'TAKE' in o_type: ep_tp = o_price
+                                        elif 'STOP' in o_type: ep_sl = o_price
+                                        # Fallback for generic limit/market stop orders if logic above is too specific
+                                        elif not ep_tp and ( (side in ['BUY', 'LONG'] and o_price > ep.get('entryPrice', 0)) or (side in ['SELL', 'SHORT'] and o_price < ep.get('entryPrice', 0)) ):
+                                            ep_tp = o_price
+                                        elif not ep_sl:
+                                            ep_sl = o_price
+                        
+                        ep['takeProfit'] = ep_tp
+                        ep['stopLoss'] = ep_sl
+                        
                         pos_v2 = map_exchange_position_to_v2(ep, ticker, local_match)
                         exchanges_payload[label]['active'].append(pos_v2)
                         total_active += 1

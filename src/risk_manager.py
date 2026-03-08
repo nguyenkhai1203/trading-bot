@@ -4,6 +4,7 @@ import sys
 import logging
 from datetime import datetime
 
+from src import config
 from src.domain.services.risk_service import RiskService
 
 class RiskManager:
@@ -12,15 +13,17 @@ class RiskManager:
     Now delegates core logic to RiskService.
     """
     def __init__(self, db, profile_id: int, env: str = 'LIVE', exchange_name='BINANCE', 
-                 risk_per_trade=0.01, leverage=1, max_drawdown_pct=0.10, daily_loss_limit_pct=0.05):
+                 risk_per_trade=None, leverage=None, max_drawdown_pct=0.10, daily_loss_limit_pct=None):
         self.db = db
         self.profile_id = profile_id
         self.env = env.upper()
         self.exchange_name = exchange_name.upper()
-        self.risk_per_trade = risk_per_trade
-        self.leverage = leverage
+        
+        # Use config defaults if not provided
+        self.risk_per_trade = risk_per_trade if risk_per_trade is not None else getattr(config, 'RISK_PER_TRADE', 0.01)
+        self.leverage = leverage if leverage is not None else getattr(config, 'LEVERAGE', 1)
         self.max_drawdown_pct = max_drawdown_pct
-        self.daily_loss_limit_pct = daily_loss_limit_pct
+        self.daily_loss_limit_pct = daily_loss_limit_pct if daily_loss_limit_pct is not None else getattr(config, 'DAILY_LOSS_LIMIT_PCT', 0.05)
         self.logger = logging.getLogger("RiskManager")
         
         self.starting_balance_day = 0

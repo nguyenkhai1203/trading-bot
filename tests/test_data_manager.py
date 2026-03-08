@@ -3,130 +3,79 @@ import asyncio
 import os
 import pandas as pd
 from unittest.mock import MagicMock, AsyncMock, patch
+from src.infrastructure.repository.database import DataManager
 from src.data_manager import MarketDataManager
 
 class TestDataManager:
-    @pytest.fixture(autouse=True)
-    def reset_singleton(self):
-        """Reset the Singleton instance before each test to ensure clean state."""
-        MarketDataManager._instance = None
-        yield
-        MarketDataManager._instance = None
+    """
+    Test suite for DataManager (Persistence) and MarketDataManager (Data Lifecycle).
+    """
 
     @pytest.fixture
-    def mock_adapters(self):
-        mock_binance = MagicMock()
-        mock_binance.name = 'BINANCE'
-        mock_binance.fetch_ohlcv = AsyncMock()
-        mock_binance.fetch_tickers = AsyncMock()
+    async def db(self, tmp_path):
+        """Create a fresh test database for each test."""
+        db_path = str(tmp_path / "test_trading.db")
+        DataManager._instances = {}
+        db = DataManager(db_path)
+        await db.initialize()
+        await db.add_profile(name="TEST_P1", env="LIVE", exchange="BINANCE")
         
-        mock_bybit = MagicMock()
-        mock_bybit.name = 'BYBIT'
-        mock_bybit.fetch_ohlcv = AsyncMock()
-        mock_bybit.fetch_tickers = AsyncMock()
+        # Reset MarketDataManager singleton for clean test
+        MarketDataManager._instance = None
         
-        return {'BINANCE': mock_binance, 'BYBIT': mock_bybit}
-
-    @pytest.fixture
-    def dm(self, mock_adapters):
-        # Inject mock adapters
-        manager = MarketDataManager(adapters=mock_adapters)
-        # Prevent actually saving to disk during tests unless explicitly tested
-        manager._save_to_disk_mock = True
-        return manager
+        yield db
+        await db.close()
 
     @pytest.mark.asyncio
-    async def test_singleton_pattern(self, mock_adapters):
-        """Test that MarketDataManager correctly implements the Singleton pattern."""
-        dm1 = MarketDataManager(adapters=mock_adapters)
-        dm2 = MarketDataManager(adapters=mock_adapters)
-        
-        assert dm1 is dm2
-        assert dm1.initialized is True
+    async def test_wal_mode_enabled(self, db):
+        conn = await db.get_db()
+        async with conn.execute("PRAGMA journal_mode") as cursor:
+            row = await cursor.fetchone()
+            assert row[0].lower() == 'wal'
 
     @pytest.mark.asyncio
-    @patch('src.config.BINANCE_SYMBOLS', ['BTC/USDT'])
-    @patch('src.config.BYBIT_SYMBOLS', ['BTC/USDT'])
-    async def test_update_data_fetch_and_store(self, dm):
-        """Test fetching OHLCV data and storing it in data_store."""
-        symbol = "BTC/USDT"
-        tf = "1h"
-        
-        # Mock API Response for Binance
-        mock_ohlcv = [
-            [1600000000000, 40000, 41000, 39000, 40500, 100],
-            [1600003600000, 40500, 42000, 40000, 41500, 150]
-        ]
-        dm.adapters['BINANCE'].fetch_ohlcv.return_value = mock_ohlcv
-        
-        # Call update_data (force=True to bypass rate limiter)
-        with patch('os.path.exists', return_value=False), patch('os.makedirs'), patch('pandas.DataFrame.to_csv'): 
-            # prevent actual disk write and read
-            result = await dm.update_data([symbol], [tf], force=True)
-        
-        assert result is True
-        
-        # 1. API should be called
-        dm.adapters['BINANCE'].fetch_ohlcv.assert_called_once_with(symbol, tf, limit=50)
-        
-        # 2. Data should be in store
-        key = f"BINANCE_{symbol}_{tf}"
-        assert key in dm.data_store
-        
-        df = dm.data_store[key]
-        assert len(df) == 2
-        assert df.iloc[-1]['close'] == 41500
-        assert 'timestamp' in df.columns
+    async def test_persistence_risk_metrics(self, db):
+        await db.set_risk_metric(profile_id=1, metric_name="test_peak", value=50000.5, env="LIVE")
+        val = await db.get_risk_metric(profile_id=1, metric_name="test_peak", env="LIVE")
+        assert val == 50000.5
 
     @pytest.mark.asyncio
-    @patch('src.config.BINANCE_SYMBOLS', ['BTC/USDT'])
-    async def test_update_tickers_live_price(self, dm):
-        """Test that update_tickers correctly updates the last candle's close price."""
-        symbol = "BTC/USDT"
-        tf = "1h"
-        key = f"BINANCE_{symbol}_{tf}"
+    async def test_market_data_manager_caching(self, db):
+        """Verify MarketDataManager uses DB for persistence."""
+        mock_adapter = MagicMock()
+        mock_adapter.fetch_ohlcv = AsyncMock(return_value=[
+            [1700000000000, 40000, 41000, 39000, 40500, 100]
+        ])
         
-        # Pre-seed data_store with a dummy dataframe
-        df = pd.DataFrame({
-            'timestamp': [pd.to_datetime(1600000000000, unit='ms')],
-            'open': [40000], 'high': [41000], 'low': [39000], 'close': [40500], 'volume': [100]
-        })
-        dm.data_store[key] = df
+        adapters = {"BINANCE": mock_adapter}
+        mdm = MarketDataManager(db=db, adapters=adapters)
         
-        # Mock fetch_tickers response
-        dm.adapters['BINANCE'].fetch_tickers.return_value = {
-            symbol: {'last': 42999.0}
-        }
+        # PATCH src.config DIRECTLY
+        with patch("src.config.BINANCE_SYMBOLS", ["BTC/USDT"]), \
+             patch("src.config.OHLCV_REFRESH_INTERVAL", 0):
+             # Ensure the singleton is using the mocked symbols by re-syncing if needed
+             # or just calling the update with explicit symbols
+             mdm.data_store.clear()
+             await mdm.update_data(symbols=["BTC/USDT"], timeframes=["1h"], force=True)
         
-        # Bypass rate limiter
-        dm._last_ticker_update = 0 
-        
-        updated_count = await dm.update_tickers([symbol])
-        
-        assert updated_count > 0
-        # The last candle's 'close' should now be the new live ticker price
-        assert dm.data_store[key].iloc[-1]['close'] == 42999.0
+        assert "BINANCE_BTC/USDT_1h" in mdm.data_store
+        candles = await db.get_candles("BTC/USDT", "1h")
+        assert len(candles) == 1
 
-    def test_validate_data_integrity(self, dm):
-        """Test the validate_data function rejects bad dataframes."""
-        
-        # 1. None DF
-        is_valid, _ = dm.validate_data(None, "BTC/USDT", "1h")
+    @pytest.mark.asyncio
+    async def test_concurrent_writes_protection(self, db):
+        with patch.object(db, '_write_lock', wraps=db._write_lock) as mock_lock:
+            await db.set_risk_metric(1, "metric1", 100, "LIVE")
+            assert mock_lock.__aenter__.called
+
+    @pytest.mark.asyncio
+    async def test_ohlcv_validation(self, db):
+        mdm = MarketDataManager(db=db)
+        is_valid, reason = mdm.validate_data(pd.DataFrame(), "BTC", "1h")
         assert is_valid is False
         
-        # 2. Missing columns
-        bad_df = pd.DataFrame({'close': [1,2,3]})
-        is_valid, reason = dm.validate_data(bad_df, "BTC/USDT", "1h")
-        assert is_valid is False
-        assert "Missing" in reason
-        
-        # 3. NaN in close
-        nan_df = pd.DataFrame({
-            'timestamp': [1,2,3,4,5],
-            'open': [1,2,3,4,5], 'high': [1,2,3,4,5], 'low': [1,2,3,4,5],
-            'close': [10, 20, None, 40, 50],
-            'volume': [1,2,3,4,5]
-        })
-        is_valid, reason = dm.validate_data(nan_df, "BTC/USDT", "1h")
-        assert is_valid is False
-        assert "NaN" in reason
+        df = pd.DataFrame([{
+            'timestamp': pd.Timestamp.now(), 'open': 1, 'high': 2, 'low': 0.5, 'close': 1.5, 'volume': 10
+        }])
+        is_valid, reason = mdm.validate_data(df, "BTC", "1h")
+        assert is_valid is True

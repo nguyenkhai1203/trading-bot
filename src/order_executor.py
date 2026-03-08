@@ -3,6 +3,7 @@ import time
 import json
 import logging
 from typing import Optional, Dict, List, Any
+from src import config
 from src.infrastructure.notifications.notification import send_telegram_message, format_position_filled, format_pending_order, format_order_cancelled
 
 class OrderExecutor:
@@ -139,11 +140,14 @@ class OrderExecutor:
             await self.trader._update_db_position(pos_key)
             
             # Update Shared Cache
-            shared = self.trader.__class__._shared_account_cache.get(self.account_key, {'pos_symbols': set(), 'open_order_symbols': set()})
-            cache_key = 'open_order_symbols' if is_limit else 'pos_symbols'
-            shared[cache_key].add(api_symbol)
-            shared['timestamp'] = time.time()
-            self.trader.__class__._shared_account_cache[self.account_key] = shared
+            shared = self.trader.__class__._shared_account_cache.get(self.account_key)
+            if shared is not None:
+                cache_key = 'open_order_symbols' if is_limit else 'pos_symbols'
+                if cache_key not in shared:
+                    shared[cache_key] = set()
+                shared[cache_key].add(api_symbol)
+                shared['timestamp'] = time.time()
+                self.trader.__class__._shared_account_cache[self.account_key] = shared
             # Notifications & Post-Processing
             if is_limit:
                 print(f"📋 [{self.exchange_name}] Limit order placed: {order['id']} | {side} {symbol} @ {price:.3f}")
@@ -161,6 +165,19 @@ class OrderExecutor:
         except Exception as e:
             self.logger.error(f"Failed to place {order_type} order for {symbol}: {e}")
             return None
+
+    async def _check_signal_reversal(self, symbol: str, current_side: str) -> bool:
+        """Checks if there's a new signal for the opposite side of a pending order."""
+        try:
+            # We can check signal_tracker if available
+            if self.trader.signal_tracker:
+                last_sig = await self.trader.signal_tracker.get_last_signal(symbol)
+                if last_sig and last_sig.get('side', '').upper() != current_side.upper():
+                    return True
+            return False
+        except Exception:
+            return False
+
     async def monitor_limit_order_fill(self, pos_key: str, order_id: str, symbol: str):
         """
         Polls the exchange to track the fill status of a limit order.
@@ -170,26 +187,44 @@ class OrderExecutor:
         2. Fetches order status from exchange (closed, filled, canceled).
         3. If filled (>=99%), transitions local state to 'filled' and triggers SL/TP setup.
         4. Clears shared account cache identifiers when filled or cancelled.
-        5. Handles 'Order Not Found' errors by cleaning up local state.
+        5. Timeout: Cancel if exceeds config.LIMIT_ORDER_TIMEOUT.
+        6. Reversal: Cancel if opposite signal detected.
         
         Args:
-            pos_key: Unique position identifier (Profile_Exchange_Symbol_Timeframe).
+            pos_key: Unique position identifier.
             order_id: Exchange-assigned order ID.
             symbol: Trading pair.
         """
-        fill_check_interval = 3
+        fill_check_interval = 5
+        start_time = time.time()
+        timeout = getattr(config, 'LIMIT_ORDER_TIMEOUT', 90)
         local_order_id = order_id
+        
         try:
             while True:
                 await asyncio.sleep(fill_check_interval)
+                elapsed = time.time() - start_time
                 
                 # Check if still pending in memory
                 active = self.trader.active_positions.get(pos_key, {})
                 if not active or active.get('status') != 'pending':
                     break
                 
+                # 1. TIMEOUT CHECK
+                if elapsed > timeout:
+                    self.logger.info(f"⏳ [{self.exchange_name}] [{symbol}] Limit order {local_order_id} TIMEOUT ({int(elapsed)}s). Cancelling.")
+                    await self.trader.cancel_pending_order(pos_key, reason=f"LIMIT_TIMEOUT_{int(elapsed)}s")
+                    break
+
+                # 2. SIGNAL REVERSAL CHECK
+                if await self._check_signal_reversal(symbol, active.get('side')):
+                    self.logger.info(f"🔄 [{self.exchange_name}] [{symbol}] Signal reversal detected for pending order. Cancelling.")
+                    await self.trader.cancel_pending_order(pos_key, reason="SIGNAL_REVERSAL")
+                    break
+                
                 local_order_id = active.get('order_id', local_order_id)
                 if not local_order_id: break
+                
                 try:
                     order_status = await self.trader._execute_with_timestamp_retry(self.exchange.fetch_order, local_order_id, symbol)
                 except Exception as e:
@@ -200,9 +235,11 @@ class OrderExecutor:
                          break
                     self.logger.warning(f"Error fetching order {local_order_id} for {symbol}: {e}")
                     continue
+                
                 status = order_status.get('status', '').lower()
                 filled_qty = float(order_status.get('filled', 0) or 0)
                 expected_qty = float(active.get('qty', 0))
+                
                 if status in ('closed', 'filled') and filled_qty > 0 and (filled_qty / expected_qty >= 0.99):
                     # Transition to filled
                     active['status'] = 'filled'
@@ -212,11 +249,13 @@ class OrderExecutor:
                     
                     await self.trader._update_db_position(pos_key)
                     self.trader.pending_orders.pop(pos_key, None)
+                    
                     # Update shared cache
                     shared = self.trader.__class__._shared_account_cache.get(self.account_key, {})
                     api_sym = self.trader._normalize_symbol(symbol)
                     if 'open_order_symbols' in shared: shared['open_order_symbols'].discard(api_sym)
                     if 'pos_symbols' in shared: shared['pos_symbols'].add(api_sym)
+                    
                     # Notifications
                     _, tg_msg = format_position_filled(symbol, active.get('timeframe'), active.get('side'), fill_price, active.get('qty'), fill_price * active.get('qty'), active.get('sl'), active.get('tp'), active.get('entry_confidence'), active.get('leverage'), False, exchange_name=self.exchange_name, profile_label=self.profile_name)
                     asyncio.create_task(send_telegram_message(tg_msg))
@@ -224,6 +263,7 @@ class OrderExecutor:
                     await self.create_sl_tp_orders_for_position(pos_key)
                     print(f"✅ [{self.exchange_name}] Limit order FILLED: {symbol} {active['side']} @ {fill_price:.3f}")
                     break
+                
                 if status in ('canceled', 'cancelled'):
                     self.logger.info(f"Limit order {local_order_id} for {symbol} was cancelled. Purging.")
                     await self.trader.cancel_pending_order(pos_key, reason="Cancelled on Exchange")
