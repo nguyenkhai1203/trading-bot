@@ -8,7 +8,7 @@ import inspect
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from execution import Trader
+from src.execution import Trader
 
 class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -37,12 +37,17 @@ class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
         self.trader.log_trade = AsyncMock()
         self.trader._save_positions = MagicMock()
         self.trader.exchange_name = 'BYBIT'
+        
+        # Mock infer_exit_reason to use real Bybit logic with bound method
+        from src.infrastructure.adapters.bybit_adapter import BybitAdapter
+        adapter = BybitAdapter(self.mock_exchange)
+        self.mock_exchange.infer_exit_reason = adapter.infer_exit_reason
 
     async def run_reconciliation_test(self, side, entry_price, sl_price, exit_price):
         """Helper to simulate the missing position scenario in reconcile_positions."""
         symbol = 'BTC/USDT'
-        # IMPORTANT: Pos key format used by real bot is: e.g. BYBIT_BTC_USDT_1h
-        pos_key = f"BYBIT_{symbol.replace('/', '_')}_1h"
+        # IMPORTANT: Pos key format used by real bot is: e.g. P1_BYBIT_BTC_USDT_1h
+        pos_key = f"P{self.trader.profile_id}_{self.mock_exchange.name}_{symbol.replace('/', '_')}_1h"
         
         # 1. Setup Active Position
         self.trader.active_positions = {

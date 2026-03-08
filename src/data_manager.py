@@ -12,7 +12,7 @@ if src_dir not in sys.path:
     sys.path.append(src_dir)
 
 import ccxt.async_support as ccxt
-from config import ACTIVE_EXCHANGE, OHLCV_REFRESH_INTERVAL
+from src.config import ACTIVE_EXCHANGE, OHLCV_REFRESH_INTERVAL
 
 class MarketDataManager:
     """
@@ -37,7 +37,7 @@ class MarketDataManager:
         if adapters:
             self.adapters = adapters
         else:
-            from exchange_factory import get_active_exchanges_map
+            from src.infrastructure.adapters.exchange_factory import get_active_exchanges_map
             self.adapters = get_active_exchanges_map()
         
         # Backward compatibility: set self.adapter to the first one
@@ -83,8 +83,8 @@ class MarketDataManager:
         if curr_time - self._last_ticker_update < 1.0: return 0
         self._last_ticker_update = curr_time
         
-        from config import BINANCE_SYMBOLS, BYBIT_SYMBOLS
-        exchange_symbol_map = {'BINANCE': BINANCE_SYMBOLS, 'BYBIT': BYBIT_SYMBOLS}
+        from src import config
+        exchange_symbol_map = {'BINANCE': config.BINANCE_SYMBOLS, 'BYBIT': config.BYBIT_SYMBOLS}
         
         total_updated = 0
         for name, adapter in self.adapters.items():
@@ -116,8 +116,8 @@ class MarketDataManager:
         self._update_counter += 1
         self.features_cache.clear() # Reset features per cycle
         
-        from config import BINANCE_SYMBOLS, BYBIT_SYMBOLS
-        exchange_symbol_map = {'BINANCE': BINANCE_SYMBOLS, 'BYBIT': BYBIT_SYMBOLS}
+        from src import config
+        exchange_symbol_map = {'BINANCE': config.BINANCE_SYMBOLS, 'BYBIT': config.BYBIT_SYMBOLS}
         
         semaphore = asyncio.Semaphore(5)
         
@@ -158,7 +158,7 @@ class MarketDataManager:
 
         tasks = []
         for name, adapter in self.adapters.items():
-            self.logger.info(f"📡 [{name}] Updating market data...")
+            self.logger.info(f"[{name}] Updating market data...")
             allowed = exchange_symbol_map.get(name, symbols)
             current = [s for s in symbols if s in allowed]
             

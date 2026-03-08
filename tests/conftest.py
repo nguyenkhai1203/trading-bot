@@ -11,8 +11,10 @@ sys.modules['telegram'] = mock_telegram
 sys.modules['telegram.ext'] = MagicMock()
 sys.modules['telegram.error'] = MagicMock()
 
-# Add src to path for all tests
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Add project root to path for all tests
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 # Global flag for isolation
 os.environ['TRADING_BOT_TEST_MODE'] = 'True'

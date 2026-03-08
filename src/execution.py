@@ -8,15 +8,8 @@ import asyncio
 import numpy as np
 from datetime import datetime
 
-from config import (
-    LEVERAGE, GLOBAL_MAX_LEVERAGE, BINANCE_API_KEY, BINANCE_API_SECRET, AUTO_CREATE_SL_TP,
-    ENABLE_DYNAMIC_SLTP, ATR_TRAIL_MULTIPLIER, ATR_TRAIL_MIN_MOVE_PCT,
-    RSI_OVERBOUGHT_EXIT, EMA_BREAK_CLOSE_THRESHOLD,
-    ENABLE_PROFIT_LOCK, PROFIT_LOCK_THRESHOLD, PROFIT_LOCK_LEVEL,
-    MAX_TP_EXTENSIONS, ATR_EXT_MULTIPLIER,
-    STOP_LOSS_PCT, TAKE_PROFIT_PCT, SLTP_GUARDIAN_EMERGENCY_PCT
-)
-from notification import (
+from src import config
+from src.infrastructure.notifications.notification import (
     send_telegram_message,
     format_pending_order,
     format_position_filled,
@@ -28,7 +21,7 @@ import hmac
 import hashlib
 import requests
 from urllib.parse import urlencode
-from utils.symbol_helper import to_api_format, to_display_format
+from src.utils.symbol_helper import to_api_format, to_display_format
 
 
 # Logger Adapter for Exchange Prefix
@@ -105,7 +98,7 @@ class Trader:
         
         # Use shared MarketDataManager for time synchronization
         if data_manager is None:
-            from data_manager import MarketDataManager
+            from src.data_manager import MarketDataManager
             self.data_manager = MarketDataManager(db=self.db)
         else:
             self.data_manager = data_manager
@@ -140,7 +133,7 @@ class Trader:
         self.cooldown_manager = CooldownManager(db, self.logger, env)
         self.order_executor = OrderExecutor(self)
         
-        self.default_leverage = LEVERAGE
+        self.default_leverage = config.LEVERAGE
         self._missing_order_counts = {} # { order_id: missing_cycle_count }
         self._pos_action_timestamps = {} # { pos_key_action: timestamp_ms } to prevent rapid spam
         self._last_sync_time = 0       # Throttling for sync_with_exchange (60s)
@@ -192,7 +185,7 @@ class Trader:
     async def _execute_with_timestamp_retry(self, api_call, *args, **kwargs):
         """Execute exchange API call with timestamp error retry using this specific exchange's adapter."""
         # Use BaseExchangeClient's method directly to avoid __getattr__ proxy to raw CCXT
-        from base_exchange_client import BaseExchangeClient
+        from src.infrastructure.adapters.base_exchange_client import BaseExchangeClient
         res = await BaseExchangeClient._execute_with_timestamp_retry(self.exchange, api_call, *args, **kwargs)
         # Double safety check: if we somehow got a coroutine back (due to nested calls), await it.
         if asyncio.iscoroutine(res):
@@ -205,8 +198,8 @@ class Trader:
         Returns the cached balance if within the interval.
         """
         if self.dry_run:
-            from config import SIMULATION_BALANCE
-            return { 'total': { 'USDT': SIMULATION_BALANCE } }
+            from src import config
+            return { 'total': { 'USDT': config.SIMULATION_BALANCE } }
 
         now = time.time()
         shared = self.__class__._shared_account_cache.get(self.account_key)
@@ -497,16 +490,7 @@ class Trader:
             
             # Use market data from exchange if available
             if hasattr(self.exchange, 'markets') and self.exchange.markets:
-                # Try direct hit
-                if symbol in self.exchange.markets:
-                    return self.exchange.markets[symbol].get('symbol', symbol)
-                
-                # Try finding by 'id' (native)
-                for m in self.exchange.markets.values():
-                    if m.get('id') == symbol:
-                        return m.get('symbol', symbol)
-            
-            return symbol # Fallback
+                return self.exchange.get_unified_symbol(symbol)
         except Exception:
             return symbol
 
@@ -549,17 +533,17 @@ class Trader:
         return None, None, None
 
     def _clamp_leverage(self, lev):
-        """Clamp leverage to allowed range (default 5-20)."""
+        """Clamp config.LEVERAGE to allowed range (default 5-20)."""
         # Import dynamically to ensure we get latest config value
-        from config import LEVERAGE as GLOBAL_MAX
+        from src import config
         
         lv = self._safe_int(lev, default=None)
         if lv is None:
             lv = self._safe_int(self.default_leverage, default=5)
             
         # 1. Clamp to global max setting (User safety preference)
-        if lv > GLOBAL_MAX:
-            lv = GLOBAL_MAX
+        if lv > config.LEVERAGE:
+            lv = config.LEVERAGE
             
         # 2. Hard limits: ensure between 1 and 20 (Exchange limits)
         return max(1, min(20, lv))
@@ -739,37 +723,7 @@ class Trader:
             self.logger.error(f"Error fetching position from exchange for {symbol}: {e}")
             return key in self.active_positions
 
-    def _check_min_notional(self, symbol, price, qty):
-        """
-        Check if order meets exchange minimum notional/amount requirements.
-        Returns (is_valid, reason, correct_qty)
-        """
-        # If no price (market order), assumes checking against recent price
-        if not price or price <= 0:
-            return True, "Price unknown", qty
-            
-        market = self.exchange.market(symbol)
-        min_cost = 0
-        min_amount = 0
-        
-        if 'limits' in market:
-            min_cost = market['limits'].get('cost', {}).get('min', 0) or 0
-            min_amount = market['limits'].get('amount', {}).get('min', 0) or 0
-        
-        # fallback when exchange info missing (actual min comes from market data above)
-        if min_cost == 0: min_cost = 5.0
-            
-        notional = price * qty
-        
-        # 1. Check Amount
-        if qty < min_amount:
-            return False, f"Qty {qty} < Min Amount {min_amount}", notional
-            
-        # 2. Check Cost (Notional)
-        if notional < min_cost:
-            return False, f"Value ${notional:.2f} < Min Cost ${min_cost:.2f}", notional
-            
-        return True, "OK", qty
+        return self.exchange.check_min_notional(symbol, price, qty)
 
 
 
@@ -886,7 +840,7 @@ class Trader:
                     "timeframe": timeframe,
                     "order_type": order_type,
                     "status": status,
-                    "leverage": leverage,
+                    "config.LEVERAGE": config.LEVERAGE,
                     "signals_used": signals,
                     "entry_confidence": confidence,
                     "snapshot": snapshot,
@@ -909,9 +863,7 @@ class Trader:
             # LIVE LOGIC
             # Prepare params
             params = params or {}
-            tpsl_attached = False
-            if self.exchange_name == 'BYBIT' and (sl or tp):
-                tpsl_attached = True
+            tpsl_attached = self.exchange.is_tpsl_attached_supported() and (sl or tp)
 
             if sl: params['stopLoss'] = sl
             if tp: params['takeProfit'] = tp
@@ -920,8 +872,8 @@ class Trader:
 
 
 
-            # Determine and clamp leverage to allowed range
-            use_leverage = self._clamp_leverage(leverage)
+            # Determine and clamp config.LEVERAGE to allowed range
+            use_leverage = self._clamp_leverage(config.LEVERAGE)
             
             # Issue 10: Strict Spot Filtering Safeguard
             if self.exchange.is_spot(symbol):
@@ -933,7 +885,7 @@ class Trader:
                 self.logger.warning(f"❌ [THROTTLED] Skip order for {symbol} due to recent insufficient margin.")
                 return None
 
-            # Ensure margin mode & leverage set on exchange for LIVE orders
+            # Ensure margin mode & config.LEVERAGE set on exchange for LIVE orders
             if not self.dry_run and self.exchange.can_trade:
                 await self._ensure_isolated_and_leverage(symbol, use_leverage)
                 
@@ -1006,7 +958,7 @@ class Trader:
             fee_est = (entry_price + exit_price) * qty * 0.0006  # 0.06% taker fee fallback
         pnl = 0
         pnl_pct = 0
-        leverage = int(pos.get('leverage', 1))
+        config.LEVERAGE = int(pos.get('config.LEVERAGE', 1))
         
         if isinstance(entry_price, (int, float)) and entry_price > 0:
             if side == 'BUY':
@@ -1015,7 +967,7 @@ class Trader:
                 pnl = (entry_price - exit_price) * qty - fee_est
             
             # Use ROE (leveraged percentage) for reporting
-            pnl_pct = (pnl / (entry_price * qty)) * 100 * leverage
+            pnl_pct = (pnl / (entry_price * qty)) * 100 * config.LEVERAGE
 
         trade_record = {
             "symbol": symbol,
@@ -1049,7 +1001,7 @@ class Trader:
                     btc_change=0, # Optional or fetch
                     snapshot=pos.get('snapshot'),
                     pos_key=pos_key,
-                    leverage=leverage
+                    leverage=config.LEVERAGE
                 )
 
             # Notify Telegram for ALL closed positions
@@ -1163,7 +1115,7 @@ class Trader:
         if self.dry_run or self.exchange.is_public_only:
             return False
             
-        if not ENABLE_DYNAMIC_SLTP:
+        if not config.ENABLE_DYNAMIC_SLTP:
             # Fallback to legacy profit lock if enabled
             return await self.adjust_sl_tp_for_profit_lock(pos_key, df_guard.iloc[-1]['close'] if df_guard is not None else None)
 
@@ -1207,25 +1159,25 @@ class Trader:
             if side == 'BUY':
                 recent_extreme = df_trail['high'].iloc[-trail_lookback:].max()
                 # Apply x2 multiplier for 1d timeframe trailing as per conversation
-                multiplier = ATR_TRAIL_MULTIPLIER * 2 if pos.get('timeframe') == '1d' else ATR_TRAIL_MULTIPLIER
+                multiplier = config.ATR_TRAIL_MULTIPLIER * 2 if pos.get('timeframe') == '1d' else config.ATR_TRAIL_MULTIPLIER
                 new_sl = recent_extreme - (multiplier * atr_trail)
                 
                 # Only move SL UP
                 if new_sl > current_sl:
                     # Min move threshold to avoid API spam
-                    if (new_sl - current_sl) / current_sl >= ATR_TRAIL_MIN_MOVE_PCT:
+                    if (new_sl - current_sl) / current_sl >= config.ATR_TRAIL_MIN_MOVE_PCT:
                         pos['sl'] = round(new_sl, 5)
                         pos['sl_move_count'] = pos.get('sl_move_count', 0) + 1
                         pos['sl_original'] = pos.get('sl_original') or current_sl
                         changes = True
             else:
                 recent_extreme = df_trail['low'].iloc[-trail_lookback:].min()
-                multiplier = ATR_TRAIL_MULTIPLIER * 2 if pos.get('timeframe') == '1d' else ATR_TRAIL_MULTIPLIER
+                multiplier = config.ATR_TRAIL_MULTIPLIER * 2 if pos.get('timeframe') == '1d' else config.ATR_TRAIL_MULTIPLIER
                 new_sl = recent_extreme + (multiplier * atr_trail)
                 
                 # Only move SL DOWN
                 if new_sl < current_sl:
-                    if (current_sl - new_sl) / current_sl >= ATR_TRAIL_MIN_MOVE_PCT:
+                    if (current_sl - new_sl) / current_sl >= config.ATR_TRAIL_MIN_MOVE_PCT:
                         pos['sl'] = round(new_sl, 5)
                         pos['sl_move_count'] = pos.get('sl_move_count', 0) + 1
                         pos['sl_original'] = pos.get('sl_original') or current_sl
@@ -1238,14 +1190,14 @@ class Trader:
         # Guard A: RSI Overbought/Oversold (Profit Protection)
         # Pull TP closer to current price to lock in 50% of remaining potential
         if side == 'BUY':
-            if rsi_guard > RSI_OVERBOUGHT_EXIT and pnl_pct > 0.5:
+            if rsi_guard > config.RSI_OVERBOUGHT_EXIT and pnl_pct > 0.5:
                 if current_tp > current_price:
                     new_tp = current_price + (current_tp - current_price) * 0.5
                     pos['tp'] = round(new_tp, 5)
                     pos['tp_tightened'] = True
                     changes = True
         else:
-            if rsi_guard < (100 - RSI_OVERBOUGHT_EXIT) and pnl_pct > 0.5:
+            if rsi_guard < (100 - config.RSI_OVERBOUGHT_EXIT) and pnl_pct > 0.5:
                 if current_tp < current_price:
                     new_tp = current_price - (current_price - current_tp) * 0.5
                     pos['tp'] = round(new_tp, 5)
@@ -1254,11 +1206,11 @@ class Trader:
 
         # Guard B: EMA21 Violation (Emergency Exit)
         if ema21_guard and pnl_pct > 0.3: # Only exit if slightly in profit
-            if side == 'BUY' and current_price < ema21_guard * EMA_BREAK_CLOSE_THRESHOLD:
+            if side == 'BUY' and current_price < ema21_guard * config.EMA_BREAK_CLOSE_THRESHOLD:
                 self.logger.info(f"🚨 [GUARD] {symbol} broke EMA21. Emergency exit.")
                 await self.force_close_position(pos_key, reason="EMA21 breakage guard")
                 return True
-            elif side == 'SELL' and current_price > ema21_guard * (2 - EMA_BREAK_CLOSE_THRESHOLD):
+            elif side == 'SELL' and current_price > ema21_guard * (2 - config.EMA_BREAK_CLOSE_THRESHOLD):
                 self.logger.info(f"🚨 [GUARD] {symbol} broke EMA21. Emergency exit.")
                 await self.force_close_position(pos_key, reason="EMA21 breakage guard")
                 return True
@@ -1290,7 +1242,7 @@ class Trader:
         if self.exchange_name and self.exchange_name not in pos_key:
             return False
             
-        if not ENABLE_PROFIT_LOCK:
+        if not config.ENABLE_PROFIT_LOCK:
             return False
             
         if pos_key not in self.active_positions:
@@ -1325,11 +1277,11 @@ class Trader:
         progress = current_profit_dist / total_dist
         
         # Only proceed if we reached 80% threshold
-        if progress < PROFIT_LOCK_THRESHOLD:
+        if progress < config.PROFIT_LOCK_THRESHOLD:
             return False
             
-        # 3. Calculate Positive SL (Lock in PROFIT_LOCK_LEVEL of target profit)
-        lock_amount = total_dist * PROFIT_LOCK_LEVEL
+        # 3. Calculate Positive SL (Lock in config.PROFIT_LOCK_LEVEL of target profit)
+        lock_amount = total_dist * config.PROFIT_LOCK_LEVEL
         if side == 'BUY':
             new_sl = entry + lock_amount
         else:
@@ -1339,7 +1291,7 @@ class Trader:
         new_tp = tp
         extension_count = pos.get('tp_extensions', 0)
         
-        if extension_count < MAX_TP_EXTENSIONS:
+        if extension_count < config.MAX_TP_EXTENSIONS:
             if side == 'BUY':
                 # Use resistance if available and above current TP
                 if resistance and resistance > tp:
@@ -1348,7 +1300,7 @@ class Trader:
                     new_tp = min(resistance, max_tp)
                 elif atr:
                     # Fallback to ATR-based extension
-                    new_tp = tp + (atr * ATR_EXT_MULTIPLIER)
+                    new_tp = tp + (atr * config.ATR_EXT_MULTIPLIER)
             else:
                 # Use support if available and below current TP
                 if support and support < tp:
@@ -1357,7 +1309,7 @@ class Trader:
                     new_tp = max(support, max_tp)
                 elif atr:
                     # Fallback to ATR-based extension
-                    new_tp = tp - (atr * ATR_EXT_MULTIPLIER)
+                    new_tp = tp - (atr * config.ATR_EXT_MULTIPLIER)
         
         # 5. Apply Changes
         changes = False
@@ -1477,18 +1429,9 @@ class Trader:
     
 
     async def set_mode(self, symbol, leverage):
-        """Sets leverage and margin mode."""
+        """Sets config.LEVERAGE and margin mode via adapter."""
         if self.dry_run: return
-        try:
-            # Correct Adapter Order: (symbol, value)
-            await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, leverage)
-            try:
-                if self.exchange_name == 'BINANCE':
-                    await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, symbol, 'isolated')
-            except Exception:
-                pass # Margin mode might fail if already set or account level, ignore
-        except Exception as e:
-            self.logger.warning(f"Failed to set mode for {symbol}: {e}")
+        await self.exchange.ensure_isolated_and_leverage(symbol, leverage)
 
     async def cancel_all_orders(self, symbol):
         """Cancels all active orders for a symbol."""
@@ -1606,38 +1549,10 @@ class Trader:
             return False
 
     async def _ensure_isolated_and_leverage(self, symbol, leverage):
-        """Ensure margin mode is isolated and leverage set for `symbol` on exchange (LIVE only)."""
+        """Delegates to adapter's ensure_isolated_and_leverage."""
         if self.dry_run or not self.exchange.can_trade:
             return
-            
-        try:
-            # 1. MARGIN MODE SETUP
-            try:
-                # Adapter handles exchange-specific params (category, etc.)
-                await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, symbol, 'isolated')
-            except Exception as e:
-                err = str(e).lower()
-                if "-4067" in err or "side cannot be changed" in err:
-                    print(f"ℹ️  {symbol}: Margin mode preserved (open orders/positions exist)")
-                elif any(s in err for s in ["no change", "already", "-4046", "not need to change", "no need to change"]):
-                    pass # Already set, ignore
-                else:
-                    self.logger.debug(f"Set margin mode failed for {symbol}: {e}")
-
-            # 2. LEVERAGE SETUP
-            safe_lev = self._safe_int(leverage, default=10)
-            try:
-                # Adapter handles exchange-specific params and retry loops
-                await self._execute_with_timestamp_retry(self.exchange.set_leverage, symbol, safe_lev)
-            except Exception as e:
-                err_str = str(e).lower()
-                if "-4161" in err_str or "leverage reduction is not supported" in err_str or "not modified" in err_str:
-                    pass # Harmless or expected
-                else:
-                    self.logger.warning(f"Set leverage failed for {symbol}: {e}")
-
-        except Exception as e:
-            self.logger.error(f"Error in _ensure_isolated_and_leverage for {symbol}: {e}")
+        await self.exchange.ensure_isolated_and_leverage(symbol, leverage)
 
     async def _binance_batch_create(self, symbol, orders):
         """Redirected to adapter's batch_create_orders."""
@@ -1649,8 +1564,8 @@ class Trader:
             return {'skipped': True}
             
         # Respect the global flag: if auto-create disabled, skip creating orders here.
-        if not AUTO_CREATE_SL_TP:
-            self.logger.info(f"AUTO_CREATE_SL_TP disabled; skipping auto SL/TP for {pos_key}")
+        if not config.AUTO_CREATE_SL_TP:
+            self.logger.info(f"config.AUTO_CREATE_SL_TP disabled; skipping auto SL/TP for {pos_key}")
             return {'skipped': True}
 
         position = self.active_positions.get(pos_key)
@@ -1872,66 +1787,8 @@ class Trader:
 
 
     def _infer_exit_reason(self, close_trade: dict, pos: dict) -> str:
-        """
-        Determine SL or TP from exchange trade data.
-        Priority: exchange native fields > price proximity > price direction > conservative fallback.
-        """
-        info = close_trade.get('info') or {}
-        
-        # 1. Exchange-native field (Bybit: stopOrderType - e.g. 'TakeProfit', 'StopLoss')
-        # comparecase-insensitive, normalize spaces/underscores
-        stop_type = str(info.get('stopOrderType', '')).lower().replace('_', '').replace(' ', '')
-        self.logger.debug(f"[EXIT INFER] stopOrderType raw='{info.get('stopOrderType')}' normalized='{stop_type}'")
-        if stop_type in ('stoploss',):
-            return 'SL'
-        if stop_type in ('takeprofit',):
-            return 'TP'
-        
-        # 2. orderType fallback (Binance: STOP_MARKET, TAKE_PROFIT_MARKET)
-        order_type = str(close_trade.get('type') or info.get('orderType', '')).lower()
-        if 'stop' in order_type and 'take' not in order_type:
-            return 'SL'
-        if 'take_profit' in order_type or 'takeprofit' in order_type:
-            return 'TP'
-        
-        exit_price = self._safe_float(close_trade.get('price'))
-        sl_price = self._safe_float(pos.get('sl'))
-        tp_price = self._safe_float(pos.get('tp'))
-        side = pos.get('side', '').upper()
-        entry_price = self._safe_float(pos.get('entry_price'))
-        
-        # 3. TP proximity check FIRST (within 1%) — check TP before SL to avoid false SL
-        if exit_price > 0 and tp_price > 0:
-            if abs(exit_price - tp_price) / tp_price < 0.01:
-                return 'TP'
-        
-        # 4. SL proximity check (within 1%)
-        if exit_price > 0 and sl_price > 0:
-            if abs(exit_price - sl_price) / sl_price < 0.01:
-                return 'SL'
-        
-        # 5. Direction heuristic 
-        # If both SL and TP known: Use proximity to the closer target
-        # If targets missing: Fallback to simple profit/loss direction
-        if exit_price > 0 and entry_price > 0:
-            if sl_price > 0 and tp_price > 0:
-                if side == 'BUY':
-                    dist_sl = abs(exit_price - sl_price)
-                    dist_tp = abs(exit_price - tp_price)
-                    return 'SL' if dist_sl < dist_tp else 'TP'
-                elif side == 'SELL':
-                    dist_sl = abs(exit_price - sl_price)
-                    dist_tp = abs(exit_price - tp_price)
-                    return 'SL' if dist_sl < dist_tp else 'TP'
-            else:
-                # Fallback for missing target info (common in adopted/manual trades)
-                if side == 'BUY':
-                    return 'TP' if exit_price >= entry_price else 'SL'
-                else: # SELL
-                    return 'TP' if exit_price <= entry_price else 'SL'
-        
-        # 6. Conservative fallback — unknown, never silently label as TP
-        return 'SYNC(Unknown)'
+        """Delegates exit reason inference to adapter."""
+        return self.exchange.infer_exit_reason(close_trade, pos)
 
     async def _resolve_ghost_position(self, pos_key, hit_likely=False, is_pending=False):
         """Helper to find closing trade in history and update DB/memory."""
@@ -2135,7 +1992,7 @@ class Trader:
             fetch_success = True
             # Fix 4: Removed duplicate adoption block here.
             # The comprehensive adoption logic below (section 2) handles this correctly
-            # with leverage fetching, SL/TP discovery, and side normalisation.
+            # with config.LEVERAGE fetching, SL/TP discovery, and side normalisation.
         except Exception as e:
 
             self.logger.error(f"[SYNC] Critical fetch failed: {e}")
@@ -2160,20 +2017,20 @@ class Trader:
                     pos_key = self._get_pos_key(original_sym, "adopted")
                     self.logger.info(f"[ADOPT] Found unknown position for {original_sym} ({unified_sym}) on exchange. Adopting as {pos_key}")
                     
-                    # Fetch ACTUAL leverage setting from exchange
+                    # Fetch ACTUAL config.LEVERAGE setting from exchange
                     try:
                         lev_info = await self.exchange.fetch_leverage(original_sym)
                         if lev_info:
-                            actual_leverage = int(lev_info.get('leverage', LEVERAGE))
-                            self.logger.info(f"[ADOPT] Fetched actual leverage for {original_sym}: {actual_leverage}x")
+                            actual_leverage = int(lev_info.get('config.LEVERAGE', leverage))
+                            self.logger.info(f"[ADOPT] Fetched actual config.LEVERAGE for {original_sym}: {actual_leverage}x")
                         else:
                             # Use fallback from config instead of hardcoded 8
-                            actual_leverage = LEVERAGE
+                            actual_leverage = config.LEVERAGE
                             self.logger.warning(f"[ADOPT] fetch_leverage returned None for {original_sym}. Using fallback: {actual_leverage}x")
                     except Exception as lev_err:
-                        raw_leverage = p.get('leverage')
-                        actual_leverage = int(raw_leverage) if raw_leverage is not None else LEVERAGE
-                        self.logger.warning(f"[ADOPT] Could not fetch leverage for {original_sym}, using fallback: {actual_leverage}x | Error: {lev_err}")
+                        raw_leverage = p.get('config.LEVERAGE')
+                        actual_leverage = int(raw_leverage) if raw_leverage is not None else config.LEVERAGE
+                        self.logger.warning(f"[ADOPT] Could not fetch config.LEVERAGE for {original_sym}, using fallback: {actual_leverage}x | Error: {lev_err}")
                     
                     # Calculate entry price
                     entry_price = self._safe_float(p.get('entryPrice') or p.get('avgPrice') or p.get('info', {}).get('entryPrice') or p.get('info', {}).get('avgEntryPrice'), default=0)
@@ -2249,7 +2106,7 @@ class Trader:
                         "entry_price": entry_price,
                         "status": "filled",
                         "timeframe": "sync",
-                        "leverage": actual_leverage,
+                        "config.LEVERAGE": actual_leverage,
                         "timestamp": p.get('timestamp') or self.exchange.milliseconds(),
                         "sl": auto_sl,
                         "tp": auto_tp,
@@ -2258,7 +2115,7 @@ class Trader:
                         "tp_order_id": tp_order_id
                     }
                     await self._update_db_position(pos_key)
-                    print(f"[ADOPT] {pos_key} adopted with leverage {actual_leverage}x, auto SL={auto_sl} TP={auto_tp}")
+                    print(f"[ADOPT] {pos_key} adopted with config.LEVERAGE {actual_leverage}x, auto SL={auto_sl} TP={auto_tp}")
 
         # 2.5 ADOPT ORDERS (Ex -> Local)
         # If an order exists on exchange but bot doesn't know about it, adopt it.
@@ -2612,8 +2469,8 @@ class Trader:
                                     ex_p = active_ex_pos[symbol]
                                     pos['entry_price'] = self._safe_float(ex_p.get('entryPrice'), pos['entry_price'])
                                     pos['qty'] = self._safe_float(ex_p.get('contracts'), pos['qty'])
-                                    if 'leverage' in ex_p:
-                                        pos['leverage'] = int(ex_p['leverage'])
+                                    if 'config.LEVERAGE' in ex_p:
+                                        pos['config.LEVERAGE'] = int(ex_p['config.LEVERAGE'])
                                     self.active_positions[pos_key] = pos
                                     await self._update_db_position(pos_key)
                                 else:
@@ -2992,7 +2849,7 @@ class Trader:
         - Uses _last_ex_pos_map cache for Bybit attached SL/TP — no extra API calls.
         - Throttled: each position is checked at most once per minute.
         - If SL/TP is missing: recreates immediately via recreate_missing_sl_tp.
-        - Emergency close: if BOTH SL and TP are absent AND |PnL%| >= SLTP_GUARDIAN_EMERGENCY_PCT.
+        - Emergency close: if BOTH SL and TP are absent AND |PnL%| >= config.SLTP_GUARDIAN_EMERGENCY_PCT.
         """
         if self.dry_run or self.exchange.is_public_only:
             return
@@ -3047,7 +2904,7 @@ class Trader:
 
                 if current_price > 0:
                     raw_pnl_pct = abs(current_price - entry_price) / entry_price
-                    if raw_pnl_pct >= SLTP_GUARDIAN_EMERGENCY_PCT:
+                    if raw_pnl_pct >= config.SLTP_GUARDIAN_EMERGENCY_PCT:
                         direction = "PROFIT" if (
                             (side == 'BUY' and current_price > entry_price) or
                             (side == 'SELL' and current_price < entry_price)
@@ -3221,7 +3078,7 @@ class Trader:
                 result['status'] = 'permission_denied'
                 return result
 
-            if not AUTO_CREATE_SL_TP:
+            if not config.AUTO_CREATE_SL_TP:
                 result['errors'].append('auto_create_disabled')
                 return result
             close_side = 'sell' if side == 'BUY' else 'buy'
@@ -3243,9 +3100,9 @@ class Trader:
                         else:
                             # Fallback to Fixed %
                             if side == 'BUY':
-                                calc_sl = entry_price * (1 - STOP_LOSS_PCT)
+                                calc_sl = entry_price * (1 - config.STOP_LOSS_PCT)
                             else:
-                                calc_sl = entry_price * (1 + STOP_LOSS_PCT)
+                                calc_sl = entry_price * (1 + config.STOP_LOSS_PCT)
                             method = "PCT"
                         
                         try:
@@ -3266,9 +3123,9 @@ class Trader:
                         else:
                             # Fallback to Fixed %
                             if side == 'BUY':
-                                calc_tp = entry_price * (1 + TAKE_PROFIT_PCT)
+                                calc_tp = entry_price * (1 + config.TAKE_PROFIT_PCT)
                             else:
-                                calc_tp = entry_price * (1 - TAKE_PROFIT_PCT)
+                                calc_tp = entry_price * (1 - config.TAKE_PROFIT_PCT)
                             method = "PCT"
                             
                         try:
@@ -3445,7 +3302,7 @@ class Trader:
             return result
 
     async def enforce_isolated_on_startup(self, symbols=None):
-        """Call at startup to enforce isolated mode + leverage for configured symbols (LIVE only).
+        """Call at startup to enforce isolated mode + config.LEVERAGE for configured symbols (LIVE only).
 
         Args:
             symbols: iterable of symbol strings to enforce (if None, use symbols from `active_positions`).
@@ -3551,5 +3408,5 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # Bottom of file to prevent circular imports
-from cooldown_manager import CooldownManager
-from order_executor import OrderExecutor
+from src.cooldown_manager import CooldownManager
+from src.order_executor import OrderExecutor

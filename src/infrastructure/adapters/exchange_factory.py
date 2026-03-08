@@ -1,13 +1,9 @@
 import ccxt.async_support as ccxt
-from config import (
-    ACTIVE_EXCHANGE,
-    BINANCE_API_KEY, BINANCE_API_SECRET,
-    BYBIT_API_KEY, BYBIT_API_SECRET
-)
-from adapters.binance_adapter import BinanceAdapter
-from adapters.bybit_adapter import BybitAdapter
+from src import config
+from src.infrastructure.adapters.binance_adapter import BinanceAdapter
+from src.infrastructure.adapters.bybit_adapter import BybitAdapter
 
-def get_exchange_adapter(name=ACTIVE_EXCHANGE):
+def get_exchange_adapter(name=config.ACTIVE_EXCHANGE):
     """
     Returns the appropriate Exchange Adapter based on name.
     """
@@ -23,8 +19,8 @@ def get_exchange_adapter(name=ACTIVE_EXCHANGE):
         }
         
         # Determine valid credentials
-        valid_key = BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY
-        valid_secret = BINANCE_API_SECRET and 'your_' not in BINANCE_API_SECRET
+        valid_key = config.BINANCE_API_KEY and 'your_' not in config.BINANCE_API_KEY
+        valid_secret = config.BINANCE_API_SECRET and 'your_' not in config.BINANCE_API_SECRET
         
         exchange_config = {
             'options': options,
@@ -32,10 +28,10 @@ def get_exchange_adapter(name=ACTIVE_EXCHANGE):
         }
         
         if valid_key and valid_secret:
-            exchange_config['apiKey'] = BINANCE_API_KEY
-            exchange_config['secret'] = BINANCE_API_SECRET
+            exchange_config['apiKey'] = config.BINANCE_API_KEY
+            exchange_config['secret'] = config.BINANCE_API_SECRET
         else:
-            print(f"⚠️ [Factory] Initializing Binance in PUBLIC MODE (No Keys)")
+            print(f"[Factory] Initializing Binance in PUBLIC MODE (No Keys)")
             
         client = ccxt.binance(exchange_config)
         return BinanceAdapter(client)
@@ -44,28 +40,28 @@ def get_exchange_adapter(name=ACTIVE_EXCHANGE):
 
 def get_active_exchanges_map():
     """
-    Returns a dict {name: adapter} for all exchanges in ACTIVE_EXCHANGES.
+    Returns a dict {name: adapter} for all exchanges in config.ACTIVE_EXCHANGES.
     """
-    from config import ACTIVE_EXCHANGES
+    from src import config
     adapters = {}
-    for name in ACTIVE_EXCHANGES:
+    for name in config.ACTIVE_EXCHANGES:
         name = name.strip().upper()
         if not name: continue
         
         # Check for credentials before initializing
         if name == 'BINANCE':
-            if not BINANCE_API_KEY or 'your_' in BINANCE_API_KEY:
-                print(f"📡 [Factory] BINANCE: Active (Public Mode - Trading Disabled)")
+            if not config.BINANCE_API_KEY or 'your_' in config.BINANCE_API_KEY:
+                print(f"[Factory] BINANCE: Active (Public Mode - Trading Disabled)")
         elif name == 'BYBIT':
-            if not BYBIT_API_KEY or 'your_' in BYBIT_API_KEY:
-                print(f"📡 [Factory] BYBIT: Active (Public Mode - Trading Disabled)")
+            if not config.BYBIT_API_KEY or 'your_' in config.BYBIT_API_KEY:
+                print(f"[Factory] BYBIT: Active (Public Mode - Trading Disabled)")
 
                 
         try:
             adapter = get_exchange_adapter(name)
             
             # Configure Permissions based on keys
-            api_key = BINANCE_API_KEY if name == 'BINANCE' else BYBIT_API_KEY
+            api_key = config.BINANCE_API_KEY if name == 'BINANCE' else config.BYBIT_API_KEY
             
             # Check if key is valid (simple check: present and not default placeholder)
             has_valid_key = bool(api_key and 'your_' not in api_key)

@@ -7,7 +7,7 @@ import logging
 # Add src to path
 sys.path.insert(0, os.path.join(os.getcwd(), 'src'))
 
-from database import DataManager
+from src.infrastructure.repository.database import DataManager
 
 async def backfill():
     print("🚀 Starting AI training logs backfill...")
@@ -51,5 +51,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(backfill())
     finally:
-        from database import DataManager
+        from src.infrastructure.repository.database import DataManager
         asyncio.run(DataManager.clear_instances())

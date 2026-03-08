@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
-from bot import TradingBot
+from src.bot import TradingBot
 
 @pytest.mark.asyncio
 async def test_confidence_competition_new_entry():

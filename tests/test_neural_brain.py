@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import os
 import json
-from neural_brain import NeuralBrain
+from src.neural_brain import NeuralBrain
 
 class TestNeuralBrain:
     @pytest.fixture(autouse=True)

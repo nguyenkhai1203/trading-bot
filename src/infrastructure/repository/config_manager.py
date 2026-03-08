@@ -8,7 +8,7 @@ import json
 import logging
 import asyncio
 from typing import Optional, List, Dict, Any
-from database import DataManager
+from .database import DataManager
 
 class ConfigManager:
     _instance = None
@@ -36,7 +36,8 @@ class ConfigManager:
         
         # Update Strategy cache if running in bot context
         try:
-            from strategy import WeightedScoringStrategy
+            # Delayed import to avoid circular dependency
+            from ...strategy import WeightedScoringStrategy
             all_configs = await self.db.get_all_strategy_configs()
             WeightedScoringStrategy.update_cache(all_configs)
         except ImportError:
@@ -96,7 +97,8 @@ async def run_migration():
         env = 'TEST'
     
     mgr = await ConfigManager.get_instance(env)
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Root is 3 levels up from src/infrastructure/repository/config_manager.py
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     json_path = os.path.join(project_root, 'src', 'strategy_config.json')
     
     await mgr.migrate_from_json(json_path)

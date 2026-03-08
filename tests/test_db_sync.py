@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest_asyncio
 
-from src.database import DataManager
+from src.infrastructure.repository.database import DataManager
 from src.execution import Trader
 
 # Mock send_telegram_message to avoid emoji/unicode issues in tests

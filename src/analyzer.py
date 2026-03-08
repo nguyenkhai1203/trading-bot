@@ -7,14 +7,23 @@ OPTIMIZED Strategy Analyzer v2.2 - FULL QUALITY + FAST
 - Smart validation: Top 50 train combos tested on test set
 - Reduced redundancy: Reuse cross-TF results
 """
+import sys
+import os
+
+# Add support for running directly or via module
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+import logging
 import pandas as pd
 import numpy as np
-import os
 import json
 import asyncio
 import time
-import sys
-
 # Add src to path if running directly
 if __name__ == '__main__':
     src_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,12 +31,12 @@ if __name__ == '__main__':
         sys.path.append(src_dir)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-import config
-from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES, MAX_WORKERS, GLOBAL_MAX_LEVERAGE, GLOBAL_MAX_COST_PER_TRADE
-from feature_engineering import FeatureEngineer
+from src import config
+from src.config import TRADING_SYMBOLS, TRADING_TIMEFRAMES, MAX_WORKERS, GLOBAL_MAX_LEVERAGE, GLOBAL_MAX_COST_PER_TRADE
+from src.feature_engineering import FeatureEngineer
 import subprocess
-from train_brain import run_nn_training
-from utils.symbol_helper import to_api_format
+from src.train_brain import run_nn_training
+from src.utils.symbol_helper import to_api_format
 
 class StrategyAnalyzer:
     def __init__(self, data_dir=None):
@@ -79,7 +88,7 @@ class StrategyAnalyzer:
             if bms_cache_key in self._bms_cache:
                 bms_subset = self._bms_cache[bms_cache_key]
             else:
-                from btc_analyzer import BTCAnalyzer
+                from src.btc_analyzer import BTCAnalyzer
                 # We use a dummy for db/exchange here as we only need the calculation logic
                 btc_calc = BTCAnalyzer(self, None) 
                 btc_df = self.load_data('BTC/USDT:USDT', timeframe, exchange=exchange)
@@ -123,6 +132,13 @@ class StrategyAnalyzer:
         df = self.feature_engineer.calculate_features(df)
         self._features_cache[cache_key] = df
         return df
+
+    # Aliases for compatibility with BTCAnalyzer (which expects MarketDataManager interface)
+    def get_data_with_features(self, symbol, timeframe, exchange='BINANCE'):
+        return self.get_features(symbol, timeframe, exchange=exchange)
+
+    def get_data(self, symbol, timeframe, exchange='BINANCE'):
+        return self.load_data(symbol, timeframe, exchange=exchange)
 
     def get_signal_category(self, name):
         """Categorize signals to avoid redundancy."""
@@ -231,7 +247,7 @@ class StrategyAnalyzer:
         train_df = df.iloc[:split_idx]
         test_df = df.iloc[split_idx:]
         
-        from strategy import WeightedScoringStrategy
+        from src.strategy import WeightedScoringStrategy
         mock_strat = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe)
         mock_strat.weights = weights
         
@@ -438,14 +454,14 @@ class StrategyAnalyzer:
             }
 
         # 2. Save to DB using DataManager
-        from database import DataManager
+        from src.infrastructure.repository.database import DataManager
         db = await DataManager.get_instance()
         await db.save_strategy_config(symbol, timeframe, exchange, config)
         print(f"✅ [ANALYZER] Saved config for {symbol} {timeframe} ({exchange}) to database.")
         
         # 3. Synchronize current process cache if WeightedScoringStrategy is in memory
         try:
-            from strategy import WeightedScoringStrategy
+            from src.strategy import WeightedScoringStrategy
             all_configs = await db.get_all_strategy_configs()
             WeightedScoringStrategy.update_cache(all_configs)
         except Exception as e:
@@ -489,7 +505,7 @@ class StrategyAnalyzer:
                 
                 # Get current config
                 # Get current config
-                from config_manager import ConfigManager
+                from src.infrastructure.repository.config_manager import ConfigManager
                 mgr = await ConfigManager.get_instance(self.env)
                 config_data = await mgr.get_config(symbol, tf, getattr(self, 'exchange_name', 'BINANCE'))
                 current_pnl = 0
@@ -510,7 +526,7 @@ class StrategyAnalyzer:
                 train_df = df.iloc[:split_idx]
                 test_df = df.iloc[split_idx:]
                 
-                from strategy import WeightedScoringStrategy
+                from src.strategy import WeightedScoringStrategy
                 mock_strat = WeightedScoringStrategy(symbol=symbol, timeframe=tf)
                 mock_strat.weights = weights
                 
@@ -591,10 +607,10 @@ async def _compute_and_cache_bms(analyzer, env_str: str):
     Calculate MTF BMS from downloaded CSV data, persist to DB,
     and populate analyzer._bms_cache for reuse in load_data().
     """
-    from btc_analyzer import BTCAnalyzer
-    from database import DataManager
-    from config import ACTIVE_EXCHANGES, TRADING_TIMEFRAMES
-    from feature_engineering import FeatureEngineer
+    from src.btc_analyzer import BTCAnalyzer
+    from src.infrastructure.repository.database import DataManager
+    from src.config import ACTIVE_EXCHANGES, TRADING_TIMEFRAMES
+    from src.feature_engineering import FeatureEngineer
     
     db = await DataManager.get_instance(env_str)
     btc_calc = BTCAnalyzer(analyzer, db)
@@ -627,7 +643,7 @@ async def _compute_and_cache_bms(analyzer, env_str: str):
 
 
 async def run_global_optimization(download=False):
-    from notification import send_telegram_chunked
+    from src.infrastructure.notifications.notification import send_telegram_chunked
     import subprocess
     
     print("\n" + "!" * 60)
@@ -654,7 +670,7 @@ async def run_global_optimization(download=False):
     start_time = time.time()
 
     # Determine environment
-    import config
+    from src import config
     import sys
     env_str = 'TEST' if getattr(config, 'DRY_RUN', True) else 'LIVE'
     if "--live" in sys.argv: env_str = 'LIVE'
@@ -678,7 +694,7 @@ async def run_global_optimization(download=False):
     all_weights = {}  # {(exchange, symbol): {tf: weights}}
     
     # ========== STEP 1: Parallel Signal Analysis ==========
-    from config import BINANCE_SYMBOLS, BYBIT_SYMBOLS, ACTIVE_EXCHANGES
+    from src.config import BINANCE_SYMBOLS, BYBIT_SYMBOLS, ACTIVE_EXCHANGES
     
     # Map exchange name to its specific symbols
     exchange_symbols = {
@@ -795,7 +811,7 @@ async def run_global_optimization(download=False):
                     cross_tf_support += 1
         
         # Use configurable thresholds from config
-        from config import MIN_WIN_RATE_TRAIN, MIN_WIN_RATE_TEST, MAX_CONSISTENCY, MIN_CROSS_TF_SUPPORT
+        from src.config import MIN_WIN_RATE_TRAIN, MIN_WIN_RATE_TEST, MAX_CONSISTENCY, MIN_CROSS_TF_SUPPORT
         
         is_profitable = wr >= MIN_WIN_RATE_TRAIN and test_wr >= MIN_WIN_RATE_TEST
         is_consistent = consistency < MAX_CONSISTENCY
@@ -878,10 +894,10 @@ async def run_global_optimization(download=False):
             final_lines.append("")
             
         final_msg = "\n".join(final_lines)
+        # STEP 4: Neural Brain Training
+        from src.infrastructure.notifications.notification import send_telegram_chunked
         await send_telegram_chunked(final_msg)
         
-        # STEP 4: Neural Brain Training
-        from notification import send_telegram_chunked
         print("\n[*] Step 4: Updating Neural Brain (RL Model)...")
         try:
             # Training on at least 20 samples to ensure quality
@@ -913,8 +929,8 @@ async def run_global_optimization(download=False):
             print("✅ Strategy validated on test set.")
             
             # Final step: Update optimization timestamp to prevent immediate re-run by bot
-            from database import DataManager
-            import config
+            from src.infrastructure.repository.database import DataManager
+            from src import config
             import sys
             
             # Determine environment
@@ -945,5 +961,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(run_global_optimization(download=args.download))
     finally:
-        from database import DataManager
+        from src.infrastructure.repository.database import DataManager
         asyncio.run(DataManager.clear_instances())

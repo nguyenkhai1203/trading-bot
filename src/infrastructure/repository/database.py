@@ -29,7 +29,9 @@ class DataManager:
         async with cls._lock:
             if env_upper not in cls._instances:
                 db_name = "trading_live.db" if env_upper == 'LIVE' else "trading_test_v2.db"
-                db_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+                # Root is 3 levels up from infrastructure/repository/database.py
+                root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+                db_dir = os.path.join(root_dir, "data")
                 os.makedirs(db_dir, exist_ok=True)
                 db_path = os.path.join(db_dir, db_name)
                 

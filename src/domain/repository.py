@@ -1,0 +1,46 @@
+from abc import ABC, abstractmethod
+from typing import List, Optional, Dict, Any
+from src.domain.models import Trade, Position
+
+class ITradeRepository(ABC):
+    @abstractmethod
+    async def save_trade(self, trade: Trade) -> int:
+        """Insert or Update a trade/position."""
+        pass
+
+    @abstractmethod
+    async def get_active_positions(self, profile_id: int) -> List[Trade]:
+        """Fetch all ACTIVE or OPENED positions for a profile."""
+        pass
+
+    @abstractmethod
+    async def get_trade_history(self, profile_id: int, limit: int = 100) -> List[Trade]:
+        """Fetch closed/cancelled trade history for a profile."""
+        pass
+
+    @abstractmethod
+    async def update_status(self, trade_id: int, status: str, **kwargs) -> None:
+        """Atomically update trade status and details."""
+        pass
+
+class IProfileRepository(ABC):
+    @abstractmethod
+    async def get_active_profiles(self) -> List[Dict[str, Any]]:
+        """Get all active trading profiles."""
+        pass
+
+    @abstractmethod
+    async def get_profile_by_id(self, profile_id: int) -> Optional[Dict[str, Any]]:
+        """Get profile details by ID."""
+        pass
+
+class ISentimentRepository(ABC):
+    @abstractmethod
+    async def upsert_sentiment(self, symbol: str, data: Dict[str, Any]) -> None:
+        """Save latest market sentiment."""
+        pass
+
+    @abstractmethod
+    async def get_latest_sentiment(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get latest market sentiment."""
+        pass

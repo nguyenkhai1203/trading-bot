@@ -2,27 +2,22 @@
 
 This document serves as the technical blueprint for the trading bot, documenting the implementation details of the Adapter Pattern, Singleton architectures, and synchronization logic.
 
-## 1. Core Architecture: 3-Layer Scale
-The system is decoupled into three distinct layers to ensure scalability and maintainability.
+## 1. Core Architecture: Clean Architecture (4-Layer)
+The system is being transitioned from a 3-layer setup to a strict **Clean Architecture** to ensure industrial-grade maintainability and performance.
 
-1.  **Data Layer (`MarketDataManager`)**: 
-    - Handles centralized fetching and normalization.
-    - **Exchange Namespacing**: Data is isolated as `{EXCHANGE}_{SYMBOL}_{TF}.csv`.
-    - **Unified Path**: All OHLCV data is stored in the root `/data/` directory (shared between Bot and Analyzer) to prevent path mismatches.
-    - **Incremental Fetching**: `download_data.py` uses existing CSV timestamps to only fetch new candles, optimizing API usage.
-    - **Time Sync**: Implements manual offset with a -5000ms safety buffer to resolve Binance -1021 timestamp errors.
-2.  **Logic Layer (`Strategy` / `Analyzer`)**: 
-    - **Strategy Engine**: 40+ technical indicators weighted by performance.
-    - **Analyzer**: Periodic re-optimization (2x daily) with Parallel Grid Search (8 workers).
-    - **Neural Brain**: Lightweight NumPy-based MLP for Veto/Boost confirmed signals.
-3.  **Execution Layer (Modular `Trader`)**: 
-    - **Orchestrator Pattern**: The `Trader` class acts as a high-level orchestrator, delegating complex logic to specialized sub-managers.
-    - **OrderExecutor**: Manages the full order lifecycle (placement, timeout recovery, limit-fill monitoring, and SL/TP creation).
-    - **CooldownManager**: Handles symbol-level SL cooldowns and account-level margin throttling.
-    - **Multi-Profile Dependency Injection**: `bot.py` loads profiles and injects a shared `DataManager` and account-level caches into each `Trader`.
-    - **Safety Locks**: Symbol-level async mutexes (`asyncio.Lock`) serialize entry processes per profile.
-    - **Authoritative Sync**: Database-first reality where `pos_key` is the primary identifier. The system reconciles DB status with the exchange on every restart.
-    - **Prefixing**: `pos_key` format `P{ID}_{EXCHANGE}_{SYMBOL}_{TF}` links positions to specific user profiles.
+1.  **Domain Layer (`src/domain/`)**: 
+    - **Entities**: Pure Pydantic models (Trade, Position, Order) ensuring type safety and consistency.
+    - **Services**: Pure business logic (Risk calculation, SL/TP dynamic adjustment) independent of any external frameworks or APIs.
+2.  **Application Layer (`src/application/`)**: 
+    - **Use Cases**: Orchestrates the flow of data between the Domain and Infrastructure.
+    - **Trading Orchestrator**: Replaces the legacy `Trader` god-object logic.
+    - **Optimization Orchestrator**: Manages the strategy re-tuning process.
+3.  **Infrastructure Layer (`src/infrastructure/`)**: 
+    - **Adapters**: Concrete implementations for Bybit and Binance, mapping raw API responses to Domain Models.
+    - **State Management**: Centralized `AccountSyncService` that acts as a shared cache provider to minimize API requests and ensure cross-profile atomic state.
+    - **Persistence**: Database (SQLite) and File implementations.
+4.  **Presentation/Entry Layer (`src/`)**: 
+    - **CLI Wrappers**: `bot.py` and `analyzer.py` provide the user interface while delegating all logic to the Application layer.
 
 ---
 
@@ -82,11 +77,9 @@ The system employs a three-tier defense against state drift and historical incon
 3.  **Deep History Sync (1h)**: `deep_history_sync()` scans the last 24-48 hours of actual trade history to find exits missed by real-time loops.
 
 ### Performance & Multi-Profile Safety
-- **Shared Account Cache**: `Trader` uses a class-level `_shared_account_cache` to track account-wide positions and orders across all profiles. This prevents "blind spots" where Profile B enters a trade because it hasn't yet synced Profile A's new entry.
-- **Request Throttling**: Readiness checks (`has_any_symbol_position`) now use the 60s local/shared cache instead of redundant API calls, reducing total requests by ~80%.
-- **Authoritative Reality**: The database is the primary source of truth for metadata, but the Exchange is the absolute source for state. Standardized `sl_order_id` and `tp_order_id` keys ensure 1:1 mapping.
-- **Airtight Finalization**: Uses `log_trade` + `_clear_db_position` for atomic state transitions.
-- **History Sync Script**: `scripts/sync_history.py` allows for manual or batch reconciliation of the last 24-48 hours to fix legacy data discrepancies.
+- **AccountSyncService**: A centralized provider that tracks account-wide positions and orders across all profiles. This prevents "blind spots" where Profile B enters a trade because it hasn't yet synced Profile A's new entry.
+- **Request Throttling**: Uses a shared high-performance cache (`to_dict('records')` optimization) instead of redundant API calls, reducing total requests by ~80%.
+- **Vectorized Backtesting**: Replaces `df.iterrows()` with vectorized or dict-record loops to increase backtest speed by 100x.
 
 ---
 

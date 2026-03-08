@@ -8,7 +8,7 @@ import time
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from execution import Trader
+from src.execution import Trader
 
 class TestFastSLSync(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

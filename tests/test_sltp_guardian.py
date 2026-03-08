@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from execution import Trader
+from src.execution import Trader
 
 
 def _make_trader(exchange_name='BYBIT'):

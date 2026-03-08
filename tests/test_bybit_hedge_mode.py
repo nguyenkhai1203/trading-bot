@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from adapters.bybit_adapter import BybitAdapter
+from src.infrastructure.adapters.bybit_adapter import BybitAdapter
 
 @pytest.fixture(autouse=True)
 def isolate_env():

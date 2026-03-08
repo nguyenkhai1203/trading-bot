@@ -24,27 +24,13 @@ class BaseExchangeClient:
         self._sync_lock = asyncio.Lock()
         self._last_sync_time = 0
         
-        # Permissions / Capabilities System
-        # Default to restricted until explicitly promoted by Factory
-        self.permissions = {
-            'can_trade': False,          # Can place/cancel orders
-            'can_view_balance': False,   # Can fetch account balance/positions
-            'can_use_private': False,    # Can use any private endpoints
-            'is_public_only': True       # Is this a read-only observer?
-        }
+        self.can_trade = False
+        self.can_view_balance = False
+        self.can_use_private = False
 
-    def set_permissions(self, can_trade: bool, can_view_balance: bool):
-        """Configure adapter permissions based on credentials."""
-        self.permissions['can_trade'] = can_trade
-        self.permissions['can_view_balance'] = can_view_balance
-        self.permissions['can_use_private'] = can_trade or can_view_balance
-        self.permissions['is_public_only'] = not (can_trade or can_view_balance)
-        
     @property
-    def can_trade(self): return self.permissions['can_trade']
-    
-    @property
-    def is_public_only(self): return self.permissions['is_public_only']
+    def is_public_only(self): 
+        return not (self.can_trade or self.can_view_balance)
         
     async def sync_server_time(self) -> bool:
         """Sync local time with exchange server manually to ensure absolute accuracy."""
@@ -151,9 +137,10 @@ class BaseExchangeClient:
                     # Log non-timestamp errors or max retries reached
                     if not is_timestamp_error:
                         # Handle Rate Limit (429) / 418 / 403 or Bybit 10006 specifically
+                        # Handle Rate Limit (429) / 418 / 403 or Bybit 10006 specifically
                         if any(x in error_msg for x in ["429", "418", "403", "too many requests", "10006"]):
                             wait_s = (attempt + 1) * 3 # Backoff: 3s, 6s, 9s
-                            print(f"⚠️ [RATE LIMIT/403] logic: backing off for {wait_s}s... Error: {error_msg[:100]}")
+                            self.logger.warning(f"[RATE LIMIT/403] backing off for {wait_s}s... Error: {error_msg[:100]}")
                             await asyncio.sleep(wait_s)
                             # Retry if we have retries left
                             if attempt < max_retries - 1:

@@ -2,9 +2,9 @@ import pytest
 import asyncio
 import pandas as pd
 from unittest.mock import MagicMock, AsyncMock, patch
-from execution import Trader
-from bot import BalanceTracker
-from risk_manager import RiskManager
+from src.execution import Trader
+from src.bot import BalanceTracker
+from src.risk_manager import RiskManager
 
 class TestTraderExecutionLogic:
     @pytest.fixture
@@ -36,7 +36,7 @@ class TestTraderExecutionLogic:
 
     @pytest.fixture
     def trader(self, mock_exchange, mock_db):
-        with patch('execution.ExchangeLoggerAdapter'):
+        with patch('src.execution.ExchangeLoggerAdapter'):
             t = Trader(exchange=mock_exchange, db=mock_db, profile_id=1, profile_name="TestProfile", dry_run=False)
             t.active_positions = {}
             t._update_db_position = AsyncMock() # Replace DB update with mock
@@ -98,9 +98,9 @@ class TestTraderExecutionLogic:
         })
         df_guard = pd.DataFrame({'close': [52000.0], 'RSI_14': [50.0], 'EMA_21': [51000.0]})
         
-        with patch('execution.ENABLE_DYNAMIC_SLTP', True), \
-             patch('execution.ATR_TRAIL_MULTIPLIER', 1.5), \
-             patch('execution.ATR_TRAIL_MIN_MOVE_PCT', 0.001):
+        with patch('src.execution.config.ENABLE_DYNAMIC_SLTP', True), \
+             patch('src.execution.config.ATR_TRAIL_MULTIPLIER', 1.5), \
+             patch('src.execution.config.ATR_TRAIL_MIN_MOVE_PCT', 0.001):
             
             # 53000 - (1.5 * 500) = 52250
             res = await trader.update_dynamic_sltp(pos_key, df_trail=df_trail, df_guard=df_guard)
@@ -130,8 +130,8 @@ class TestTraderExecutionLogic:
         })
         df_trail = pd.DataFrame({'ATR_14': [500.0] * 10, 'low': [47000.0] * 10}) 
         
-        with patch('execution.ENABLE_DYNAMIC_SLTP', True), \
-             patch('execution.RSI_OVERBOUGHT_EXIT', 75):
+        with patch('src.execution.config.ENABLE_DYNAMIC_SLTP', True), \
+             patch('src.execution.config.RSI_OVERBOUGHT_EXIT', 75):
             
             await trader.update_dynamic_sltp(pos_key, df_trail=df_trail, df_guard=df_guard)
             
@@ -182,7 +182,7 @@ class TestTraderExecutionLogic:
         }]
         mock_exchange.fetch_open_orders.return_value = []
         
-        with patch('execution.AUTO_CREATE_SL_TP', True):
+        with patch('src.execution.config.AUTO_CREATE_SL_TP', True):
             await trader.reconcile_positions(auto_fix=True, force_verify=True)
         
         trader.recreate_missing_sl_tp.assert_called_once()
@@ -201,9 +201,9 @@ class TestTraderExecutionLogic:
             'timeframe': '1h'
         }
         
-        with patch('execution.ENABLE_PROFIT_LOCK', True), \
-             patch('execution.PROFIT_LOCK_THRESHOLD', 0.8), \
-             patch('execution.PROFIT_LOCK_LEVEL', 0.1):
+        with patch('src.execution.config.ENABLE_PROFIT_LOCK', True), \
+             patch('src.execution.config.PROFIT_LOCK_THRESHOLD', 0.8), \
+             patch('src.execution.config.PROFIT_LOCK_LEVEL', 0.1):
             
             trader.recreate_missing_sl_tp = AsyncMock(return_value=True)
             await trader.adjust_sl_tp_for_profit_lock(pos_key, 51000.0)

@@ -8,7 +8,7 @@ import time
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from execution import Trader
+from src.execution import Trader
 
 class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -36,11 +36,17 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         async def mock_execute(func, *args, **kwargs):
             return await func(*args, **kwargs)
         self.trader._execute_with_timestamp_retry.side_effect = mock_execute
+        
+        # Mock infer_exit_reason: Use a real instance of BybitAdapter to get a bound method
+        from src.infrastructure.adapters.bybit_adapter import BybitAdapter
+        adapter = BybitAdapter(self.mock_exchange)
+        self.trader.exchange.infer_exit_reason = adapter.infer_exit_reason
 
     async def test_sync_detects_and_resolves_ghost(self):
         """Test that sync_with_exchange identifies a missing position and resolves it."""
         symbol = 'BTC/USDT'
-        pos_key = f"P{self.trader.profile_id}_{self.mock_exchange.name}_{symbol.replace('/', '_')}"
+        # New pos_key format: P{id}_{EXCHANGE}_{SYMBOL}_{TF}
+        pos_key = f"P{self.trader.profile_id}_{self.trader.exchange_name}_{symbol.replace('/', '_')}_1h"
         
         # 1. Setup Active Position in memory
         sl_order_id = 'sl_123'
@@ -98,7 +104,7 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
     async def test_sync_updates_pending_to_filled(self):
         """Test that sync updates an externally filled pending order to ACTIVE."""
         symbol = 'BTC/USDT'
-        pos_key = f"P{self.trader.profile_id}_{self.mock_exchange.name}_{symbol.replace('/', '_')}"
+        pos_key = f"P1_BYBIT_BTC_USDT_1h"
         order_id = "order_123"
         
         # 1. Setup Pending Position
@@ -150,7 +156,7 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
             'entry_time': int(time.time() * 1000) - 7200000, # 2 hours ago
             'qty': 0.5,
             'status': 'ACTIVE',
-            'pos_key': f"P1_BYBIT_{symbol.replace('/', '_')}"
+            'pos_key': f"P1_BYBIT_ETH_USDT_1h"
         }
         
         # Mock DB returning this stale trade
@@ -181,7 +187,7 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_ghost_uses_bybit_stoploss_field(self):
         """Verify Bybit stopOrderType='StopLoss' results in 'SL' reason."""
         symbol = 'ATOM/USDT'
-        pos_key = f"P1_BYBIT_ATOM_USDT"
+        pos_key = f"P1_BYBIT_ATOM_USDT_1h"
         self.trader.active_positions = {
             pos_key: {
                 'symbol': symbol, 'side': 'SELL', 'status': 'filled', 
@@ -210,7 +216,7 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_ghost_proximity_check(self):
         """Verify proximity check when exchange info is missing."""
         symbol = 'BTC/USDT'
-        pos_key = f"P1_BYBIT_BTC_USDT"
+        pos_key = f"P1_BYBIT_BTC_USDT_1h"
         self.trader.active_positions = {
             pos_key: {
                 'symbol': symbol, 'side': 'BUY', 'status': 'filled', 
@@ -239,7 +245,7 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
     async def test_infer_exit_entry_price_zero(self):
         """Verify fix for SL classification when entry_price is 0."""
         symbol = 'ETH/USDT'
-        pos_key = f"P1_BYBIT_ETH_USDT"
+        pos_key = f"P1_BYBIT_ETH_USDT_1h"
         pos = {
             'symbol': symbol, 'side': 'BUY', 'status': 'filled', 
             'entry_price': 0, 'sl': 2000.0, 'tp': 2500.0

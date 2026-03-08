@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 import pandas as pd
-from strategy import WeightedScoringStrategy
+from src.strategy import WeightedScoringStrategy
 
 class TestWeightedScoringStrategy:
     @pytest.fixture

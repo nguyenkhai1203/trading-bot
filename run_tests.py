@@ -24,11 +24,14 @@ def run_tests():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     src_path = os.path.join(script_dir, "src")
 
-    # Use os.pathsep for cross-platform compatibility
+    # CRITICAL: Always put src_path at the front
     if "PYTHONPATH" in env:
         env["PYTHONPATH"] = f"{src_path}{os.pathsep}{env['PYTHONPATH']}"
     else:
         env["PYTHONPATH"] = src_path
+    
+    # Also add current dir to path in the subprocess
+    env["PYTHONPATH"] = f"{script_dir}{os.pathsep}{env['PYTHONPATH']}"
 
     # 2. Command to run pytest
     # We use -v for verbose output and -s to see print statements if needed

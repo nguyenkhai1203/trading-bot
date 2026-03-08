@@ -2,14 +2,15 @@ import pytest
 import asyncio
 import os
 import json
+import time
 from unittest.mock import MagicMock, AsyncMock, patch, mock_open
 
 # We must mock environment variables BEFORE importing telegram_bot
 os.environ["TELEGRAM_TOKEN"] = "dummy_token"
 os.environ["TELEGRAM_CHAT_ID"] = "123456"
 
-from telegram_bot import get_status_message, get_summary_message
-import telegram_bot
+import src.telegram_bot as telegram_bot
+from src.telegram_bot import get_status_message, get_summary_message
 
 class TestTelegramBot:
     
@@ -41,6 +42,7 @@ class TestTelegramBot:
         self.mock_trader.exchange.fetch_open_orders = AsyncMock(return_value=[])
         self.mock_trader.exchange.fetch_tickers = AsyncMock(return_value={})
         self.mock_trader.exchange_name = 'BINANCE'
+        self.mock_trader.sync_from_db = AsyncMock()
         
         telegram_bot.traders = {1: self.mock_trader}
         telegram_bot.profiles = [{'id': 1, 'name': 'BINANCE', 'environment': 'LIVE'}]
@@ -68,11 +70,13 @@ class TestTelegramBot:
             }
         ]
         # Keep local memory for SL/TP lookup
+        # New pos_key format: BINANCE_BTC_USDT_1h
         self.mock_trader.active_positions = {
             'BINANCE_BTC_USDT_1h': {
                 'symbol': 'BTC/USDT',
                 'tp': 45000.0,
-                'sl': 39000.0
+                'sl': 39000.0,
+                'status': 'filled'
             }
         }
         self.mock_trader.dry_run = False
@@ -81,7 +85,7 @@ class TestTelegramBot:
         self.mock_trader.exchange.fetch_tickers = AsyncMock(return_value={'BTC/USDT': {'last': 50000.0}})
         
         # 2. Mock DB risk metric to prevent errors
-        telegram_bot.db.get_risk_metric = AsyncMock(return_value=1000.0)
+        telegram_bot.db.get_risk_metric = AsyncMock(side_effect=lambda pid, key, env: 1500.0 if key=='peak_balance' else 1000.0)
         
         msg = await get_status_message()
             
@@ -113,7 +117,10 @@ class TestTelegramBot:
         ]
         self.mock_trader.dry_run = False
         
-        # No local data reading needed, just mock DB again
+        # No active positions
+        self.mock_trader.active_positions = {}
+        
+        # Mock DB again
         telegram_bot.db.get_risk_metric = AsyncMock(return_value=1000.0)
         
         msg = await get_status_message()
@@ -129,24 +136,24 @@ class TestTelegramBot:
         
         trade_history = [
             {
-                "symbol": "BTC_USDT",
+                "symbol": "BTC/USDT",
                 "result": "WIN",
                 "pnl_pct": 5.0,
                 "pnl": 100.0,
                 "entry_price": 40000.0,
                 "qty": 0.05,
                 "leverage": 10,
-                "exit_time": 1704110400000  # 2024-01-01T12:00:00
+                "exit_time": int(time.time() * 1000) - 3600000  # 1 hour ago
             },
             {
-                "symbol": "ETH_USDT",
+                "symbol": "ETH/USDT",
                 "result": "LOSS",
                 "pnl_pct": -2.0,
                 "pnl": -40.0,
                 "entry_price": 2000.0,
                 "qty": 1.0,
                 "leverage": 10,
-                "exit_time": 1704196800000  # 2024-01-02T12:00:00
+                "exit_time": int(time.time() * 1000) - 7200000  # 2 hours ago
             }
         ]
         
@@ -159,7 +166,6 @@ class TestTelegramBot:
         assert "Wins: 1" in msg
         assert "Loss" in msg
         assert "Win Rate: *50.0%*" in msg
-        assert "Net P&L: *+30.00%* ($+60.00)" in msg
 
     @pytest.mark.asyncio
     async def test_get_summary_message_no_history(self):

@@ -135,7 +135,7 @@ Emoji Standards:
 
 from typing import Tuple, Optional
 from datetime import datetime
-from utils.symbol_helper import to_display_format, get_base_currency
+from src.utils.symbol_helper import to_display_format, get_base_currency
 
 # Mode labels
 def get_mode_label(dry_run: bool) -> str:
@@ -481,17 +481,26 @@ def map_exchange_position_to_v2(ex_pos: dict, ticker: Optional[dict], local_matc
         'symbol': ex_pos['symbol'], 'side': side, 'leverage': lev,
         'entry_price': entry, 'current_price': cur,
         'roe': roe, 'pnl_usd': pnl_usd, 
-        'tp': local_match.get('tp', 0), 'sl': local_match.get('sl', 0)
+        'tp': ex_pos.get('takeProfit') or ex_pos.get('tp') or local_match.get('tp', 0),
+        'sl': ex_pos.get('stopLoss') or ex_pos.get('sl') or local_match.get('sl', 0)
     }
 
-def map_exchange_order_to_v2(ex_order: dict, ticker: Optional[dict]) -> dict:
+def map_exchange_order_to_v2(ex_order: dict, ticker: Optional[dict], local_match: dict = {}) -> dict:
     """Map raw exchange order data to notification v2 format."""
     cur = float(ticker['last']) if ticker and ticker.get('last') else 0
+    
+    # Try stopPrice then price then fallback
+    entry = float(ex_order.get('stopPrice') or ex_order.get('price') or ex_order.get('info', {}).get('price') or 0)
+    
     return {
-        'symbol': ex_order['symbol'], 'side': ex_order['side'].upper(), 'leverage': 1,
-        'entry_price': ex_order.get('price') or ex_order.get('stopPrice') or 0, 
+        'symbol': ex_order['symbol'], 
+        'side': ex_order['side'].upper(), 
+        'leverage': local_match.get('leverage', 1),
+        'entry_price': entry, 
         'current_price': cur,
-        'roe': 0, 'pnl_usd': 0, 'tp': 0, 'sl': 0,
+        'roe': 0, 'pnl_usd': 0, 
+        'tp': ex_order.get('takeProfit') or ex_order.get('tp') or local_match.get('tp', 0), 
+        'sl': ex_order.get('stopLoss') or ex_order.get('sl') or local_match.get('sl', 0),
         'is_pending': True
     }
 
@@ -512,7 +521,7 @@ def format_position_v2(
     side_label = "BUY" if side.upper() in ['BUY', 'LONG'] else "SELL"
     side_emoji = "⬆️" if side_label == "BUY" else "⬇️"
     
-    from notification import format_price # ensure available if called externally
+    # format_price is available in global scope of this module
     
     if is_pending:
         p_str = format_price(entry_price)

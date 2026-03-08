@@ -6,16 +6,16 @@ import sys
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES, RISK_PER_TRADE, STOP_LOSS_PCT, TAKE_PROFIT_PCT, TRADING_COMMISSION, SLIPPAGE_PCT
-from feature_engineering import FeatureEngineer
-from strategy import WeightedScoringStrategy
+from src import config
+from src.feature_engineering import FeatureEngineer
+from src.strategy import WeightedScoringStrategy
 from data_fetcher import DataFetcher
 import asyncio
-from risk_manager import RiskManager
+from src.risk_manager import RiskManager
 from unittest.mock import MagicMock, AsyncMock
 
 class Backtester:
-    def __init__(self, symbol, timeframe, exchange='BINANCE', initial_balance=10000, commission=TRADING_COMMISSION, slippage=SLIPPAGE_PCT):
+    def __init__(self, symbol, timeframe, exchange='BINANCE', initial_balance=10000, commission=config.TRADING_COMMISSION, slippage=config.SLIPPAGE_PCT):
         self.symbol = symbol
         self.timeframe = timeframe
         self.exchange = exchange.upper()
@@ -35,7 +35,7 @@ class Backtester:
         
         self.strategy = WeightedScoringStrategy(symbol=symbol, timeframe=timeframe, exchange=exchange)
         # Mock Risk Manager for backtest sizing logic
-        self.risk_manager = RiskManager(db=mock_db, profile_id=0, risk_per_trade=RISK_PER_TRADE)
+        self.risk_manager = RiskManager(db=mock_db, profile_id=0, risk_per_trade=config.RISK_PER_TRADE)
 
         # Data dir: absolute path to root/data where CSVs are stored
         self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
@@ -358,9 +358,9 @@ class Backtester:
 
 async def main():
     print("[*] Starting Global Backtest Session (ENABLED CONFIGS ONLY)...")
-    from config import TRADING_SYMBOLS, TRADING_TIMEFRAMES
+    from src import config
     # Load strategy config to get ENABLED status from DB
-    from config_manager import ConfigManager
+    from src.infrastructure.repository.config_manager import ConfigManager
     # Environment heuristic: if --test or --dry-run in args
     env = 'TEST' if ('--test' in sys.argv or '--dry-run' in sys.argv) else 'LIVE'
     mgr = await ConfigManager.get_instance(env)
@@ -374,17 +374,17 @@ async def main():
     watched_results = []
     
     # Import active exchanges from config
-    from config import ACTIVE_EXCHANGES, BINANCE_SYMBOLS, BYBIT_SYMBOLS
+    from src import config
     exchange_symbols = {
-        'BINANCE': BINANCE_SYMBOLS if BINANCE_SYMBOLS else TRADING_SYMBOLS,
-        'BYBIT': BYBIT_SYMBOLS if BYBIT_SYMBOLS else TRADING_SYMBOLS,
+        'BINANCE': config.BINANCE_SYMBOLS if config.BINANCE_SYMBOLS else config.TRADING_SYMBOLS,
+        'BYBIT': config.BYBIT_SYMBOLS if config.BYBIT_SYMBOLS else config.TRADING_SYMBOLS,
     }
     active_exchanges = [e for e in ['BINANCE', 'BYBIT'] if e in ACTIVE_EXCHANGES]
     
     for exchange in active_exchanges:
-        symbols = exchange_symbols.get(exchange, TRADING_SYMBOLS)
+        symbols = exchange_symbols.get(exchange, config.TRADING_SYMBOLS)
         for s in symbols:
-            for tf in TRADING_TIMEFRAMES:
+            for tf in config.TRADING_TIMEFRAMES:
                 # Lookup in DB-backed config map
                 config = config_map.get((exchange, s, tf), {})
                 is_enabled = config.get('enabled', False)

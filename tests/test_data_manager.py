@@ -3,7 +3,7 @@ import asyncio
 import os
 import pandas as pd
 from unittest.mock import MagicMock, AsyncMock, patch
-from data_manager import MarketDataManager
+from src.data_manager import MarketDataManager
 
 class TestDataManager:
     @pytest.fixture(autouse=True)
@@ -45,8 +45,8 @@ class TestDataManager:
         assert dm1.initialized is True
 
     @pytest.mark.asyncio
-    @patch('config.BINANCE_SYMBOLS', ['BTC/USDT'])
-    @patch('config.BYBIT_SYMBOLS', ['BTC/USDT'])
+    @patch('src.config.BINANCE_SYMBOLS', ['BTC/USDT'])
+    @patch('src.config.BYBIT_SYMBOLS', ['BTC/USDT'])
     async def test_update_data_fetch_and_store(self, dm):
         """Test fetching OHLCV data and storing it in data_store."""
         symbol = "BTC/USDT"
@@ -79,7 +79,7 @@ class TestDataManager:
         assert 'timestamp' in df.columns
 
     @pytest.mark.asyncio
-    @patch('config.BINANCE_SYMBOLS', ['BTC/USDT'])
+    @patch('src.config.BINANCE_SYMBOLS', ['BTC/USDT'])
     async def test_update_tickers_live_price(self, dm):
         """Test that update_tickers correctly updates the last candle's close price."""
         symbol = "BTC/USDT"

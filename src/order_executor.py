@@ -3,7 +3,7 @@ import time
 import json
 import logging
 from typing import Optional, Dict, List, Any
-from notification import send_telegram_message, format_position_filled, format_pending_order, format_order_cancelled
+from src.infrastructure.notifications.notification import send_telegram_message, format_position_filled, format_pending_order, format_order_cancelled
 
 class OrderExecutor:
     """
@@ -61,9 +61,7 @@ class OrderExecutor:
         pos_key = self.trader._get_pos_key(symbol, timeframe)
         
         # LIVE LOGIC START
-        tpsl_attached = False
-        if self.exchange_name == 'BYBIT' and (sl or tp):
-            tpsl_attached = True
+        tpsl_attached = self.trader.exchange.is_tpsl_attached_supported() and (sl or tp)
 
         if sl: params['stopLoss'] = sl
         if tp: params['takeProfit'] = tp

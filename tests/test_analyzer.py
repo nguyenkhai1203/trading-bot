@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import pytest
 import pandas as pd
-from analyzer import StrategyAnalyzer
+from src.analyzer import StrategyAnalyzer
 
 class TestAnalyzer:
     def test_analyzer_backtest_with_signals(self):

@@ -2,8 +2,8 @@ import pytest
 import pandas as pd
 import numpy as np
 from unittest.mock import MagicMock
-from analyzer import StrategyAnalyzer
-from strategy import WeightedScoringStrategy
+from src.analyzer import StrategyAnalyzer
+from src.analyzer import StrategyAnalyzer
 
 @pytest.fixture
 def mock_analyzer_data():
@@ -62,7 +62,7 @@ async def test_analyzer_update_config_with_bms():
     tf = '1h'
     weights = {'RSI_14': 1.0}
     
-    with patch('database.DataManager.get_instance', new_callable=AsyncMock) as mock_get_instance:
+    with patch('src.infrastructure.repository.database.DataManager.get_instance', new_callable=AsyncMock) as mock_get_instance:
         mock_db = AsyncMock()
         mock_get_instance.return_value = mock_db
         

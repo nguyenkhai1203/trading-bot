@@ -12,9 +12,9 @@ src_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 if src_dir not in sys.path:
     sys.path.append(src_dir)
 
-from analyzer import StrategyAnalyzer, _compute_and_cache_bms
-from strategy import WeightedScoringStrategy
-from feature_engineering import FeatureEngineer
+from src.analyzer import StrategyAnalyzer, _compute_and_cache_bms
+from src.strategy import WeightedScoringStrategy
+from src.feature_engineering import FeatureEngineer
 
 class TestBMSIntegratedAnalyzer(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -69,17 +69,18 @@ class TestBMSIntegratedAnalyzer(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kwargs.get('bms_zone'), 'RED')
             self.assertEqual(kwargs.get('bms_score'), 0.1)
 
-    @patch('analyzer._compute_and_cache_bms')
-    @patch('analyzer.StrategyAnalyzer.analyze')
-    @patch('analyzer.StrategyAnalyzer.get_features')
-    @patch('analyzer.StrategyAnalyzer.validate_weights')
-    @patch('analyzer.StrategyAnalyzer.update_config', new_callable=AsyncMock)
-    @patch('database.DataManager.get_instance')
-    @patch('notification.send_telegram_chunked')
-    @patch('analyzer.ThreadPoolExecutor')
-    async def test_run_global_optimization_commit_filter(self, mock_executor, mock_notify, mock_db, mock_update, mock_validate, mock_get_feat, mock_analyze, mock_bms):
+    @patch('src.analyzer._compute_and_cache_bms')
+    @patch('src.analyzer.StrategyAnalyzer.analyze')
+    @patch('src.analyzer.StrategyAnalyzer.get_features')
+    @patch('src.analyzer.StrategyAnalyzer.validate_weights')
+    @patch('src.analyzer.StrategyAnalyzer.update_config', new_callable=AsyncMock)
+    @patch('src.infrastructure.repository.database.DataManager.get_instance')
+    @patch('src.infrastructure.notifications.notification.send_telegram_chunked')
+    @patch('src.analyzer.run_nn_training', new_callable=AsyncMock)
+    @patch('src.analyzer.ThreadPoolExecutor')
+    async def test_run_global_optimization_commit_filter(self, mock_executor, mock_brain, mock_notify, mock_db, mock_update, mock_validate, mock_get_feat, mock_analyze, mock_bms):
         """Verify that commit logic filters by BMS zone bias."""
-        from analyzer import run_global_optimization
+        from src.analyzer import run_global_optimization
         
         # 1. Mock Sequential Executor
         mock_pool = MagicMock()
@@ -114,15 +115,18 @@ class TestBMSIntegratedAnalyzer(unittest.IsolatedAsyncioTestCase):
         mock_db_inst = AsyncMock()
         mock_db.return_value = mock_db_inst
         
-        # 6. Execute with mocks
-        with patch('analyzer.as_completed', side_effect=mock_as_completed):
-            with patch('config.ACTIVE_EXCHANGES', ['BYBIT']):
-                with patch('config.TRADING_SYMBOLS', ['BTC/USDT']):
-                    with patch('config.TRADING_TIMEFRAMES', ['1h']):
-                        with patch('config.BYBIT_SYMBOLS', ['BTC/USDT']):
+        # 6. Mock Brain
+        mock_brain.return_value = {"status": "success", "accuracy": 0.0, "mse": 0.0, "samples": 0}
+
+        # 7. Execute with mocks
+        with patch('src.analyzer.as_completed', side_effect=mock_as_completed):
+            with patch('src.config.ACTIVE_EXCHANGES', ['BYBIT']):
+                with patch('src.config.TRADING_SYMBOLS', ['BTC/USDT']):
+                    with patch('src.config.TRADING_TIMEFRAMES', ['1h']):
+                        with patch('src.config.BYBIT_SYMBOLS', ['BTC/USDT']):
                             # Also patch at analyzer module level for top-level imports
-                            with patch('analyzer.TRADING_SYMBOLS', ['BTC/USDT']):
-                                with patch('analyzer.TRADING_TIMEFRAMES', ['1h']):
+                            with patch('src.analyzer.TRADING_SYMBOLS', ['BTC/USDT']):
+                                with patch('src.analyzer.TRADING_TIMEFRAMES', ['1h']):
                                     with patch('sys.argv', ['analyzer.py']):
                                         await run_global_optimization(download=False)
         

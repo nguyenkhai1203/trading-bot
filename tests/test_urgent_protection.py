@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
-from execution import Trader
+from src.execution import Trader
 
 @pytest.mark.asyncio
 async def test_urgent_protection_tp_passed_buy():

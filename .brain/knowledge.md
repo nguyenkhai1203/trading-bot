@@ -8,43 +8,31 @@ The bot is designed with a modular architecture to support multiple exchanges, c
 
 ```mermaid
 graph TD
-    A[launcher.py] --> B[Trading Bot Loop]
-    A --> C[Telegram Command Bot]
+    A[src/bot.py] --> B[Application Layer]
+    A2[src/analyzer.py] --> B
     
-    subgraph "Core Engine"
-        B --> D[MarketDataManager]
-        B --> E[WeightedScoringStrategy]
-        E --> F[Neural Brain]
-        B --> G[Trader]
-        G --> G1[OrderExecutor]
-        G --> G2[CooldownManager]
-        G --> H[RiskManager]
-        G --> Z[Exchange Adapters]
+    subgraph "Application Layer (Use Cases)"
+        B[Trading Orchestrator]
+        B2[Optimization Orchestrator]
     end
     
-    subgraph "External Connections"
-        D <--> I[Exchange APIs]
-        Z <--> I
-        C <--> J[Telegram API]
-        B --> J
+    subgraph "Domain Layer (Pure Logic)"
+        C[Risk Service]
+        D[Strategy Service]
+        E[Neural Brain]
     end
     
-    subgraph "Data Persistence (SQLite)"
-        D <--> K[(ohlcv_cache table)]
-        G <--> L[(trades table)]
-        E <--> M[(strategy_config.json)]
-        G <--> N[(risk_metrics table)]
-        G <--> O[(ai_training_logs table)]
+    subgraph "Infrastructure Layer (Adapters)"
+        F[AccountSyncService]
+        G[Exchange Adapters]
+        H[DB/File Repository]
     end
-
-    subgraph "Optimization Loop (Analyzer)"
-        P[Analyzer.py] --> K
-        P --> M
-        P --> Q[Backtester]
-        Q --> P
-        P --> R[Brain Trainer]
-        R --> F
-    end
+    
+    B --> C
+    B --> G
+    B2 --> D
+    F --> G
+    G --> I[Exchange APIs]
 ```
 
 ---
@@ -78,7 +66,7 @@ When a signal is approved:
 
 The bot uses a specialized **Adapter Pattern** to handle multiple exchanges through a unified interface (`BaseAdapter`).
 
-*   **Standardization**: All adapters provide uniform methods for `fetch_positions`, `create_order`, and `place_stop_orders`.
+*   **Standardization**: All adapters provide uniform methods for `fetch_positions`, `create_order`, `place_stop_orders`.
 *   **Binance Adapter**: Handles `algoOrders` for SL/TP and uses specific timestamp synchronization.
 *   **Bybit Adapter**: Manages `category: linear` for all V5 API calls and handles separate standard vs. conditional trigger queues.
 *   **Factory**: `ExchangeFactory` initializes adapters in either **Live** or **Public** modes based on `.env` keys.
@@ -211,17 +199,26 @@ Allows remote interaction with the bot instance.
 *   **Impact**: Bot labeled SL losses as "TP" wins and failed to trigger mandatory SL cooldowns.
 *   **Lesson**: **Prioritize Exchange Metadata.** Use a precision-first resolver (`_infer_exit_reason`) that favors Bybit/Binance native trade categories (e.g., `stopOrderType`) over simple price distance. Cooldowns must be applied in *every* sync path immediately upon SL detection.
 
-19. DB Status Race Condition (Cancelled vs Closed)
+### 19. DB Status Race Condition (Cancelled vs Closed)
 *   **Discovery**: Orders cancelled or evicted for margin reasons were appearing as "CLOSED" in the DB.
 *   **Cause**: `_clear_db_position` was called *after* removing the position from memory. Without the memory record, it couldn't see the `status='pending'` flag and defaulted to `CLOSED`.
 *   **Lesson**: **DB Updates must precede Memory Deletion.** Always call database finalization methods while the object is still in memory to ensure metadata (status, IDs) is available for accurate state recording. Added string-based fallback for "Cancelled/Eviction" reasons as a safety layer.
 
-20. Position Sizing & Safety Caps (High-Volume Volatility)
+### 20. God Object Fragmentation (The execution.py bottleneck)
+*   **Discovery**: `execution.py` grew to 3500+ lines, combining API logic, risk logic, and DB logic in one class (`Trader`).
+*   **Impact**: High risk of side-effects, circular imports, and slow unit testing.
+*   **Lesson**: **Adopt Clean Architecture Early.** Decoupling the system into 4 explicit layers (Domain, Application, Infrastructure, Presentation) is necessary to keep complexity manageable as the project scales.
+
+### 21. Vectorization for Backtesting Performance
+*   **Discovery**: Standard Pandas `iterrows()` is the primary bottleneck in `backtester.py`.
+*   **Solution**: Use `df.to_dict('records')` or pure NumPy arrays for high-speed simulation, aligning with optimizations already present in the Analyzer.
+
+### 22. Position Sizing & Safety Caps (High-Volume Volatility)
 *   **Discovery**: Bot executed trades with $40-41 volume despite a $5 global margin limit.
 *   **Cause**: `CONFIDENCE_TIERS` in `config.py` were misaligned (High tier used $8 margin), and the logic in `strategy.py` bypassed global safety caps when using these global tiers.
 *   **Lesson**: **Enforce Global Caps Universally.** Sizing logic must apply `GLOBAL_MAX_COST_PER_TRADE` and `GLOBAL_MAX_LEVERAGE` as the final step of calculation, regardless of the configuration source. Align tier settings with the most restrictive global limits to prevent accidental over-leveraging.
 
-21. Understanding Notional Volume vs. Margin
+### 23. Understanding Notional Volume vs. Margin
 *   **Discovery**: User was confused by $40 volume on Bybit while having only $100 balance. 
 *   **Confirmation**: In Futures, **Notional Volume = Margin x Leverage**. A $40 position with 5x leverage only requires $8.0 of real balance (Margin). This is why the bot can open multiple positions simultaneously without draining the entire $100 balance immediately.
 *   **Logic Status**: The current logic is mathematically correct and aligned with standard Futures trading. Binance appeared "smaller" simply because those specific trades hit lower confidence tiers ($4-$6 margin) or used lower đòn bẩy.

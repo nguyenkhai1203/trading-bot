@@ -33,13 +33,13 @@ def custom_print(*args, **kwargs):
     _orig_print(f"{now}", *args, **kwargs)
 builtins.print = custom_print
 
-import config
-from database import DataManager
-from data_manager import MarketDataManager
-from strategy import WeightedScoringStrategy 
-from risk_manager import RiskManager
-from execution import Trader
-from notification import (
+from src import config
+from src.infrastructure.repository.database import DataManager
+from src.data_manager import MarketDataManager
+from src.strategy import WeightedScoringStrategy 
+from src.risk_manager import RiskManager
+from src.execution import Trader
+from src.infrastructure.notifications.notification import (
     send_telegram_message,
     format_pending_order,
     format_position_filled,
@@ -48,7 +48,7 @@ from notification import (
     format_status_update,
     format_adaptive_trigger
 )
-from signal_tracker import SignalTracker
+from src.signal_tracker import SignalTracker
 
 class BalanceTracker:
     """Manages shared balance state across multiple bots to prevent race conditions."""
@@ -325,7 +325,7 @@ async def main():
     
     # 2. Pre-load Strategy Configs into Cache
     print("📥 Syncing strategy configurations from database...")
-    from config_manager import ConfigManager
+    from src.infrastructure.repository.config_manager import ConfigManager
     config_mgr = await ConfigManager.get_instance(env_str)
     all_configs = await config_mgr.get_all_configs()
     WeightedScoringStrategy.update_cache(all_configs)
@@ -337,7 +337,7 @@ async def main():
         print(f"👤 Loading Profile: {p['name']} ({p['exchange']} {p['environment']})")
         
         # Create dedicated adapter
-        from exchange_factory import create_adapter_from_profile
+        from src.infrastructure.adapters.exchange_factory import create_adapter_from_profile
         adapter = await create_adapter_from_profile(p)
         if not adapter:
             print(f"❌ Failed to create adapter for {p['name']}")

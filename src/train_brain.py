@@ -8,8 +8,8 @@ from datetime import datetime
 # Add src to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from neural_brain import NeuralBrain
-from database import DataManager
+from src.neural_brain import NeuralBrain
+from src.infrastructure.repository.database import DataManager
 
 async def load_training_data(env='LIVE'):
     """Fetch training data from ai_training_logs table."""
@@ -137,5 +137,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(run_nn_training())
     finally:
-        from database import DataManager
+        from src.infrastructure.repository.database import DataManager
         asyncio.run(DataManager.clear_instances())

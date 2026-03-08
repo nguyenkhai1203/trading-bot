@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import config
-from database import DataManager
-from exchange_factory import create_adapter_from_profile
+from src.infrastructure.repository.database import DataManager
+from src.infrastructure.adapters.exchange_factory import create_adapter_from_profile
 
 # Setup logging
 logging.basicConfig(

@@ -8,8 +8,8 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '
 
 from btc_analyzer import BTCAnalyzer
 from data_manager import MarketDataManager
-from database import DataManager
-import config
+from src.infrastructure.repository.database import DataManager
+from src import config
 
 async def main():
     logging.basicConfig(level=logging.INFO)

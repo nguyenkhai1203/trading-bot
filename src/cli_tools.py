@@ -3,9 +3,9 @@ import json
 import os
 from typing import Dict, Any
 
-from data_manager import MarketDataManager
-from execution import Trader
-from config import TRADING_SYMBOLS, LEVERAGE, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+from src.data_manager import MarketDataManager
+from src.execution import Trader
+from src.config import TRADING_SYMBOLS, LEVERAGE, STOP_LOSS_PCT, TAKE_PROFIT_PCT
 
 
 async def rebuild_positions_from_open_orders(save_path: str = None) -> Dict[str, Any]:
@@ -158,7 +158,7 @@ async def check_missing_sl_tp_all():
 
 async def get_market_info(symbol: str):
     """Fetch and print market limits and precision for a symbol."""
-    from exchange_factory import get_exchange_adapter
+    from src.infrastructure.adapters.exchange_factory import get_exchange_adapter
     adapter = get_exchange_adapter()
     try:
         await adapter.exchange.load_markets()

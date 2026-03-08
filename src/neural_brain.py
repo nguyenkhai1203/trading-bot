@@ -73,7 +73,7 @@ class NeuralBrain:
     async def save_model_to_db(self, env='LIVE', stats=None):
         """Async save to database."""
         try:
-            from database import DataManager
+            from src.infrastructure.repository.database import DataManager
             weights = {
                 'W1': self.weights['W1'].tolist(),
                 'b1': self.weights['b1'].tolist(),
@@ -129,7 +129,7 @@ class NeuralBrain:
     async def sync_from_db(self, env='LIVE'):
         """Async update weights from database."""
         try:
-            from database import DataManager
+            from src.infrastructure.repository.database import DataManager
             db = await DataManager.get_instance()
             model_data = await db.get_ai_model('neural_brain', env)
             

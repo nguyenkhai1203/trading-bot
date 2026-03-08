@@ -3,7 +3,7 @@ import asyncio
 import pandas as pd
 import os
 import time
-from config import BINANCE_API_KEY, BINANCE_API_SECRET
+from src.config import BINANCE_API_KEY, BINANCE_API_SECRET
 
 class DataFetcher:
     def __init__(self, exchange_id='binance', symbol='BTC/USDT', timeframe='1h'):

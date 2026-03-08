@@ -2,7 +2,7 @@ import pytest
 import os
 import json
 from unittest.mock import MagicMock, patch
-from signal_tracker import SignalTracker
+from src.signal_tracker import SignalTracker
 
 class TestSignalTracker:
     @pytest.fixture

@@ -2,7 +2,7 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from execution import Trader
+from src.execution import Trader
 import ccxt.async_support as ccxt
 
 class TestExecutionBasic:

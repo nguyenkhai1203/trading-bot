@@ -11,7 +11,7 @@ if os.name == 'nt':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 async def main():
-    from database import DataManager
+    from src.infrastructure.repository.database import DataManager
     from config import BINANCE_API_KEY, BINANCE_API_SECRET, BYBIT_API_KEY, BYBIT_API_SECRET
     db = await DataManager.get_instance('LIVE')
 

@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, AsyncMock, patch
 # Add src to sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from adapters.bybit_adapter import BybitAdapter
-from execution import Trader
+from src.infrastructure.adapters.bybit_adapter import BybitAdapter
+from src.execution import Trader
 
 @pytest.mark.asyncio
 async def test_bybit_adapter_promotes_sltp():
@@ -55,6 +55,9 @@ async def test_reconcile_bybit_symbol_normalization():
     mock_ex.is_public_only = False
     mock_ex.can_trade = True
     mock_ex.milliseconds = MagicMock(return_value=int(time.time() * 1000))
+    # Mock infer_exit_reason
+    from src.infrastructure.adapters.bybit_adapter import BybitAdapter
+    mock_ex.infer_exit_reason = BybitAdapter.infer_exit_reason
     # Adapter method mocks
     mock_ex.fetch_positions = AsyncMock(return_value=[
         {

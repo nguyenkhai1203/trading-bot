@@ -5,7 +5,7 @@ import json
 import os
 import time
 
-from neural_brain import NeuralBrain
+from src.neural_brain import NeuralBrain
 
 
 class Strategy:
@@ -134,7 +134,7 @@ class WeightedScoringStrategy(Strategy):
         res = { "leverage": 3, "cost_usdt": 3.0 } 
         
         if not hasattr(self, 'config_data') or 'tiers' not in self.config_data:
-            import config
+            from src import config
             # Use CONFIDENCE_TIERS from config.py as the primary source
             tiers = getattr(config, 'CONFIDENCE_TIERS', {})
             
@@ -153,17 +153,17 @@ class WeightedScoringStrategy(Strategy):
         tiers = self.config_data['tiers']
         selected_tier = res # default
              
-        from config import GLOBAL_MAX_LEVERAGE, GLOBAL_MAX_COST_PER_TRADE
+        from src import config
         
         final_tier = selected_tier.copy()
         if 'leverage' in final_tier:
-             final_tier['leverage'] = min(final_tier['leverage'], GLOBAL_MAX_LEVERAGE)
+             final_tier['leverage'] = min(final_tier['leverage'], config.GLOBAL_MAX_LEVERAGE)
         
         if 'cost_usdt' in final_tier:
-             final_tier['cost_usdt'] = min(final_tier['cost_usdt'], GLOBAL_MAX_COST_PER_TRADE)
+             final_tier['cost_usdt'] = min(final_tier['cost_usdt'], config.GLOBAL_MAX_COST_PER_TRADE)
              
         if 'cost_usdt' not in final_tier and 'leverage' in final_tier:
-             final_tier['cost_usdt'] = min(5.0, GLOBAL_MAX_COST_PER_TRADE)
+             final_tier['cost_usdt'] = min(5.0, config.GLOBAL_MAX_COST_PER_TRADE)
              
         return final_tier
 
@@ -172,7 +172,7 @@ class WeightedScoringStrategy(Strategy):
         Calculates SL and TP percentages. 
         If dynamic SLTP is enabled, uses ATR for volatility-based protection.
         """
-        import config
+        from src import config
         
         # Default from config
         sl_pct = getattr(config, 'STOP_LOSS_PCT', 0.02)
@@ -250,62 +250,29 @@ class WeightedScoringStrategy(Strategy):
         if not self.config_data.get('enabled', True):
             return {'side': 'SKIP', 'confidence': 0.0, 'comment': 'Disabled in config'}
 
-        score_long = 0.0
-        score_short = 0.0
-        reasons_long = []
-        reasons_short = []
+        from src.domain.services.strategy_service import StrategyService
         
         # Get base weights, optionally adjusted by adaptive learning
         w = self.weights.copy()
-        
         if use_adaptive and tracker:
             try:
                 w = tracker.adjust_weights(w)
             except Exception:
-                pass  # Fallback to base weights if tracker error
+                pass
 
-        # Iterate through all weights in config
-        for signal_name, weight in w.items():
-            if weight == 0: continue
-            
-            # Construct column name internally used in FeatureEngineer
-            col_name = f"signal_{signal_name}"
-            
-            # Check if this signal is active in the current row
-            if col_name in row and row[col_name]:
-                # Use pre-calculated sets for extreme speed (O(1) member check)
-                if signal_name in self.long_signals_cache:
-                    score_long += weight
-                    reasons_long.append(signal_name)
-                elif signal_name in self.short_signals_cache:
-                    score_short += weight
-                    reasons_short.append(signal_name)
+        # 1. Base Strategy Scoring
+        score_long, score_short, reasons_long, reasons_short = StrategyService.calculate_weighted_score(
+            row, w, self.long_signals_cache, self.short_signals_cache
+        )
                     
-        # === BMS WEIGHTING (INTELLIGENT SHIELD) ===
-        # Formula: FinalScore = (AltScore * w_alt_adj) + (BMS * 10 * w_btc_adj)
+        # 2. BMS WEIGHTING (INTELLIGENT SHIELD)
         w_btc = getattr(self, 'w_btc', 0.5)
         w_alt = getattr(self, 'w_alt', 0.5)
         
         if bms_score is not None:
-            w_btc_adj = w_btc
-            w_alt_adj = w_alt
-
-            # 1. Zone Adjustments
-            if bms_zone == 'GREEN':
-                # Boost BTC weight in GREEN zone (risk-on)
-                w_btc_adj = min(w_btc * 1.2, 0.9)
-                w_alt_adj = 1.0 - w_btc_adj
-                # Veto Short signals in GREEN zone
-                score_short = 0.0
-            elif bms_zone == 'RED':
-                # RED zone is defensive (risk-off)
-                # Veto Long signals in RED zone
-                score_long = 0.0
-                # In RED zone, we don't boost BTC weight, we just keep it or shift to exit
-            
-            # 2. Score Calculation
-            score_long = (score_long * w_alt_adj) + (bms_score * 10.0 * w_btc_adj)
-            score_short = (score_short * w_alt_adj) + ((1.0 - bms_score) * 10.0 * w_btc_adj)
+            score_long, score_short = StrategyService.apply_bms_weighting(
+                score_long, score_short, bms_score, bms_zone, w_btc, w_alt
+            )
 
         # === DECISION ===
         thresholds = self.config_data.get('thresholds', {'entry_score': 5.0, 'exit_score': 2.5})

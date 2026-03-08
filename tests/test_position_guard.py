@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch, call
-from execution import Trader
+from src.execution import Trader
 
 
 def _make_trader(exchange_name='BYBIT'):
@@ -25,6 +25,7 @@ def _make_trader(exchange_name='BYBIT'):
     trader = Trader(mock_ex, db=mock_db, profile_id=1, dry_run=False)
     trader.exchange_name = exchange_name
     trader.logger = MagicMock()
+    trader._check_min_notional = MagicMock(return_value=(True, "", 100.0))
     trader._sl_cooldowns = {}
     return trader
 

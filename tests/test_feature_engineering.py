@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from feature_engineering import FeatureEngineer
+from src.feature_engineering import FeatureEngineer
 
 class TestFeatureEngineer:
     @pytest.fixture

@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime, timedelta
-from risk_manager import RiskManager
+from src.risk_manager import RiskManager
 
 class TestRiskManager:
     @pytest.fixture
@@ -60,10 +60,11 @@ class TestRiskManager:
         """Verify risk-based position sizing."""
         balance = 1000
         entry = 50000
-        sl = 49000 # 2% price diff
+        sl = 49000 # 2% price diff (1000 USD)
         
-        # Risk Amount = 1000 * 0.02 = 20
-        # Qty = 20 / 1000 = 0.02
+        # Risk Amount = 1000 * 0.02 = 20 USD
+        # Price Diff = 1000 USD
+        # Qty = 20 / 1000 = 0.02 BTC
         qty = rm.calculate_position_size(balance, entry, sl)
         assert qty == pytest.approx(0.02)
         
@@ -71,9 +72,11 @@ class TestRiskManager:
         # Notional = 0.02 * 50000 = 1000. Margin needed at 5x = 200. (Safe)
         
         # Test extreme risk that exceeds account at given leverage
-        # Entry 50000, SL 49999. Qty = 20 / 1 = 20. Notional = 1M. Margin needed = 200k.
-        # Max Notional at 5x leverage = 1000 * 5 = 5000. Max Size = 5000 / 50000 = 0.1
-        qty_clamped = rm.calculate_position_size(balance, entry, 49999)
+        # Entry 50000, SL 49990. Price Diff = 10. Qty = 20 / 10 = 2.
+        # Notional = 2 * 50000 = 100,000. 
+        # Max Notional at 5x leverage = 1000 * 5 = 5000. 
+        # Max Qty = 5000 / 50000 = 0.1
+        qty_clamped = rm.calculate_position_size(balance, entry, 49990)
         assert qty_clamped == pytest.approx(0.1)
 
     def test_calculate_size_by_cost(self, rm):
@@ -96,7 +99,7 @@ class TestRiskManager:
 
     def test_calculate_sl_tp_atr(self, rm):
         """Verify ATR-based SL/TP."""
-        # Long: SL = 100 - (2*5) = 90, TP = 100 + (3*5) = 115
+        # Long: SL = 100 - (2.0*5) = 90, TP = 100 + (3.0*5) = 115
         sl, tp = rm.calculate_sl_tp(100, 'LONG', atr=5)
         assert sl == 90
         assert tp == 115

@@ -13,8 +13,8 @@ from typing import List, Set
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from database import DataManager
-from exchange_factory import create_adapter_from_profile
+from src.infrastructure.repository.database import DataManager
+from src.infrastructure.adapters.exchange_factory import create_adapter_from_profile
 from utils.symbol_helper import to_raw_format
 
 async def manage_orphans(env: str, execute: bool = False):

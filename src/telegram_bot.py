@@ -31,16 +31,16 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
-from notification import (
+from src.infrastructure.notifications.notification import (
     format_position_v2, format_portfolio_update_v2, format_bms_report,
     map_exchange_position_to_v2, map_exchange_order_to_v2
 )
-from utils.symbol_helper import to_raw_format
-from database import DataManager
-from data_manager import MarketDataManager
-from exchange_factory import create_adapter_from_profile
-from execution import Trader
-from analyzer import run_global_optimization
+from src.utils.symbol_helper import to_raw_format
+from src.infrastructure.repository.database import DataManager
+from src.data_manager import MarketDataManager
+from src.infrastructure.adapters.exchange_factory import create_adapter_from_profile
+from src.execution import Trader
+from src.analyzer import run_global_optimization
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -148,6 +148,9 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
         label = f"{p['name']} ({p['environment']})"
         exchanges_payload[label] = {'active': [], 'pending': []}
         
+        # Fresh sync from DB to catch newly opened/pending trades from the Orchestrator
+        await t.sync_from_db()
+        
         # 1. Fetch FRESH positions from exchange for LIVE profiles
         # For DRY_RUN, we still rely on memory as there is no remote exchange state.
         if not t.dry_run:
@@ -192,8 +195,14 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                     o_type = str(eo.get('type') or '').upper()
                     is_reduce = eo.get('reduceOnly') or eo.get('info', {}).get('reduceOnly') == 'true'
                     if 'STOP' not in o_type and 'TAKE' not in o_type and not is_reduce:
-                        ticker = tickers.get(eo['symbol'])
-                        order_v2 = map_exchange_order_to_v2(eo, ticker)
+                        sym = eo['symbol']
+                        ticker = tickers.get(sym)
+                        
+                        # Find local match for TP/SL (common for limit entries)
+                        matches = [lp for lp in t.active_positions.values() if t._normalize_symbol(lp['symbol']) == t._normalize_symbol(sym)]
+                        local_match = next((lp for lp in matches if lp.get('tp') or lp.get('sl')), matches[0] if matches else {})
+                        
+                        order_v2 = map_exchange_order_to_v2(eo, ticker, local_match)
                         exchanges_payload[label]['pending'].append(order_v2)
                         total_pending += 1
             except Exception as e:
