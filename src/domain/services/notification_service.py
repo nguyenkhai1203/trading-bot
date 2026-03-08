@@ -69,6 +69,42 @@ class NotificationService:
         except Exception as e:
             self.logger.error(f"Failed to send cancellation notification: {e}")
 
+    async def notify_position_closed(
+        self, 
+        trade: Any, 
+        exit_price: float, 
+        pnl: float, 
+        pnl_pct: float, 
+        reason: str, 
+        dry_run: bool = False
+    ):
+        """Send notification for a closed position."""
+        try:
+            from datetime import datetime
+            
+            # Convert timestamps if available
+            entry_dt = datetime.fromtimestamp(trade.entry_time / 1000) if getattr(trade, 'entry_time', None) else None
+            exit_dt = datetime.now() # Use now as fallback for sync-detected closure
+            
+            terminal_msg, telegram_msg = notification.format_position_closed(
+                symbol=trade.symbol,
+                timeframe=trade.timeframe,
+                side=trade.side,
+                entry_price=trade.entry_price,
+                exit_price=exit_price,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                reason=reason,
+                entry_time=entry_dt,
+                exit_time=exit_dt,
+                dry_run=dry_run,
+                exchange_name=trade.exchange
+            )
+            self.logger.info(terminal_msg)
+            await notification.send_telegram_message(telegram_msg)
+        except Exception as e:
+            self.logger.error(f"Failed to send closed notification: {e}")
+
     async def notify_generic(self, message: str):
         """Send a generic text notification."""
         self.logger.info(message)

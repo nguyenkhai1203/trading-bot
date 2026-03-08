@@ -212,7 +212,7 @@ class TradeOrchestrator:
                 today_trades = [t for t in history if (getattr(t, 'exit_time', None) or 0) >= today_start]
                 
                 for t in today_trades:
-                    total_loss += getattr(t, 'pnl', 0.0)
+                    total_loss += getattr(t, 'pnl', None) or 0.0
             except Exception as e:
                 self.logger.error(f"Error calculating PnL for circuit breaker: {e}")
 

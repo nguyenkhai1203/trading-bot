@@ -132,7 +132,6 @@ class MonitorPositionsUseCase:
             if close_trade:
                 exit_price = float(close_trade.get('price', exit_price))
                 # Infer reason (simplified logic: if exit < entry for BUY -> SL)
-                # In a more advanced version, we check order type or comment
                 if trade.side == 'BUY':
                     reason = 'SL' if exit_price < trade.entry_price else 'TP'
                 else:
@@ -143,24 +142,38 @@ class MonitorPositionsUseCase:
                     self.logger.info(f"[{symbol}] Sync detected SL closure. Applying SL Cooldown.")
                     await self.cooldown_manager.set_sl_cooldown(ex_name, symbol, profile['id'])
 
-                # Calculate PnL if possible (simplified absolute PnL)
-                # PnL = (Exit - Entry) * Qty * Leverage? No, typically exchange PnL is better.
-                # For now just log closure
+                # Calculate PnL (Simplified for notifications)
+                qty = float(trade.qty)
+                leverage = float(trade.leverage or 10)
+                if trade.side == 'BUY':
+                    pnl = (exit_price - trade.entry_price) * qty
+                else:
+                    pnl = (trade.entry_price - exit_price) * qty
+                
+                margin = (trade.entry_price * qty) / leverage if (trade.entry_price and qty and leverage) else 1.0
+                pnl_pct = (pnl / margin * 100) if margin > 0 else 0.0
             
             # Update DB
             await self.trade_repo.update_status(
                 trade.id, 
                 status='CLOSED',
                 exit_reason=reason,
-                exit_price=exit_price
+                exit_price=exit_price,
+                pnl=pnl
             )
             
-            # Notify
-            await self.notification_service.notify_generic(
-                f"✅ **TRADE CLOSED (SYNC)** | {symbol} | Reason: {reason} | Price: {exit_price}"
+            # Notify - Using structured notification to include PnL and fixed TP/SL
+            is_live = str(profile.get('environment', 'LIVE')).upper() == 'LIVE'
+            await self.notification_service.notify_position_closed(
+                trade=trade,
+                exit_price=exit_price,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                reason=reason,
+                dry_run=not is_live
             )
             
-            self.logger.info(f"Resolved ghost {symbol} as {reason} at {exit_price}")
+            self.logger.info(f"Resolved ghost {symbol} as {reason} at {exit_price} | PnL: ${pnl:.2f}")
 
         except Exception as e:
             self.logger.error(f"Failed to resolve ghost {symbol}: {e}")
