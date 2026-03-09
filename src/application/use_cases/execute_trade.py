@@ -96,7 +96,7 @@ class ExecuteTradeUseCase:
             if current_trade.side != side.upper():
                 if conf >= 0.6: # Moderate confidence required for reversal
                     self.logger.info(f"🔄 **REVERSAL** | {symbol}: Closing {current_trade.side} for {side}")
-                    await adapter.close_position(symbol)
+                    await adapter.close_position(symbol, current_trade.side, current_trade.qty)
                     await self.trade_repo.update_status(current_trade.id, 'CLOSED', exit_reason='REVERSAL')
                     await self.notification_service.notify_generic(f"🔄 **REVERSAL** | {symbol} | Closing {current_trade.side} for {side}")
                     # Continue to open new position
@@ -222,7 +222,7 @@ class ExecuteTradeUseCase:
                 
                 # Trigger Margin Throttling (account-wide via shared cache)
                 acc_key = getattr(adapter, 'account_key', f"{ex_name}_GLOBAL")
-                await self.cooldown_manager.handle_margin_error(acc_key, {}, ex_name) 
+                await self.cooldown_manager.handle_margin_error(acc_key, ex_name) 
                 raise InsufficientFundsError(str(e))
             else:
                 self.logger.error(f"Trade execution failed for {symbol}: {e}")

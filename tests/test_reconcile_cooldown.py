@@ -1,17 +1,20 @@
-import unittest
+import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
 import sys
 import os
 import inspect
+import time
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.execution import Trader
+from src.infrastructure.repository.database import DataManager
 
-class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+class TestTraderCooldownLogic:
+    @pytest.fixture(autouse=True)
+    async def setup(self):
         # Create a mock exchange
         self.mock_exchange = MagicMock()
         self.mock_exchange.name = 'BYBIT'
@@ -24,7 +27,7 @@ class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
         self.trader = Trader(self.mock_exchange, db=self.mock_db, profile_id=1, dry_run=False)
         self.trader.logger = MagicMock()
         
-        # Ensure cooldowns file operations are mocked entirely to prevent disk I/O side effects during tests
+        # Ensure cooldowns file operations are mocked entirely
         self.trader._load_cooldowns = MagicMock()
         self.trader._save_cooldowns = MagicMock()
         
@@ -42,11 +45,15 @@ class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
         from src.infrastructure.adapters.bybit_adapter import BybitAdapter
         adapter = BybitAdapter(self.mock_exchange)
         self.mock_exchange.infer_exit_reason = adapter.infer_exit_reason
+        
+        yield
+        
+        # Cleanup
+        await DataManager.clear_instances()
 
     async def run_reconciliation_test(self, side, entry_price, sl_price, exit_price):
         """Helper to simulate the missing position scenario in reconcile_positions."""
         symbol = 'BTC/USDT'
-        # IMPORTANT: Pos key format used by real bot is: e.g. P1_BYBIT_BTC_USDT_1h
         pos_key = f"P{self.trader.profile_id}_{self.mock_exchange.name}_{symbol.replace('/', '_')}_1h"
         
         # 1. Setup Active Position
@@ -65,7 +72,6 @@ class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
         self.trader._missing_order_counts = {}
 
         # 2. Mock Exchange API Responses
-        # Exchange returns no open positions (meaning it closed)
         self.mock_exchange.fetch_positions = AsyncMock(return_value=[])
         self.mock_exchange.fetch_open_orders = AsyncMock(return_value=[])
         
@@ -80,59 +86,34 @@ class TestTraderCooldownLogic(unittest.IsolatedAsyncioTestCase):
             }
         ])
 
-        # Overwrite retry mechanism to avoid sleeping during tests
+        # Overwrite retry mechanism
         self.trader._execute_with_timestamp_retry = AsyncMock()
         
-        # Override the specific calls in reconcile_positions
         async def mock_execute(func, *args, **kwargs):
-            try:
-                if inspect.iscoroutinefunction(func) or isinstance(func, AsyncMock):
-                    return await func(*args, **kwargs)
-                else:
-                    return func(*args, **kwargs)
-            except Exception as e:
-                print(f"Exception in mock_execute: {e}")
-                raise e
+            if inspect.iscoroutinefunction(func) or isinstance(func, AsyncMock):
+                return await func(*args, **kwargs)
+            else:
+                return func(*args, **kwargs)
         self.trader._execute_with_timestamp_retry.side_effect = mock_execute
 
-        # Print suppression during test removed for debugging
-        # Run the reconciliation
-        print(f"Running test for side {side}, entry {entry_price}, exit {exit_price}")
-        
-        # Output all warnings from logger
-        self.trader.logger.warning = lambda msg: print(f"WARNING: {msg}")
-        self.trader.logger.error = lambda msg: print(f"ERROR: {msg}")
-        self.trader.logger.info = lambda msg: print(f"INFO: {msg}")
-
-        print(f"Pre-Reconcile Active pos keys: {list(self.trader.active_positions.keys())}")
-        print(f"Self Exchange Name: {self.trader.exchange_name}")
-
         await self.trader.reconcile_positions(auto_fix=True, force_verify=True)
-        
-        print(f"Post-Reconcile Active pos keys: {list(self.trader.active_positions.keys())}")
 
+    @pytest.mark.asyncio
     async def test_cooldown_triggered_on_clear_loss(self):
-        # BUY at 60000, SL at 59000. Exited at 58500 (Loss)
         await self.run_reconciliation_test(side='BUY', entry_price=60000.0, sl_price=59000.0, exit_price=58500.0)
         self.trader.set_sl_cooldown.assert_called_once_with('BTC/USDT')
 
+    @pytest.mark.asyncio
     async def test_cooldown_triggered_on_short_clear_loss(self):
-        # SELL at 60000, SL at 61000. Exited at 61500 (Loss)
         await self.run_reconciliation_test(side='SELL', entry_price=60000.0, sl_price=61000.0, exit_price=61500.0)
         self.trader.set_sl_cooldown.assert_called_once_with('BTC/USDT')
 
+    @pytest.mark.asyncio
     async def test_cooldown_triggered_on_profitable_sl_hit(self):
-        # BUY at 60000, SL trailed to 65000. Exited at 64900 (Profit, but very close to SL!)
-        # Difference = abs(64900 - 65000) / 65000 = 100 / 65000 = 0.0015 (< 0.005)
         await self.run_reconciliation_test(side='BUY', entry_price=60000.0, sl_price=65000.0, exit_price=64900.0)
         self.trader.set_sl_cooldown.assert_called_once_with('BTC/USDT')
 
+    @pytest.mark.asyncio
     async def test_cooldown_NOT_triggered_on_clear_tp(self):
-        # BUY at 60000, SL at 59000, TP hit at 68000.
-        # It's a clear profit and > 0.5% away from SL.
         await self.run_reconciliation_test(side='BUY', entry_price=60000.0, sl_price=59000.0, exit_price=68000.0)
         self.trader.set_sl_cooldown.assert_not_called()
-
-
-if __name__ == '__main__':
-    unittest.main()

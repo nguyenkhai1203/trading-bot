@@ -1,7 +1,7 @@
 """
 Tests for check_margin_error: 15-min cooldown + confidence-aware smart eviction.
 """
-import unittest
+import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
 import sys
@@ -10,7 +10,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from src.execution import Trader
-
+from src.infrastructure.repository.database import DataManager
 
 def _make_trader():
     """Helper: create a minimal Trader with mocked exchange and DB."""
@@ -25,7 +25,6 @@ def _make_trader():
     trader.cancel_pending_order = AsyncMock()
     return trader
 
-
 def _pending(order_id, conf, symbol='ETH/USDT'):
     return {
         'order_id': order_id,
@@ -34,7 +33,6 @@ def _pending(order_id, conf, symbol='ETH/USDT'):
         'entry_confidence': conf,
     }
 
-
 def _active_filled(conf, symbol='BTC/USDT'):
     return {
         'symbol': symbol,
@@ -42,12 +40,15 @@ def _active_filled(conf, symbol='BTC/USDT'):
         'entry_confidence': conf,
     }
 
-
 INSUF_ERROR = "insufficient balance -2019"
 
+class TestMarginCooldown:
+    @pytest.fixture(autouse=True)
+    async def cleanup(self):
+        yield
+        await DataManager.clear_instances()
 
-class TestMarginCooldown(unittest.IsolatedAsyncioTestCase):
-
+    @pytest.mark.asyncio
     async def test_cooldown_is_15_minutes(self):
         trader = _make_trader()
         before = time.time()
@@ -55,26 +56,30 @@ class TestMarginCooldown(unittest.IsolatedAsyncioTestCase):
         shared = Trader._shared_account_cache[trader.account_key]
         cooldown_until = shared.get('margin_cooldown_until', 0)
         # Should be ~900s from now (allow ±5s tolerance)
-        self.assertAlmostEqual(cooldown_until - before, 900, delta=5)
+        assert abs((cooldown_until - before) - 900) < 5
 
+    @pytest.mark.asyncio
     async def test_throttled_true_during_cooldown(self):
         trader = _make_trader()
         await trader.check_margin_error(INSUF_ERROR)
-        self.assertTrue(trader.is_margin_throttled())
+        assert trader.is_margin_throttled() is True
 
+    @pytest.mark.asyncio
     async def test_throttled_false_when_expired(self):
         trader = _make_trader()
         # Manually set expired cooldown
         Trader._shared_account_cache[trader.account_key]['margin_cooldown_until'] = time.time() - 1
-        self.assertFalse(trader.is_margin_throttled())
+        assert trader.is_margin_throttled() is False
 
+    @pytest.mark.asyncio
     async def test_non_margin_error_returns_false(self):
         trader = _make_trader()
         result = await trader.check_margin_error("Network timeout")
-        self.assertFalse(result)
+        assert result is False
 
     # ---- Smart Eviction (new_confidence provided) ----
 
+    @pytest.mark.asyncio
     async def test_evicts_only_orders_worse_than_new_signal(self):
         """New signal conf=0.7 → cancel pending with conf<0.7, keep conf>=0.7."""
         trader = _make_trader()
@@ -89,11 +94,12 @@ class TestMarginCooldown(unittest.IsolatedAsyncioTestCase):
 
         # Should cancel 0.5 and 0.6 but NOT 0.8
         cancelled_keys = {call.args[0] for call in trader.cancel_pending_order.await_args_list}
-        self.assertIn('key_bad1', cancelled_keys)
-        self.assertIn('key_bad2', cancelled_keys)
-        self.assertNotIn('key_good', cancelled_keys)
-        self.assertEqual(trader.cancel_pending_order.await_count, 2)
+        assert 'key_bad1' in cancelled_keys
+        assert 'key_bad2' in cancelled_keys
+        assert 'key_good' not in cancelled_keys
+        assert trader.cancel_pending_order.await_count == 2
 
+    @pytest.mark.asyncio
     async def test_no_eviction_when_all_pending_are_better(self):
         """New signal conf=0.4, all pending have conf>=0.4 → nothing cancelled."""
         trader = _make_trader()
@@ -107,6 +113,7 @@ class TestMarginCooldown(unittest.IsolatedAsyncioTestCase):
 
         trader.cancel_pending_order.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_active_filled_positions_not_force_closed(self):
         """Filled positions that are worse than new signal get warned but NOT cancelled."""
         trader = _make_trader()
@@ -122,6 +129,7 @@ class TestMarginCooldown(unittest.IsolatedAsyncioTestCase):
         # Warning should have been logged
         trader.logger.warning.assert_called()
 
+    @pytest.mark.asyncio
     async def test_high_conf_single_order_not_evicted(self):
         """conf=0.9 pending, new signal conf=0.85 → not cancelled."""
         trader = _make_trader()
@@ -134,6 +142,7 @@ class TestMarginCooldown(unittest.IsolatedAsyncioTestCase):
 
     # ---- Legacy mode (no new_confidence) ----
 
+    @pytest.mark.asyncio
     async def test_legacy_mode_cancels_worst_below_06(self):
         trader = _make_trader()
         trader.pending_orders = {
@@ -145,10 +154,11 @@ class TestMarginCooldown(unittest.IsolatedAsyncioTestCase):
         await trader.check_margin_error(INSUF_ERROR)  # no new_confidence
 
         # Only the worst one (0.5 < 0.6) should be cancelled
-        self.assertEqual(trader.cancel_pending_order.await_count, 1)
+        assert trader.cancel_pending_order.await_count == 1
         cancelled_key = trader.cancel_pending_order.await_args.args[0]
-        self.assertEqual(cancelled_key, 'key_low')
+        assert cancelled_key == 'key_low'
 
+    @pytest.mark.asyncio
     async def test_legacy_mode_no_cancel_if_all_above_06(self):
         trader = _make_trader()
         trader.pending_orders = {
@@ -160,7 +170,3 @@ class TestMarginCooldown(unittest.IsolatedAsyncioTestCase):
         await trader.check_margin_error(INSUF_ERROR)  # no new_confidence
 
         trader.cancel_pending_order.assert_not_called()
-
-
-if __name__ == '__main__':
-    unittest.main()

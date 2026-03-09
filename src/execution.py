@@ -134,7 +134,7 @@ class Trader:
             }
 
 
-        self.cooldown_manager = CooldownManager(db, self.logger, env)
+        self.cooldown_manager = CooldownManager(db, self.logger, env, shared_cache=self.__class__._shared_account_cache)
         self.order_executor = OrderExecutor(self)
         
         self.default_leverage = config.LEVERAGE
@@ -231,7 +231,7 @@ class Trader:
         """
         msg = str(error_msg).lower()
         if "insufficient margin" in msg or "-2019" in msg or "insufficient balance" in msg:
-            await self.cooldown_manager.handle_margin_error(self.account_key, self.__class__._shared_account_cache, self.exchange_name)
+            await self.cooldown_manager.handle_margin_error(self.account_key, self.exchange_name)
 
             try:
                 # All cancellable pending orders (status=pending, have an order_id)
@@ -296,7 +296,7 @@ class Trader:
 
     def is_margin_throttled(self):
         """Check if we are currently in a margin-rejection cooldown."""
-        return self.cooldown_manager.is_margin_throttled(self.account_key, self.__class__._shared_account_cache)
+        return self.cooldown_manager.is_margin_throttled(self.account_key)
 
     async def sync_from_db(self):
         """Authoritative sync: Load active positions and pending orders from the database."""
@@ -1002,6 +1002,8 @@ class Trader:
             # Use ROE (leveraged percentage) for reporting
             pnl_pct = (pnl / (entry_price * qty)) * 100 * config.LEVERAGE
 
+        exit_time_ms = self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else int(time.time() * 1000)
+        
         trade_record = {
             "symbol": symbol,
             "side": side,
@@ -1012,7 +1014,7 @@ class Trader:
             "pnl_pct": round(pnl_pct, 2),
             "exit_reason": exit_reason,
             "entry_time": pos.get('timestamp'),
-            "exit_time": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
+            "exit_time": exit_time_ms
         }
 
         # Fix 9 (Unified Store): Write all data to signal_performance.json via tracker.
@@ -1020,8 +1022,8 @@ class Trader:
         fees = pos.get('_exit_fees', 0)
         
         # 2. Record to database via signal_tracker
-        try:
-            if self.signal_tracker:
+        if self.signal_tracker:
+            try:
                 await self.signal_tracker.record_trade(
                     symbol=symbol,
                     timeframe=pos.get('timeframe', '1h'),
@@ -1029,18 +1031,26 @@ class Trader:
                     signals_used=pos.get('signals_used', []),
                     result='WIN' if pnl > 0 else 'LOSS',
                     pnl_pct=pnl_pct / 100,  # record_trade expects decimal
-                    pnl_usdt=round(pnl, 3), # NEW
-                    exit_price=exit_price,  # NEW
-                    btc_change=0, # Optional or fetch
+                    pnl_usdt=round(pnl, 3), 
+                    exit_price=exit_price,  
+                    btc_change=0, 
                     snapshot=pos.get('snapshot'),
                     pos_key=pos_key,
                     leverage=config.LEVERAGE
                 )
+                self.logger.debug(f"[LOG] Successfully recorded trade in signal_tracker for {symbol}")
+            except Exception as e:
+                self.logger.warning(f"Failed to record trade in signal_tracker: {e}")
 
-            # Notify Telegram for ALL closed positions
-            if exit_reason:
-                from notification import send_telegram_message, format_position_closed
-                
+        # 3. Notify Telegram for ALL closed positions (Decoupled from tracker)
+        if exit_reason:
+            try:
+                # Convert timestamps to datetime for format_duration to work
+                dt_entry = None
+                if pos.get('timestamp'):
+                    dt_entry = datetime.fromtimestamp(pos.get('timestamp') / 1000)
+                dt_exit = datetime.fromtimestamp(exit_time_ms / 1000)
+
                 # Use format_position_closed for consistent formatting
                 terminal_msg, telegram_msg = format_position_closed(
                     symbol=symbol,
@@ -1051,16 +1061,26 @@ class Trader:
                     pnl=pnl,
                     pnl_pct=pnl_pct,
                     reason=exit_reason,
-                    entry_time=pos.get('timestamp'),
+                    entry_time=dt_entry,
+                    exit_time=dt_exit,
+                    dry_run=self.dry_run,
                     profile_label=self.profile_name
                 )
+                
+                # Log attempt
+                self.logger.info(f"[NOTIFY] Sending {exit_reason} notification for {symbol}...")
+                
+                # Output to terminal
                 print(terminal_msg)
-                asyncio.create_task(send_telegram_message(telegram_msg))
-            
-            self.logger.info(f"Trade logged: {symbol} {side} | PnL: {pnl:.2f} ({pnl_pct:.2f}%) | Reason: {exit_reason}")
-
-        except Exception as e:
-            self.logger.warning(f"Failed to record trade in signal_tracker: {e}")
+                
+                # Send to Telegram - Use await to ensure it's handled
+                await send_telegram_message(telegram_msg)
+                
+                self.logger.debug(f"[NOTIFY] Telegram message sent for {symbol}")
+            except Exception as e:
+                self.logger.error(f"Failed to send trade notification for {symbol}: {e}")
+        
+        self.logger.info(f"Trade logged: {symbol} {side} | PnL: {pnl:.2f} ({pnl_pct:.2f}%) | Reason: {exit_reason}")
 
     async def remove_position(self, symbol, timeframe=None, exit_price=None, exit_reason=None):
         """Removes a position and optionally logs it to history."""

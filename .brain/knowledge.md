@@ -298,3 +298,16 @@ Wait-and-Patience and metadata tracking use a standardized symbol format to avoi
 - **Param Cleanup**: Cross-exchange logic (like recovery) must not leak exchange-specific parameters (e.g., `origClientOrderId` from Binance) into other adapters.
 - **Fail-Fast Recovery**: Recovery blocks must only handle Network/Timeout errors. Logic errors (403, 10001, Insufficient Balance) must skip recovery to prevent infinite fail-loops.
 - **Symbol Consistency**: ALWAYS use normalized symbols (`BTCUSDT`) for `client_id` to ensure tracking accuracy.
+
+### 27. Bybit Rate Limit (10006) & Burst Mitigation
+*   **Discovery**: Fetching OHLCV for 300+ symbols simultaneously every minute triggers "Too many visits" even if total monthly limits are fine.
+*   **Lesson**: Use **Smart Candle Sync**. Only fetch the full OHLCV when a candle period closes. Bridge the gap using the high-performance **Batch Ticker** API (`fetchTickers`), which can update all 300 prices in a single request.
+
+### 28. Standardized Server Time Resync (10002 / -1021)
+*   **Discovery**: "Behind server time" errors are fatal for order placement.
+*   **Lesson**: Centralize error handling in `BaseExchangeClient`. Map both Binance `-1021` and Bybit `10002` to trigger an immediate, proactive `sync_server_time()` call with negative offset padding (-2000ms).
+
+### 29. NoneType Comparison Safety in UI/Notifications
+*   **Discovery**: `match.get('tp', 0)` can return `None` if the key exists but the value is `null` in DB.
+*   **Impact**: Crashes the status report with `TypeError: '>' not supported between 'NoneType' and 'int'`.
+*   **Lesson**: Always use the **(value or 0)** pattern for math/comparisons: `(match.get('tp') or 0)`.

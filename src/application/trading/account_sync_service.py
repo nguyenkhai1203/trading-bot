@@ -69,3 +69,17 @@ class AccountSyncService:
         """Retrieve the cached state for a specific profile's account."""
         key = self._get_account_key(profile)
         return self._state_cache.get(key)
+        
+    def get_active_symbols(self) -> List[str]:
+        """Collect all symbols currently found in positions or open orders across all accounts."""
+        symbols = set()
+        for state in self._state_cache.values():
+            # Add from positions
+            for p in state.get('positions', []):
+                sym = p.get('symbol')
+                if sym: symbols.add(sym)
+            # Add from orders
+            for o in state.get('orders', []):
+                sym = o.get('symbol')
+                if sym: symbols.add(sym)
+        return list(symbols)

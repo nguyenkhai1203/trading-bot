@@ -203,7 +203,7 @@ async def get_status_message(profile_filter: str = None, is_portfolio: bool = Fa
                                         if 'TAKE' in o_type: ep_tp = o_price
                                         elif 'STOP' in o_type: ep_sl = o_price
                                         # Fallback for generic limit/market stop orders if logic above is too specific
-                                        elif not ep_tp and ( (side in ['BUY', 'LONG'] and o_price > ep.get('entryPrice', 0)) or (side in ['SELL', 'SHORT'] and o_price < ep.get('entryPrice', 0)) ):
+                                        elif not ep_tp and ( (side in ['BUY', 'LONG'] and o_price > (ep.get('entryPrice') or 0)) or (side in ['SELL', 'SHORT'] and o_price < (ep.get('entryPrice') or 0)) ):
                                             ep_tp = o_price
                                         elif not ep_sl:
                                             ep_sl = o_price

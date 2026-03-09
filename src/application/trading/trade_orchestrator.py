@@ -70,8 +70,8 @@ class TradeOrchestrator:
             active_trades = await self.container.trade_repo.get_active_positions(profile['id'])
             for trade in active_trades:
                 try:
-                    # 1. Get current price
-                    ticker = await self.container.data_manager.fetch_ticker(trade.symbol, profile['exchange'])
+                    # 1. Get current price (leveraging the new ticker cache in DataManager)
+                    ticker = await self.container.data_manager.fetch_ticker(trade.symbol, exchange=profile['exchange'])
                     if not ticker or 'last' not in ticker:
                         continue
                         

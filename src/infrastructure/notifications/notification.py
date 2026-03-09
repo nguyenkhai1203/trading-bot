@@ -138,6 +138,13 @@ from datetime import datetime
 from src.utils.symbol_helper import to_display_format, get_base_currency
 
 # Mode labels
+def _escape_markdown(text: str) -> str:
+    """Escapes special characters for Telegram Markdown V1."""
+    if not text: return ""
+    # Standard Markdown V1 escapes: _, *, [, `
+    # We use a simple replacement for the most common culprits
+    return str(text).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[')
+
 def get_mode_label(dry_run: bool) -> str:
     """Get mode label for notifications."""
     return "🧪 TEST" if dry_run else "LIVE"
@@ -189,14 +196,27 @@ def format_pnl(pnl: float, pnl_pct: float) -> str:
     # Use 2 decimals for USD, 1 decimal for percentage
     return f"{sign}${pnl:.2f} ({sign}{pnl_pct:.1f}%)"
 
-def format_duration(entry_time: datetime, exit_time: datetime) -> str:
+def format_duration(entry_time: Any, exit_time: Any) -> str:
     """Format trade duration."""
-    delta = exit_time - entry_time
-    hours = delta.seconds // 3600
-    minutes = (delta.seconds % 3600) // 60
-    if hours > 0:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
+    try:
+        if not isinstance(entry_time, datetime) or not isinstance(exit_time, datetime):
+            # Fallback to simple subtraction if they are numeric timestamps
+            total_seconds = int(abs(float(exit_time) - float(entry_time)))
+            # Handle ms vs s mismatch (heuristic: if > 10 years, assume it's ms)
+            if total_seconds > 86400 * 365 * 10:
+                total_seconds //= 1000
+        else:
+            delta = exit_time - entry_time
+            total_seconds = int(delta.total_seconds())
+
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        
+        if hours > 0:
+            return f"{hours}h {minutes}m"
+        return f"{minutes}m"
+    except Exception:
+        return "N/A"
 
 
 # === NOTIFICATION FORMATTERS ===
@@ -225,7 +245,7 @@ def format_pending_order(
     safe_symbol = format_symbol(symbol)
     mode = get_mode_label(dry_run)
     
-    ex_tag = f" | {profile_label if profile_label else exchange_name.upper() if exchange_name else ''}"
+    ex_tag = f" | {_escape_markdown(profile_label) if profile_label else _escape_markdown(exchange_name).upper() if exchange_name else ''}"
     
     terminal = (
         f"⚪ PENDING | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
@@ -234,7 +254,7 @@ def format_pending_order(
     
     telegram = (
         f"{mode}{ex_tag} | ⚪ PENDING\n"
-        f"{safe_symbol} | {timeframe} | {dir_label} {dir_emoji} x{leverage}\n"
+        f"{safe_symbol} | {_escape_markdown(timeframe)} | {dir_label} {dir_emoji} x{leverage}\n"
         f"Entry: {format_price(entry_price)}\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}\n"
         f"Score: {score:.1f} ({int(score*100):d}%)"
@@ -270,7 +290,7 @@ def format_position_filled(
     base_currency = get_base_currency(symbol)
     mode = get_mode_label(dry_run)
     
-    ex_tag = f" | {profile_label if profile_label else exchange_name.upper() if exchange_name else ''}"
+    ex_tag = f" | {_escape_markdown(profile_label) if profile_label else _escape_markdown(exchange_name).upper() if exchange_name else ''}"
     
     terminal = (
         f"⚪ FILLED | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
@@ -279,7 +299,7 @@ def format_position_filled(
     
     telegram = (
         f"{mode}{ex_tag} | ⚪ FILLED\n"
-        f"{safe_symbol} | {timeframe} | {dir_label} {dir_emoji} ({int(score*100) if score else 0}%)\n"
+        f"{safe_symbol} | {_escape_markdown(timeframe)} | {dir_label} {dir_emoji} ({int(score*100) if score else 0}%)\n"
         f"Entry: {format_price(entry_price)}\n"
         f"Size: {format_size(size, symbol)} {base_currency} (${notional:.0f})\n"
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}"
@@ -332,10 +352,10 @@ def format_position_closed(
         f"PnL: {format_pnl(pnl, pnl_pct)}"
     )
     
-    ex_tag = f" | {profile_label if profile_label else exchange_name.upper() if exchange_name else ''}"
+    ex_tag = f" | {_escape_markdown(profile_label) if profile_label else _escape_markdown(exchange_name).upper() if exchange_name else ''}"
     telegram_parts = [
         f"{mode}{ex_tag} | {status_emoji} {reason_label}",
-        f"{safe_symbol} | {timeframe} | {dir_label} {dir_emoji}",
+        f"{safe_symbol} | {_escape_markdown(timeframe)} | {dir_label} {dir_emoji}",
         f"Entry: {format_price(entry_price)} → Exit: {format_price(exit_price)}",
         f"PnL: {format_pnl(pnl, pnl_pct)}"
     ]
@@ -372,12 +392,12 @@ def format_order_cancelled(
     ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
     terminal = f"{ex_prefix}❌ [{symbol} {timeframe}] CANCELLED | Reason: {reason}"
     
-    ex_tag = f" | {exchange_name.upper()}" if exchange_name else ""
+    ex_tag = f" | {_escape_markdown(exchange_name).upper()}" if exchange_name else ""
     telegram = (
         f"{mode}{ex_tag} | ❌ CANCELLED\n"
-        f"{safe_symbol} | {timeframe} | {dir_label} {dir_emoji}\n"
+        f"{safe_symbol} | {_escape_markdown(timeframe)} | {dir_label} {dir_emoji}\n"
         f"Entry: {format_price(entry_price)}\n"
-        f"Reason: {reason}"
+        f"Reason: {_escape_markdown(reason)}"
     )
     
     return (terminal, telegram)
@@ -430,8 +450,9 @@ def format_status_update(
     )
     
     # Telegram detailed
+    ex_tag = f"[{_escape_markdown(exchange_name).upper()}] " if exchange_name else ""
     telegram_parts = [
-        f"📊 POSITION STATUS UPDATE {sync_tag}\n",
+        f"📊 {ex_tag}POSITION STATUS UPDATE {sync_tag}\n",
         f"Active: {active_count} positions",
         f"Total PnL: {format_pnl(total_pnl, total_pnl_pct)}\n"
     ]
@@ -471,15 +492,15 @@ def map_exchange_position_to_v2(ex_pos: dict, ticker: Optional[dict], local_matc
         raw_side = 'LONG' if pos_amt > 0 else 'SHORT' if pos_amt < 0 else ''
     
     side = 'BUY' if raw_side in ['LONG', 'BUY'] else 'SELL' if raw_side in ['SHORT', 'SELL'] else ''
-    lev = ex_pos.get('leverage') or ex_pos.get('info', {}).get('leverage') or local_match.get('leverage', 1)
+    lev = ex_pos.get('leverage') or ex_pos.get('info', {}).get('leverage') or (local_match.get('leverage') or 1)
     
     pnl_usd = (cur - entry) * p_qty if side == 'BUY' else (entry - cur) * p_qty
     roe = ((cur - entry) / entry * 100 * float(lev)) if entry > 0 else 0
     if side == 'SELL': roe = -roe
     
     # Fix SL/TP Swaps and Recovery
-    tp = ex_pos.get('takeProfit') or ex_pos.get('tp') or local_match.get('tp', 0)
-    sl = ex_pos.get('stopLoss') or ex_pos.get('sl') or local_match.get('sl', 0)
+    tp = ex_pos.get('takeProfit') or ex_pos.get('tp') or (local_match.get('tp') or 0)
+    sl = ex_pos.get('stopLoss') or ex_pos.get('sl') or (local_match.get('sl') or 0)
     
     # Direction-aware sanity check to prevent swapped labels for SHORT positions
     if entry > 0 and tp > 0 and sl > 0:
@@ -511,12 +532,12 @@ def map_exchange_order_to_v2(ex_order: dict, ticker: Optional[dict], local_match
     return {
         'symbol': ex_order['symbol'], 
         'side': ex_order['side'].upper(), 
-        'leverage': local_match.get('leverage', 1),
+        'leverage': (local_match.get('leverage') or 1),
         'entry_price': entry, 
         'current_price': cur,
         'roe': 0, 'pnl_usd': 0, 
-        'tp': ex_order.get('takeProfit') or ex_order.get('tp') or local_match.get('tp', 0), 
-        'sl': ex_order.get('stopLoss') or ex_order.get('sl') or local_match.get('sl', 0),
+        'tp': ex_order.get('takeProfit') or ex_order.get('tp') or (local_match.get('tp') or 0), 
+        'sl': ex_order.get('stopLoss') or ex_order.get('sl') or (local_match.get('sl') or 0),
         'is_pending': True
     }
 

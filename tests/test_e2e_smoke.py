@@ -16,7 +16,7 @@ class TestEndToEndSmoke:
     @pytest.fixture
     async def deps(self, tmp_path):
         db_path = str(tmp_path / "e2e_test.db")
-        DataManager._instances = {}
+        await DataManager.clear_instances()
         db = DataManager(db_path)
         await db.initialize()
         await db.add_profile(name="E2E_P1", env="TEST", exchange="BINANCE", label="E2E")
@@ -37,7 +37,9 @@ class TestEndToEndSmoke:
         mock_ex.exchange.apiKey = "MOCK_KEY"
         
         mdm = MarketDataManager(db=db, adapters={"BINANCE": mock_ex})
-        return db, mock_ex, mdm
+        yield db, mock_ex, mdm
+        await db.close()
+        await DataManager.clear_instances()
 
     @pytest.mark.asyncio
     async def test_full_cycle_signal_to_order(self, deps):

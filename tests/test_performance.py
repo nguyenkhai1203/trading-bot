@@ -16,7 +16,7 @@ class TestPerformance:
     @pytest.fixture
     async def trader_bench(self, tmp_path):
         db_path = str(tmp_path / "perf.db")
-        DataManager._instances = {}
+        await DataManager.clear_instances()
         db = DataManager(db_path)
         await db.initialize()
         await db.add_profile(name="PERF", env="TEST", exchange="BINANCE", label="P")
@@ -28,7 +28,9 @@ class TestPerformance:
         
         mdm = MarketDataManager(db=db, adapters={"BINANCE": mock_ex})
         trader = Trader(mock_ex, db, profile_id=1, dry_run=True, data_manager=mdm)
-        return trader, db, mock_ex
+        yield trader, db, mock_ex
+        await db.close()
+        await DataManager.clear_instances()
 
     @pytest.mark.asyncio
     async def test_reconcile_latency_bulk(self, trader_bench):

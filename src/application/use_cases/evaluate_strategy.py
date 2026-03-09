@@ -7,16 +7,21 @@ class EvaluateStrategyUseCase:
     """
     Use Case: Evaluate a trading strategy for a symbol and timeframe.
     """
-    def __init__(self, strategy_service: StrategyService, data_manager: Any):
+    def __init__(self, strategy_service: StrategyService, data_manager: Any, cooldown_manager: Any = None):
         self.strategy_service = strategy_service
         self.data_manager = data_manager
+        self.cooldown_manager = cooldown_manager
         self.logger = logging.getLogger("EvaluateStrategyUseCase")
 
     async def execute(self, symbol: str, timeframe: str, exchange: str) -> Optional[Dict[str, Any]]:
         """
         Runs the evaluation logic.
         """
-        # 1. Fetch feature data
+        # 1. SL Cooldown Check
+        if self.cooldown_manager and self.cooldown_manager.is_in_cooldown(exchange, symbol):
+            return None
+
+        # 2. Fetch feature data
         df = self.data_manager.get_data_with_features(symbol, timeframe, exchange=exchange)
         if df is None or df.empty:
             return None

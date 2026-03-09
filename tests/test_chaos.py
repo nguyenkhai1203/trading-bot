@@ -29,10 +29,10 @@ class TestChaos:
             
             assert res == {"id": "SUCCESS"}
             assert mock_api.call_count == 3
-            # Backoff: (1+1)*3 = 3s, then (2+1)*3 = 6s.
+            # Backoff: (1+1)*5 = 5s, then (2+1)*5 = 10s.
             assert mock_sleep.call_count == 2
-            mock_sleep.assert_any_call(3)
-            mock_sleep.assert_any_call(6)
+            mock_sleep.assert_any_call(5)
+            mock_sleep.assert_any_call(10)
 
     @pytest.mark.asyncio
     async def test_api_timestamp_resync_recovery(self):

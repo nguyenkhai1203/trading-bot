@@ -113,3 +113,23 @@ await send_telegram_message(telegram_msg)
   - `Probability > 0.8` -> Boost (+20% Confidence).
 - **Training**: SGD optimizer running on `signal_performance.json` snapshots.
 - **Data Source**: The Brain only trains on **CLOSED** trades that contain a valid market state snapshot at entry. Pending or currently active trades are never used for training.
+116: 
+117: ---
+118: 
+119: ## 6. High-Efficiency Data Management
+120: To prevent rate-limiting (e.g., Bybit `10006`) and maximize loop speed, the system uses a tiered fetching strategy:
+121: 
+122: ### A. Ticker Caching (2s TTL)
+123: - **Mechanism**: `MarketDataManager.fetch_ticker` first checks a memory cache before calling the exchange.
+124: - **Benefit**: Eliminates redundant API calls for the same symbol across multiple profiles/tasks within the same heartbeat cycle.
+125: 
+126: ### B. Smart Candle Sync (Bridge & Patch)
+127: - **Source of Truth**: The heavy `fetch_ohlcv` call is ONLY performed at the start of a new candle period (e.g., exactly at 14:00, 14:15).
+128: - **Real-time Bridging**: Between candle boundaries, the bot uses the lightweight Batch Ticker API (`fetchTickers()`) to "patch" the latest close, high, and low of the active candle in memory.
+129: - **Bandwidth Savings**: Reduces OHLCV API traffic by ~95% while keeping all indicators and trading signals 100% real-time.
+130: 
+131: ### C. Active Symbol Prioritization
+132: - **Logic**: Symbols with active positions or pending orders bypass the background staggered update queue. They are updated every cycle (10-15s) to ensure ultra-sensitive TP/SL monitoring, while inactive symbols are updated every 60-120s.
+133: 
+134: ### D. Timeframe Deduplication
+135: - **Mechanism**: Fetch only the lowest required timeframe (e.g., 1h). Indicators for higher timeframes (4h, 1d) share the same underlying price feed, avoiding redundant requests for the same token.

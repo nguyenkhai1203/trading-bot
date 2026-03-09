@@ -15,7 +15,7 @@ class TestDataManager:
     async def db(self, tmp_path):
         """Create a fresh test database for each test."""
         db_path = str(tmp_path / "test_trading.db")
-        DataManager._instances = {}
+        await DataManager.clear_instances()
         db = DataManager(db_path)
         await db.initialize()
         await db.add_profile(name="TEST_P1", env="LIVE", exchange="BINANCE")

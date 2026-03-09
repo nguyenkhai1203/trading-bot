@@ -75,14 +75,14 @@ class BaseExchangeClient:
         # Use manual offset as primary for absolute control
         local_now = int(time.time() * 1000)
         
-        # We subtract 1000ms safety padding (reduced from 5000ms) to ensure we are 
+        # We subtract 2000ms safety padding (increased from 1000ms) to ensure we are 
         # NOT "ahead" of server even with micro-oscillations.
         # Binance is strict about future timestamps. recvWindow (60s) handles the lag.
-        return local_now + self._server_offset_ms - 1000
+        return local_now + self._server_offset_ms - 2000
     
     async def resync_time_if_needed(self, error_msg: str = "") -> bool:
         """Re-sync time if timestamp error detected."""
-        if "timestamp" in error_msg.lower() or "time" in error_msg.lower() or "-1021" in error_msg:
+        if any(x in error_msg.lower() for x in ["timestamp", "-1021", "recvwindow", "10002", "ahead of the server"]):
             print(f"[TIME SYNC] Detected timestamp error, re-syncing...")
             return await self.sync_server_time()
         return False
@@ -122,6 +122,8 @@ class BaseExchangeClient:
                 is_timestamp_error = (
                     "timestamp" in error_msg or 
                     "-1021" in error_msg or
+                    "10002" in error_msg or
+                    "recvwindow" in error_msg or
                     "ahead of the server" in error_msg
                 )
                 
@@ -139,7 +141,7 @@ class BaseExchangeClient:
                         # Handle Rate Limit (429) / 418 / 403 or Bybit 10006 specifically
                         # Handle Rate Limit (429) / 418 / 403 or Bybit 10006 specifically
                         if any(x in error_msg for x in ["429", "418", "403", "too many requests", "10006"]):
-                            wait_s = (attempt + 1) * 3 # Backoff: 3s, 6s, 9s
+                            wait_s = (attempt + 1) * 5 # Backoff: 5s, 10s, 15s
                             self.logger.warning(f"[RATE LIMIT/403] backing off for {wait_s}s... Error: {error_msg[:100]}")
                             await asyncio.sleep(wait_s)
                             # Retry if we have retries left

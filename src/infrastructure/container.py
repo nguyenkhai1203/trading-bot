@@ -76,6 +76,7 @@ class Container:
         import logging
         logger = logging.getLogger("CooldownManager")
         self.cooldown_manager = CooldownManager(self.db_manager, logger, self.env)
+        self.data_manager.set_cooldown_manager(self.cooldown_manager)
         
         self.risk_service = RiskService()
         self.strategy_service = StrategyService()
@@ -85,7 +86,14 @@ class Container:
         profiles = await self.profile_repository.get_active_profiles()
         self.sync_service = AccountSyncService(profiles, self.adapters)
         
-        self.evaluate_strategy_use_case = EvaluateStrategyUseCase(self.strategy_service, self.data_manager)
+        # Priority: Link active symbols to DataManager for prioritized OHLCV fetches
+        self.data_manager.set_active_symbols_provider(self.sync_service.get_active_symbols)
+        
+        # Hydrate cooldowns for all profiles
+        for p in profiles:
+            await self.cooldown_manager.sync_from_db(p['id'])
+            
+        self.evaluate_strategy_use_case = EvaluateStrategyUseCase(self.strategy_service, self.data_manager, self.cooldown_manager)
         self.monitor_positions_use_case = MonitorPositionsUseCase(
             self.sync_service, 
             self.trade_repo, 

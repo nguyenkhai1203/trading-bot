@@ -1,11 +1,11 @@
-
-import unittest
+import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 import pandas as pd
 import numpy as np
 import os
 import sys
 import asyncio
+from concurrent.futures import as_completed
 
 # Add src to path
 src_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src')
@@ -15,9 +15,11 @@ if src_dir not in sys.path:
 from src.analyzer import StrategyAnalyzer, _compute_and_cache_bms
 from src.strategy import WeightedScoringStrategy
 from src.feature_engineering import FeatureEngineer
+from src.infrastructure.repository.database import DataManager
 
-class TestBMSIntegratedAnalyzer(unittest.IsolatedAsyncioTestCase):
-    def setUp(self):
+class TestBMSIntegratedAnalyzer:
+    @pytest.fixture(autouse=True)
+    async def setup(self):
         self.analyzer = StrategyAnalyzer()
         self.fe = FeatureEngineer()
         # Mock data WITHOUT bms columns to test fallback
@@ -32,31 +34,33 @@ class TestBMSIntegratedAnalyzer(unittest.IsolatedAsyncioTestCase):
         # Add some signal columns
         self.df['signal_EMA_9_cross_21_up'] = [True] * 100
         self.df['signal_EMA_9_cross_21_down'] = [False] * 100
+        
+        yield
+        await DataManager.clear_instances()
 
-    def test_compute_signals_with_bms_veto(self):
+    @pytest.mark.asyncio
+    async def test_compute_signals_with_bms_veto(self):
         """Verify that BMS zone vetos work in _compute_signals."""
         strat = WeightedScoringStrategy()
-        # Weights that would normally trigger both BUY and SELL
-        # Based on strategy.py keywords: 'cross_21_up' and 'cross_21_down'
         strat.weights = {'EMA_9_cross_21_up': 5.0, 'EMA_9_cross_21_down': 5.0}
         strat._precalculate_signal_categories()
         
         # 1. GREEN zone -> Should only allow BUY
         sigs_green = self.analyzer._compute_signals(self.df, strat, bms_score=0.8, bms_zone='GREEN')
-        self.assertTrue(all(s == 'BUY' or s is None for s in sigs_green))
-        self.assertIn('BUY', sigs_green)
-        self.assertNotIn('SELL', sigs_green)
+        assert all(s == 'BUY' or s is None for s in sigs_green)
+        assert 'BUY' in sigs_green
+        assert 'SELL' not in sigs_green
         
         # 2. RED zone -> Should only allow SELL
-        # We need to make sure the row has the signals
         df_red = self.df.copy()
         df_red['signal_EMA_9_cross_21_down'] = [True] * 100
         sigs_red = self.analyzer._compute_signals(df_red, strat, bms_score=0.2, bms_zone='RED')
-        self.assertTrue(all(s == 'SELL' or s is None for s in sigs_red))
-        self.assertIn('SELL', sigs_red)
-        self.assertNotIn('BUY', sigs_red)
+        assert all(s == 'SELL' or s is None for s in sigs_red)
+        assert 'SELL' in sigs_red
+        assert 'BUY' not in sigs_red
 
-    def test_validate_weights_passes_bms(self):
+    @pytest.mark.asyncio
+    async def test_validate_weights_passes_bms(self):
         """Verify that validate_weights passes bms params to _compute_signals."""
         weights = {'EMA_9_cross_21_up': 5.0}
         
@@ -66,9 +70,10 @@ class TestBMSIntegratedAnalyzer(unittest.IsolatedAsyncioTestCase):
             
             # Check if bms_zone was passed
             args, kwargs = mock_compute.call_args
-            self.assertEqual(kwargs.get('bms_zone'), 'RED')
-            self.assertEqual(kwargs.get('bms_score'), 0.1)
+            assert kwargs.get('bms_zone') == 'RED'
+            assert kwargs.get('bms_score') == 0.1
 
+    @pytest.mark.asyncio
     @patch('src.analyzer._compute_and_cache_bms')
     @patch('src.analyzer.StrategyAnalyzer.analyze')
     @patch('src.analyzer.StrategyAnalyzer.get_features')
@@ -93,10 +98,6 @@ class TestBMSIntegratedAnalyzer(unittest.IsolatedAsyncioTestCase):
             return mock_future
         mock_pool.submit.side_effect = mock_submit
         
-        # We need as_completed to yield our futures
-        def mock_as_completed(fs):
-            for f in fs: yield f
-        
         # 2. Mock BMS to RED
         mock_bms.return_value = {'bms': 0.1, 'sentiment_zone': 'RED'}
         
@@ -119,12 +120,11 @@ class TestBMSIntegratedAnalyzer(unittest.IsolatedAsyncioTestCase):
         mock_brain.return_value = {"status": "success", "accuracy": 0.0, "mse": 0.0, "samples": 0}
 
         # 7. Execute with mocks
-        with patch('src.analyzer.as_completed', side_effect=mock_as_completed):
+        with patch('src.analyzer.as_completed', side_effect=lambda fs: fs):
             with patch('src.config.ACTIVE_EXCHANGES', ['BYBIT']):
                 with patch('src.config.TRADING_SYMBOLS', ['BTC/USDT']):
                     with patch('src.config.TRADING_TIMEFRAMES', ['1h']):
                         with patch('src.config.BYBIT_SYMBOLS', ['BTC/USDT']):
-                            # Also patch at analyzer module level for top-level imports
                             with patch('src.analyzer.TRADING_SYMBOLS', ['BTC/USDT']):
                                 with patch('src.analyzer.TRADING_TIMEFRAMES', ['1h']):
                                     with patch('sys.argv', ['analyzer.py']):
@@ -136,7 +136,4 @@ class TestBMSIntegratedAnalyzer(unittest.IsolatedAsyncioTestCase):
             if call.kwargs.get('enabled') == False:
                 found_disabled = True
         
-        self.assertTrue(found_disabled, "Long-biased config should be disabled in RED zone")
-
-if __name__ == '__main__':
-    unittest.main()
+        assert found_disabled is True, "Long-biased config should be disabled in RED zone"

@@ -114,3 +114,17 @@
 - [x] **Hygiene**: Archive ~15 redundant root scripts into `scripts/archive/` <!-- id: 205 -->
 - [x] **Documentation**: Update GPS-style `walkthrough.md`, `architecture.md`, and `knowledge.md` <!-- id: 206 -->
 - [x] **Verification**: 100% pass on comprehensive 28test suite <!-- id: 207 -->
+- [x] **Phase 27: Comprehensive Test Suite Implementation** <!-- id: 208 -->
+    - [x] Implement foundational fixtures in `tests/conftest.py` <!-- id: 209 -->
+    - [x] Specialized suites: `test_analyzer.py`, `test_strategy.py`, `test_trader.py` <!-- id: 210 -->
+    - [x] Advanced: `test_chaos.py`, `test_performance.py`, `test_security.py` <!-- id: 211 -->
+    - [x] Regression & CI/CD: `run_tests.py` with 177 tests pass <!-- id: 212 -->
+    - [x] Fix critical regressions in `execution.py` and `telegram_bot.py` <!-- id: 213 -->
+- [x] **Phase 28: Performance & Rate Limit Optimization** <!-- id: 214 -->
+    - [x] Fix `TypeError` in status updates (None handling) <!-- id: 215 -->
+    - [x] Implement **Ticker Cache** (2s TTL) for price fetching <!-- id: 216 -->
+    - [x] Implement **Smart Candle Sync** (API fetch only on period boundary) <!-- id: 217 -->
+    - [x] Implement **Real-time Price Bridging** via Batch Tickers <!-- id: 218 -->
+    - [x] Implement **Active Symbol Prioritization** for OHLCV fetches <!-- id: 219 -->
+    - [x] Support Bybit `10002` for automatic server time resync <!-- id: 220 -->
+    - [x] Final verification: 177/177 tests pass <!-- id: 221 -->

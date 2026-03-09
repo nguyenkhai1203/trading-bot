@@ -71,3 +71,13 @@ def strategy_analyzer(tmp_path):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     return StrategyAnalyzer(data_dir=str(data_dir))
+
+@pytest.fixture(autouse=True)
+async def cleanup_db_singleton():
+    """Ensure DataManager singleton is cleared after every test to prevent aiosqlite leaks."""
+    yield
+    from src.infrastructure.repository.database import DataManager
+    try:
+        await DataManager.clear_instances()
+    except:
+        pass

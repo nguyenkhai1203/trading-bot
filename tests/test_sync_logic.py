@@ -1,4 +1,4 @@
-import unittest
+import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
 import sys
@@ -9,9 +9,11 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.execution import Trader
+from src.infrastructure.repository.database import DataManager
 
-class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
+class TestSyncLogic:
+    @pytest.fixture(autouse=True)
+    async def setup(self):
         # Create a mock exchange
         self.mock_exchange = MagicMock()
         self.mock_exchange.name = 'BYBIT'
@@ -42,10 +44,15 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         adapter = BybitAdapter(self.mock_exchange)
         self.trader.exchange.infer_exit_reason = adapter.infer_exit_reason
 
+        yield
+        
+        # Cleanup
+        await DataManager.clear_instances()
+
+    @pytest.mark.asyncio
     async def test_sync_detects_and_resolves_ghost(self):
         """Test that sync_with_exchange identifies a missing position and resolves it."""
         symbol = 'BTC/USDT'
-        # New pos_key format: P{id}_{EXCHANGE}_{SYMBOL}_{TF}
         pos_key = f"P{self.trader.profile_id}_{self.trader.exchange_name}_{symbol.replace('/', '_')}_1h"
         
         # 1. Setup Active Position in memory
@@ -68,7 +75,6 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         }
 
         # 2. Mock Exchange API Responses
-        # Exchange returns no open positions (meaning it closed)
         self.mock_exchange.fetch_positions = AsyncMock(return_value=[])
         self.mock_exchange.fetch_open_orders = AsyncMock(return_value=[])
         
@@ -85,22 +91,18 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         }
         self.mock_exchange.fetch_my_trades = AsyncMock(return_value=[exit_trade])
 
-
         # 3. Run Sync
         await self.trader.sync_with_exchange()
 
         # 4. Verify results
-        # Should have called _resolve_ghost_position -> _clear_db_position -> remove_position
         self.trader._clear_db_position.assert_called_once()
-        # Verify exit price was captured correctly from history
         call_args = self.trader._clear_db_position.call_args[1]
-        self.assertEqual(call_args['exit_price'], 55050.0)
-        self.assertEqual(call_args['exit_reason'], 'TP')
+        assert call_args['exit_price'] == 55050.0
+        assert call_args['exit_reason'] == 'TP'
         
         self.trader.remove_position.assert_called_once()
-        # Verify position was removed from memory if remove_position logic was called
-        # (Since we mocked remove_position, we just check if it was called)
 
+    @pytest.mark.asyncio
     async def test_sync_updates_pending_to_filled(self):
         """Test that sync updates an externally filled pending order to ACTIVE."""
         symbol = 'BTC/USDT'
@@ -121,7 +123,6 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         }
 
         # 2. Mock Exchange API Responses
-        # Order is gone from open orders
         self.mock_exchange.fetch_open_orders = AsyncMock(return_value=[])
         # But symbol exists in active positions on exchange
         self.mock_exchange.fetch_positions = AsyncMock(return_value=[
@@ -140,14 +141,14 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         await self.trader.sync_with_exchange()
 
         # 4. Verify results
-        self.assertEqual(self.trader.active_positions[pos_key]['status'], 'filled')
-        self.assertEqual(self.trader.active_positions[pos_key]['entry_price'], 49005.0)
+        assert self.trader.active_positions[pos_key]['status'] == 'filled'
+        assert self.trader.active_positions[pos_key]['entry_price'] == 49005.0
         self.trader._update_db_position.assert_called_once_with(pos_key)
 
+    @pytest.mark.asyncio
     async def test_deep_history_sync(self):
         """Test that deep_history_sync identifies a closed trade for a DB-active position."""
         symbol = 'ETH/USDT'
-        # Position is in DB but NOT in memory (it's a stale DB record)
         stale_db_trade = {
             'id': 201,
             'symbol': symbol,
@@ -181,9 +182,10 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         
         # Check params
         call_args = self.trader._clear_db_position.call_args[1]
-        self.assertEqual(call_args['exit_price'], 2950.0)
-        self.assertEqual(call_args['exit_reason'], 'TP') # Infered as TP because price went down for SELL side
+        assert call_args['exit_price'] == 2950.0
+        assert call_args['exit_reason'] == 'TP'
 
+    @pytest.mark.asyncio
     async def test_resolve_ghost_uses_bybit_stoploss_field(self):
         """Verify Bybit stopOrderType='StopLoss' results in 'SL' reason."""
         symbol = 'ATOM/USDT'
@@ -210,9 +212,10 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         # Verify
         self.trader._clear_db_position.assert_called_once()
         call_args = self.trader._clear_db_position.call_args[1]
-        self.assertEqual(call_args['exit_reason'], 'SL')
+        assert call_args['exit_reason'] == 'SL'
         self.trader.set_sl_cooldown.assert_called_once_with(symbol)
 
+    @pytest.mark.asyncio
     async def test_resolve_ghost_proximity_check(self):
         """Verify proximity check when exchange info is missing."""
         symbol = 'BTC/USDT'
@@ -239,13 +242,13 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
         await self.trader.sync_with_exchange()
         
         call_args = self.trader._clear_db_position.call_args[1]
-        self.assertEqual(call_args['exit_reason'], 'SL')
+        assert call_args['exit_reason'] == 'SL'
         self.trader.set_sl_cooldown.assert_called_once_with(symbol)
 
+    @pytest.mark.asyncio
     async def test_infer_exit_entry_price_zero(self):
         """Verify fix for SL classification when entry_price is 0."""
         symbol = 'ETH/USDT'
-        pos_key = f"P1_BYBIT_ETH_USDT_1h"
         pos = {
             'symbol': symbol, 'side': 'BUY', 'status': 'filled', 
             'entry_price': 0, 'sl': 2000.0, 'tp': 2500.0
@@ -255,7 +258,4 @@ class TestSyncLogic(unittest.IsolatedAsyncioTestCase):
             'info': {}
         }
         reason = self.trader._infer_exit_reason(trade, pos)
-        self.assertEqual(reason, 'SL')
-
-if __name__ == '__main__':
-    unittest.main()
+        assert reason == 'SL'

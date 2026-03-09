@@ -117,6 +117,13 @@ Quick map to navigate and debug the project.
 - Order Adoption: Recovery from external orders or reconnection.
 - Bybit V5 symbol normalization + `:USDT` suffix handling.
 
+### High-Efficiency Data & Stability Iteration (Mar 9, 2026)
+- **Smart Candle Sync**: Reduced OHLCV API calls by 95% using the "Bridge & Patch" technique (fetch only on boundaries).
+- **Batch Tickers**: Efficient live price updates for 300+ symbols in a single call.
+- **Priority Fetching**: Active positions and orders stay real-time; others stay in a background stagger.
+- **Resilience**: Fixed `NoneType` status crash and unified Bybit/Binance time resync.
+- **Verification**: 100% pass on the new comprehensive 177-test suite.
+
 ### Previous Updates
 - Neural Brain (lightweight MLP) with Veto/Boost logic.
 - Authoritative Exchange-First Reality for `/status`.

@@ -41,17 +41,16 @@ class TestCooldownManager:
     async def test_margin_throttling_logic(self, manager):
         """Verify account-level margin throttling via shared cache."""
         account_key = "MOCK_ACC_1"
-        shared_cache = {account_key: {}}
         
         # 1. Initially not throttled
-        assert manager.is_margin_throttled(account_key, shared_cache) is False
+        assert manager.is_margin_throttled(account_key) is False
         
         # 2. Handle margin error
-        await manager.handle_margin_error(account_key, shared_cache, "BINANCE")
+        await manager.handle_margin_error(account_key, "BINANCE")
         
         # 3. Should now be throttled
-        assert manager.is_margin_throttled(account_key, shared_cache) is True
-        assert shared_cache[account_key]['margin_cooldown_until'] > time.time()
+        assert manager.is_margin_throttled(account_key) is True
+        assert manager._shared_account_cache[account_key]['margin_cooldown_until'] > time.time()
 
     @pytest.mark.asyncio
     async def test_db_sync_hydration(self, manager):
