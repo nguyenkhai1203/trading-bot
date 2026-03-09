@@ -5,6 +5,7 @@ import time
 import pandas as pd
 import numpy as np
 import logging
+from typing import Any, Dict, List, Optional, Callable, Set
 
 # Add src to path if running directly or from root
 src_dir = os.path.dirname(os.path.abspath(__file__))
@@ -120,15 +121,31 @@ class MarketDataManager:
                 
                 tickers = await adapter.fetch_tickers(current)
                 curr_ts = time.time()
+                updated_keys = set()
                 for symbol, ticker_data in tickers.items():
                     last_price = ticker_data.get('last')
                     if last_price:
+                        last_price = float(last_price)
                         # Update Cache
-                        self._ticker_cache[f"{name}_{symbol}"] = {'last': float(last_price), 'timestamp': curr_ts}
+                        self._ticker_cache[f"{name}_{symbol}"] = {'last': last_price, 'timestamp': curr_ts}
                         
                         for key, df in self.data_store.items():
                             if key.startswith(f"{name}_{symbol}_") and not df.empty:
-                                df.iloc[-1, df.columns.get_loc('close')] = last_price
+                                self.data_store[key] = self._patch_current_candle(df, last_price)
+                                updated_keys.add(key)
+                
+                # Refresh features for all patched DataFrames so signals (EMA, RSI) reflect the live price
+                # We clear the features_cache so the next get_data_with_features() call triggers a recalc.
+                fe = self._get_feature_engineer()
+                if fe:
+                    for key in updated_keys:
+                        # Clear cache so get_data_with_features() doesn't return stale indicators
+                        if key in self.features_cache:
+                            del self.features_cache[key]
+                        
+                        # Trigger immediate recalc in data_store if needed for shared state
+                        # Note: We keep the raw data in data_store, and features in the cache.
+                
                 total_updated += len(tickers)
             except Exception as e:
                 self.logger.warning(f"[{name}] Ticker update failed: {e}")
@@ -186,27 +203,20 @@ class MarketDataManager:
                         return
                     
                     # 3. Smart Sync: Only fetch if a new candle period has started
-                    # Otherwise, update_tickers() already handles live bridging.
+                    # Otherwise, update_tickers() handles live bridging.
                     main_tf = timeframes[0]
                     key_base = f"{name}_{symbol}_{main_tf}"
                     
-                    # Convert '1h', '15m' to seconds
-                    unit = main_tf[-1]
-                    val = int(main_tf[:-1])
-                    seconds = val * 60 if unit == 'm' else val * 3600 if unit == 'h' else val * 86400 if unit == 'd' else 60
-                    
-                    now_ts = time.time()
-                    current_period_start = (int(now_ts) // seconds) * seconds
-                    last_sync_period = self._ohlcv_sync_state.get(key_base, 0)
-                    
-                    # If we already synced THIS period start, and we have data, skip heavy fetch
-                    if current_period_start <= last_sync_period and key_base in self.data_store:
+                    if not self._should_fetch_new_candle(name, symbol, main_tf, adapter):
                         return
 
                     # 4. Timeframe Deduplication: Fetch only the lowest timeframe (e.g., 1h)
                     ohlcv = await adapter.fetch_ohlcv(symbol, main_tf, limit=50)
                     if not ohlcv: return
                     
+                    seconds = self._get_timeframe_seconds(main_tf)
+                    now_ts = (adapter.exchange.milliseconds() / 1000.0) if hasattr(adapter.exchange, 'milliseconds') and adapter.exchange.milliseconds() else time.time()
+                    current_period_start = (int(now_ts) // seconds) * seconds
                     self._ohlcv_sync_state[key_base] = current_period_start
                         
                     new_df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -306,3 +316,55 @@ class MarketDataManager:
         except Exception as e:
             self.logger.error(f"[{symbol} {timeframe}] Feature calculation failed: {e}")
             return None
+
+    def _get_timeframe_seconds(self, timeframe: str) -> int:
+        unit = timeframe[-1]
+        val = int(timeframe[:-1])
+        if unit == 'm': return val * 60
+        if unit == 'h': return val * 3600
+        if unit == 'd': return val * 86400
+        if unit == 'w': return val * 604800
+        return 60
+
+    def _patch_current_candle(self, df: pd.DataFrame, last_price: float) -> pd.DataFrame:
+        """Patch the last row of the candle with the current price, updating high/low extremes."""
+        if df is None or df.empty: return df
+        last_idx = -1
+        # Use col index for safety
+        col_close = df.columns.get_loc('close')
+        col_high = df.columns.get_loc('high')
+        col_low = df.columns.get_loc('low')
+        
+        df.iloc[last_idx, col_close] = last_price
+        if last_price > df.iloc[last_idx, col_high]:
+            df.iloc[last_idx, col_high] = last_price
+        if last_price < df.iloc[last_idx, col_low]:
+            df.iloc[last_idx, col_low] = last_price
+        return df
+
+    def _should_fetch_new_candle(self, name: str, symbol: str, timeframe: str, adapter: Any) -> bool:
+        """Determines if a full OHLCV fetch is needed based on boundary or data staleness."""
+        key = f"{name}_{symbol}_{timeframe}"
+        seconds = self._get_timeframe_seconds(timeframe)
+        
+        # 1. Sync boundary check (Exchange time)
+        now_ts = (adapter.exchange.milliseconds() / 1000.0) if hasattr(adapter.exchange, 'milliseconds') and adapter.exchange.milliseconds() else time.time()
+        current_period_start = (int(now_ts) // seconds) * seconds
+        last_sync_period = self._ohlcv_sync_state.get(key, 0)
+        
+        if current_period_start > last_sync_period:
+            return True
+            
+        # 2. Freshness Check
+        df = self.data_store.get(key)
+        if df is None or df.empty: return True
+        
+        last_candle_ts = df.iloc[-1]['timestamp'].timestamp()
+        ticker_data = self._ticker_cache.get(f"{name}_{symbol}", {})
+        ticker_age = now_ts - ticker_data.get('timestamp', 0)
+        
+        # Stale if data is older than 2 periods OR ticker hasn't updated in 30s
+        if (now_ts - last_candle_ts > 2 * seconds) or (ticker_age > 30):
+            return True
+            
+        return False

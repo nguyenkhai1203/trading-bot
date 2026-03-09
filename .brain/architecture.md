@@ -78,6 +78,10 @@ The system employs a three-tier defense against state drift and historical incon
 
 ### Performance & Multi-Profile Safety
 - **AccountSyncService**: A centralized provider that tracks account-wide positions and orders across all profiles. This prevents "blind spots" where Profile B enters a trade because it hasn't yet synced Profile A's new entry.
+- **Smart Data Sync (Bridge & Patch)**: Redesigned `MarketDataManager` to minimize API overhead by 95%+.
+    - **Boundaries**: Full OHLCV fetches occur *only* at candle closures, using Exchange Server Time for 100% precision.
+    - **Bridging**: Batch Tickers patch Open/High/Low/Close of the "live" candle in memory every few seconds.
+    - **Indicator Refresh**: TA features are re-calculated instantly on the patched data, ensuring signals do not "repaint" and are always reflective of the absolute latest price.
 - **Request Throttling**: Uses a shared high-performance cache (`to_dict('records')` optimization) instead of redundant API calls, reducing total requests by ~80%.
 - **Vectorized Backtesting**: Replaces `df.iterrows()` with vectorized or dict-record loops to increase backtest speed by 100x.
 

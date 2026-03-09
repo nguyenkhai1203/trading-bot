@@ -3,7 +3,7 @@ import sys
 import os
 import pandas as pd
 import numpy as np
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
 # Mock telegram module before it's imported anywhere
 mock_telegram = MagicMock()
@@ -71,6 +71,28 @@ def strategy_analyzer(tmp_path):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     return StrategyAnalyzer(data_dir=str(data_dir))
+
+@pytest.fixture
+def mock_batch_ticker():
+    """Provides a mocked batch ticker response."""
+    return {
+        'BTC/USDT': {'symbol': 'BTC/USDT', 'last': 50500.0, 'timestamp': 1700000000000},
+        'ETH/USDT': {'symbol': 'ETH/USDT', 'last': 2500.0, 'timestamp': 1700000000000}
+    }
+
+@pytest.fixture
+def mock_adapter():
+    """Provides a mocked exchange adapter with a syncable clock."""
+    adapter = MagicMock()
+    adapter.exchange = MagicMock()
+    adapter.exchange.milliseconds = MagicMock(return_value=1704067200000) # 2024-01-01 00:00:00
+    adapter.fetch_ohlcv = AsyncMock(return_value=[
+        [1704067200000, 50000, 50100, 49900, 50050, 10]
+    ])
+    adapter.fetch_tickers = AsyncMock(return_value={
+        'BTC/USDT': {'last': 50050.0}
+    })
+    return adapter
 
 @pytest.fixture(autouse=True)
 async def cleanup_db_singleton():

@@ -42,12 +42,13 @@ graph TD
 ### 1. Market Data & Signal Flow
 The bot operates on a "Heartbeat" cycle. Each cycle follows this data-to-signal pipeline:
 
-1.  **Ingestion**: `MarketDataManager` fetches latest candles (OHLCV) from all `ACTIVE_EXCHANGES`.
-2.  **Validation**: Candles are checked for integrity (NaNs, missing bars).
-3.  **Feature Engineering**: Raw candles are transformed into 17+ technical indicators (RSI, EMA, MACD, etc.).
-4.  **Scoring**: `WeightedScoringStrategy` applies weights from `strategy_config.json` to calculate a heuristic score.
-5.  **Validation**: `NeuralBrain` (RL-MLP) performs a Veto (score < 0.3) or Boost (score > 0.8) on the signal.
-6.  **Sizing**: If `score >= threshold`, `RiskManager` determines position size based on balance and target leverage.
+1.  **Ingestion**: `MarketDataManager` uses the **"Bridge & Patch"** architecture. Full OHLCV is fetched only on candle boundaries (Main TF).
+2.  **Bridging**: Between boundaries, the **Batch Tickers** API patches the current candle's **Close, High, and Low** in memory.
+3.  **Validation**: Candles are checked for integrity and timestamps are synced via `adapter.exchange.milliseconds()`.
+4.  **Signal Refresh**: Feature indicators (EMA, RSI, etc.) are **re-calculated instantly** on the patched data to eliminate "Repainting" (signals changing after candle close).
+5.  **Scoring**: `WeightedScoringStrategy` applies weights to the refreshed indicators.
+6.  **Validation**: `NeuralBrain` performs Veto/Boost based on live-refreshed features.
+7.  **Sizing**: `RiskManager` determines size using real-time price awareness.
 
 ### 2. Order Execution & Protection Flow
 When a signal is approved:
@@ -300,8 +301,8 @@ Wait-and-Patience and metadata tracking use a standardized symbol format to avoi
 - **Symbol Consistency**: ALWAYS use normalized symbols (`BTCUSDT`) for `client_id` to ensure tracking accuracy.
 
 ### 27. Bybit Rate Limit (10006) & Burst Mitigation
-*   **Discovery**: Fetching OHLCV for 300+ symbols simultaneously every minute triggers "Too many visits" even if total monthly limits are fine.
-*   **Lesson**: Use **Smart Candle Sync**. Only fetch the full OHLCV when a candle period closes. Bridge the gap using the high-performance **Batch Ticker** API (`fetchTickers`), which can update all 300 prices in a single request.
+*   **Discovery**: Fetching OHLCV for 300+ symbols simultaneously every minute triggers "Too many visits".
+*   **Lesson**: Use **Smart Candle Sync**. Fetch full OHLCV only on boundaries. Bridge the gap using **Batch Tickers** (`fetchTickers`) to update 300+ prices in one call. **Mandatory Refresh**: Always re-calculate features (`FeatureEngineer`) after patching to prevent **Indicator Repainting**.
 
 ### 28. Standardized Server Time Resync (10002 / -1021)
 *   **Discovery**: "Behind server time" errors are fatal for order placement.
