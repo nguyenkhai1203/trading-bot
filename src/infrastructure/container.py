@@ -107,7 +107,8 @@ class Container:
             self.adapters, 
             self.risk_service, 
             self.notification_service,
-            self.cooldown_manager
+            self.cooldown_manager,
+            self.sync_service
         )
 
         self.manage_position_use_case = ManagePositionUseCase(

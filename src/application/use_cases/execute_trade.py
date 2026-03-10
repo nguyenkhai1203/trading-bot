@@ -19,12 +19,14 @@ class ExecuteTradeUseCase:
                  adapters: Dict[str, BaseAdapter], 
                  risk_service: RiskService, 
                  notification_service: NotificationService,
-                 cooldown_manager: CooldownManager):
+                 cooldown_manager: CooldownManager,
+                 sync_service: Any = None): # Inject sync_service for account-wide checks
         self.trade_repo = trade_repo
         self.adapters = adapters
         self.risk_service = risk_service
         self.notification_service = notification_service
         self.cooldown_manager = cooldown_manager
+        self.sync_service = sync_service
         self.logger = logging.getLogger("ExecuteTradeUseCase")
 
     async def execute(self, profile: Dict[str, Any], signal: Dict[str, Any]) -> bool:
@@ -90,44 +92,72 @@ class ExecuteTradeUseCase:
         side = signal['side']
         timeframe = signal.get('timeframe', '1h')
         
-        # 4. Idempotency & Advanced Rebalancing/Reversal Check
-        active_trades = await self.trade_repo.get_active_positions(profile_id)
-        current_trade = next((t for t in active_trades if t.symbol == symbol), None)
+        # 4. GLOBAL ACCOUNT GUARD (Deduplication across ALL profiles on this exchange)
+        # Check Database for any profile on this exchange
+        all_active = await self.trade_repo.get_active_positions_on_exchange(ex_name)
+        existing_on_account = next((t for t in all_active if t.symbol == symbol), None)
         
-        if current_trade:
+        # Check Sync Cache for live exchange state (Safety net)
+        if not existing_on_account and self.sync_service:
+            state = self.sync_service.get_account_state(profile)
+            if state:
+                # Check positions
+                for p in state.get('positions', []):
+                    if p.get('symbol') == symbol:
+                        self.logger.info(f"Signal for {symbol} skipped: Position already found in exchange cache.")
+                        return False
+                # Check orders
+                for o in state.get('orders', []):
+                    if o.get('symbol') == symbol:
+                        self.logger.info(f"Signal for {symbol} skipped: Open order already found in exchange cache.")
+                        return False
+
+        if existing_on_account:
             # Case A: Reversal (Current is BUY, signal is SELL or vice versa)
-            if current_trade.side != side.upper():
+            if existing_on_account.side != side.upper():
                 if conf >= 0.6: # Moderate confidence required for reversal
-                    self.logger.info(f"🔄 **REVERSAL** | {symbol}: Cancelling {current_trade.side} for {side}")
-                    await adapter.close_position(symbol, current_trade.side, current_trade.qty)
-                    await self.trade_repo.update_status(current_trade.id, 'CANCELLED', exit_reason='REVERSAL')
-                    await self.notification_service.notify_generic(f"🔄 **REVERSAL** | {symbol} | Cancelling {current_trade.side} for {side}")
+                    self.logger.info(f"🔄 **REVERSAL** | {symbol}: Cancelling {existing_on_account.side} for {side}")
+                    # Use adapter to close
+                    await adapter.close_position(symbol, existing_on_account.side, existing_on_account.qty)
+                    await self.trade_repo.update_status(existing_on_account.id, 'CANCELLED', exit_reason='REVERSAL')
+                    await self.notification_service.notify_generic(f"🔄 **REVERSAL** | {symbol} | Cancelling {existing_on_account.side} for {side}")
                     # Continue to open new position
                 else:
                     return False
             
-            # Case B: Pending Adjustment (Current is PENDING, signal is BETTER)
-            elif current_trade.status == 'PENDING':
-                old_conf = current_trade.meta.get('signal_confidence') or 0.5
-                old_rr = current_trade.meta.get('rr_ratio') or 1.5
-                
-                # New R/R
+            # Case B: Signal Upgrade (Current is PENDING, signal is BETTER)
+            elif existing_on_account.status == 'PENDING':
+                old_conf = existing_on_account.meta.get('signal_confidence') or 0.5
+                old_rr = existing_on_account.meta.get('rr_ratio') or 1.5
                 new_rr = tp_pct / sl_pct if sl_pct > 0 else 1.0
                 
-                # Logic: Replace if confidence is significantly better OR R/R is better with same confidence
+                # Logic: Replace if confidence is significantly better (+0.1) OR R/R is better
                 is_better = (conf > old_conf + 0.1) or (conf >= old_conf and new_rr > old_rr + 0.5)
                 
                 if is_better:
-                    self.logger.info(f"⚖️ **ADJUSTMENT** | {symbol}: Replacing PENDING (Conf {old_conf:.2f}➔{conf:.2f}, R/R {old_rr:.1f}➔{new_rr:.1f})")
-                    if current_trade.exchange_order_id:
-                        await adapter.cancel_order(current_trade.exchange_order_id, symbol)
-                    await self.trade_repo.update_status(current_trade.id, 'CANCELLED', exit_reason='ADJUSTMENT')
-                    await self.notification_service.notify_order_cancelled(symbol, timeframe, side, current_trade.entry_price, "Better Signal", dry_run=not adapter.can_trade, exchange=ex_name)
+                    self.logger.info(f"⚖️ **UPGRADE** | {symbol}: Replacing PENDING (Conf {old_conf:.2f}➔{conf:.2f})")
+                    if existing_on_account.exchange_order_id:
+                        await adapter.cancel_order(existing_on_account.exchange_order_id, symbol)
+                    await self.trade_repo.update_status(existing_on_account.id, 'CANCELLED', exit_reason='UPGRADE')
                     # Continue to open new position
                 else:
                     return False
+            
+            # Case C: Passive Upgrade (Current is ACTIVE, signal is BETTER)
+            elif existing_on_account.status == 'ACTIVE':
+                # We don't open a new trade, but we check if we should update SL/TP
+                old_conf = existing_on_account.meta.get('signal_confidence') or 0.5
+                if conf > old_conf + 0.15:
+                    self.logger.info(f"📈 **POSITION OPTIMIZATION** | {symbol}: Updating SL/TP from better signal (Conf {old_conf:.2f}➔{conf:.2f})")
+                    sl_price, tp_price = self.risk_service.calculate_sl_tp(existing_on_account.entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)
+                    await adapter.set_position_sl_tp(symbol, side, sl=sl_price, tp=tp_price)
+                    # Update DB
+                    existing_on_account.sl_price = sl_price
+                    existing_on_account.tp_price = tp_price
+                    existing_on_account.meta['signal_confidence'] = conf
+                    await self.trade_repo.save_trade(existing_on_account)
+                return False
             else:
-                # Already in a matching ACTIVE trade, skip
                 return False
 
         try:
@@ -143,6 +173,21 @@ class ExecuteTradeUseCase:
             
             leverage = selected_tier.get('leverage', 5)
             cost_usdt = selected_tier.get('cost_usdt', 5.0)
+
+            # --- NEW: Available Balance Guard ---
+            try:
+                balance = await adapter.fetch_balance()
+                free_usdt = float(balance.get('USDT', {}).get('free', 0))
+                
+                # Check if we have enough USDT to cover the cost + 10% buffer
+                required_margin = cost_usdt * 1.1
+                if free_usdt < required_margin:
+                    self.logger.warning(f"Account depleted! Free Margin ${free_usdt:.2f} < Required ${required_margin:.2f}. Skipping {symbol} (Proactive Guard).")
+                    # Trigger Margin Throttling proactively
+                    await self.cooldown_manager.handle_margin_error(acc_key, ex_name)
+                    return False
+            except Exception as e:
+                self.logger.warning(f"Could not fetch balance before trade: {e}")
             
             # --- CRITICAL: Enforce ISOLATED Margin and Leverage before sizing/trading ---
             # This ensures BTCDOM isn't CROSS and TAO doesn't exceed capital targets

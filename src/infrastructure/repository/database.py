@@ -272,13 +272,30 @@ class DataManager:
             return float(row[0] or 0.0)
 
     async def get_active_positions(self, profile_id: int) -> List[dict]:
-        """Fetch all ACTIVE or OPENED positions for a profile."""
+        """Fetch all ACTIVE or OPENED positions for a specific profile."""
         db = await self.get_db()
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT * FROM trades 
             WHERE profile_id = ? AND status IN ('ACTIVE', 'OPENED')
         """, (profile_id,)) as cursor:
+            rows = await cursor.fetchall()
+            result = []
+            for r in rows:
+                d = dict(r)
+                if d.get('meta_json'):
+                    d['meta'] = json.loads(d['meta_json'])
+                result.append(d)
+            return result
+
+    async def get_active_positions_on_exchange(self, exchange_name: str) -> List[dict]:
+        """Fetch all ACTIVE or OPENED positions across ALL profiles for a specific exchange."""
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT * FROM trades 
+            WHERE exchange = ? AND status IN ('ACTIVE', 'OPENED')
+        """, (exchange_name.upper(),)) as cursor:
             rows = await cursor.fetchall()
             result = []
             for r in rows:

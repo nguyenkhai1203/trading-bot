@@ -412,6 +412,7 @@ class TestExecuteTradeUseCase:
         repo.save_trade = AsyncMock(return_value=1)
         repo.update_status = AsyncMock()
         repo.get_active_positions = AsyncMock(return_value=[])
+        repo.get_active_positions_on_exchange = AsyncMock(return_value=[])
         return repo
 
     @pytest.fixture
@@ -420,7 +421,11 @@ class TestExecuteTradeUseCase:
         adapter.can_trade = True
         adapter.account_key = "MOCK_ACC"
         adapter.fetch_ticker = AsyncMock(return_value={'last': 50000.0})
+        adapter.fetch_balance = AsyncMock(return_value={'USDT': {'free': 100.0, 'total': 100.0}})
         adapter.create_order = AsyncMock(return_value={'id': 'order_123'})
+        adapter.close_position = AsyncMock()
+        adapter.cancel_order = AsyncMock()
+        adapter.set_position_sl_tp = AsyncMock()
         adapter.check_min_notional = MagicMock(return_value=(True, "", 1.0))
         adapter.ensure_isolated_and_leverage = AsyncMock()
         return adapter
@@ -552,10 +557,7 @@ class TestExecuteTradeUseCase:
         mock_trade.side = "BUY"
         mock_trade.qty = 1.0
         mock_trade.id = 123
-        mock_repo.get_active_positions.return_value = [mock_trade]
-        
-        # Mock adapter close position
-        mock_adapter.close_position = AsyncMock()
+        mock_repo.get_active_positions_on_exchange.return_value = [mock_trade]
         
         await use_case.execute(profile, signal)
         

@@ -10,7 +10,12 @@ class ITradeRepository(ABC):
 
     @abstractmethod
     async def get_active_positions(self, profile_id: int) -> List[Trade]:
-        """Fetch all ACTIVE or OPENED positions for a profile."""
+        """Fetch all ACTIVE or OPENED positions for a specific profile."""
+        pass
+
+    @abstractmethod
+    async def get_active_positions_on_exchange(self, exchange_name: str) -> List[Trade]:
+        """Fetch all ACTIVE or OPENED positions across ALL profiles for a specific exchange."""
         pass
 
     @abstractmethod

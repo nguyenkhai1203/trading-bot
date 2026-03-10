@@ -128,3 +128,16 @@
     - [x] Implement **Active Symbol Prioritization** for OHLCV fetches <!-- id: 219 -->
     - [x] Support Bybit `10002` for automatic server time resync <!-- id: 220 -->
     - [x] Final verification: 177/177 tests pass <!-- id: 221 -->
+
+### Phase 29: BMS v2.1 Holistic Architecture Upgrade [COMPLETED]
+- [x] **Global Trade Reporting**: Modified database/repo to fetch active positions across all profiles for an exchange.
+- [x] **Atomic Signal Competition**: Refactored `TradeOrchestrator` to collect, deduplicate, and execute best signals atomically.
+- [x] **Global Position Guard**: Updated `ExecuteTradeUseCase` to check exchange/account wide state before entry.
+- [x] **Symbol Normalization**: Implemented Bybit V5 native symbol format for private API management.
+- [x] **Signal Upgrading & Optimization**: Implemented pending order replacement and active SL/TP optimization to prevent stacking.
+- [x] **Verification**: Created 5/5 passing unit test suite in `tests/test_bms_v2_1_holistic.py`.
+- [x] **Documentation**: Updated architecture, knowledge, and walkthrough in `.brain`. <!-- id: 228 -->
+
+### Phase 30: Account Depletion Safeguards [COMPLETED]
+- [x] **Available Balance Guard**: Update `ExecuteTradeUseCase.execute` to check available USDT balance before order creation.
+- [x] **Verification**: Add unit tests for balance guard.

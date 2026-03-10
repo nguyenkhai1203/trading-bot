@@ -51,6 +51,13 @@ Quick map to navigate and debug the project.
 - **Performance & Circularity**: Resolved critical "Partially Initialized Module" errors via bottom-level import patterns and fixed an `account_key` initialization race condition.
 - **Environment Integrity**: Resolved a hidden `aiosqlite` dependency issue that was causing silent test failures.
 - **Clean Root**: Purged/archived ~15 redundant scripts and centralized utilities in `symbol_helper.py`, `config_manager.py`, and `trade_sync_helper.py`.
+- **Verification Results [PASS]**:
+    - **Unit Tests**: 5/5 tests in `tests/test_bms_v2_1_holistic.py` passed.
+        - [x] Global Position Guard (Deduplication)
+        - [x] Signal Upgrading (Pending Replacement)
+        - [x] Position Optimization (Active SL/TP)
+        - [x] Atomic Signal Competition (TradeOrchestrator)
+        - [x] Bybit Symbol Normalization (Adapter)
 - **Verification**: 28/28 tests passing (100% green).
 
 ### Iteration 9 — Precise SL/TP Sync & Cooldowns (March 4, 2026)
@@ -145,4 +152,15 @@ Exchange (CCXT)
 
 ---
 
-*Docs: [architecture.md](architecture.md) | [knowledge.md](knowledge.md) | Progress: [task.md](task.md)*
+### BMS v2.1 Holistic Architecture Upgrade [COMPLETED]
+ (March 10, 2026)
+**Resolved systemic order spamming and management errors by shifting to account-wide orchestration:**
+- **Atomic Entry Orchestration**: `TradeOrchestrator` now collects signals from all active profiles (e.g. 1h, 4h) and deduplicates by (Exchange, Symbol), executing only the winner.
+- **Account-Aware Position Guard**: `ExecuteTradeUseCase` verifies that NO other profile on the same exchange has an active/pending trade for the symbol before placement.
+- **Signal Upgrading**:
+    - **If Pending**: Higher confidence signals now cancel and replace existing pending orders.
+    - **If Active**: New signals trigger a "Smart Sync" of existing SL/TP levels instead of opening duplicate positions.
+- **Bybit V5 Symbol Fix**: Centralized normalization strips unified suffixes (`:USDT`) for private V5 API calls, fixing `BadRequest: symbol invalid` errors.
+- **Verification**: 100% pass on specialized holistic test suite (5/5 tests).
+
+*Docs: [architecture.md] | [knowledge.md] | Progress: [task.md]*

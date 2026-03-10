@@ -10,7 +10,7 @@ The system is being transitioned from a 3-layer setup to a strict **Clean Archit
     - **Services**: Pure business logic (Risk calculation, SL/TP dynamic adjustment) independent of any external frameworks or APIs.
 2.  **Application Layer (`src/application/`)**: 
     - **Use Cases**: Orchestrates the flow of data between the Domain and Infrastructure.
-    - **Trading Orchestrator**: Replaces the legacy `Trader` god-object logic.
+    - **Trading Orchestrator**: Uses **Atomic Collection** to gather signals from all profiles and deduplicate by (Exchange, Symbol) before execution.
     - **Optimization Orchestrator**: Manages the strategy re-tuning process.
 3.  **Infrastructure Layer (`src/infrastructure/`)**: 
     - **Adapters**: Concrete implementations for Bybit and Binance, mapping raw API responses to Domain Models.
@@ -32,10 +32,11 @@ Ensures unified method signatures for:
 - `fetch_order` (with conditional retry logic)
 
 ### Bybit V5 Implementation
-Transitioned to Bybit's **Parent-Child mechanism**:
+Transitioned to Bybit's **Parent-Child mechanism** and **Unified V5 API**:
 - **Setup**: Isolated margin and leverage set before placement.
 - **Atomic Entry**: SL/TP attached to the entry order via `params` field.
 - **Auto-Cleanup**: Cancelling an entry order automatically purges attached SL/TP.
+- **Symbol Logic**: Automatically normalizes unified symbols (e.g., `BTC/USDT:USDT`) to native format (`BTCUSDT`) for all private V5 endpoints to prevent `10001` invalid symbol errors.
 - **Mapping**: Maps unsupported timeframes (e.g., 8h -> 4h).
 
 ### Binance Futures Implementation
@@ -77,7 +78,12 @@ The system employs a three-tier defense against state drift and historical incon
 3.  **Deep History Sync (1h)**: `deep_history_sync()` scans the last 24-48 hours of actual trade history to find exits missed by real-time loops.
 
 ### Performance & Multi-Profile Safety
-- **AccountSyncService**: A centralized provider that tracks account-wide positions and orders across all profiles. This prevents "blind spots" where Profile B enters a trade because it hasn't yet synced Profile A's new entry.
+- **AccountSyncService**: A centralized provider that tracks account-wide positions and orders across all profiles.
+- **Atomic Signal Guard**: `TradeOrchestrator` performs a "Winner-Takes-All" competition across all timeframes (1h, 4h, 1d) for the same symbol. Only the highest-confidence signal is allowed to enter the execution engine.
+- **Global Position Guard**: `ExecuteTradeUseCase` verifies that NO other profile on the same exchange already has an active position for the requested symbol before firing a new order.
+- **Signal Upgrading**:
+    - **Pending Replacement**: If a significantly better signal (higher confidence/RR) appears, the bot cancels and replaces the current pending order.
+    - **Active Optimization**: If a better signal appears for an already active trade, the bot updates the floating SL/TP instead of opening a duplicate position.
 - **Smart Data Sync (Bridge & Patch)**: Redesigned `MarketDataManager` to minimize API overhead by 95%+.
     - **Boundaries**: Full OHLCV fetches occur *only* at candle closures, using Exchange Server Time for 100% precision.
     - **Bridging**: Batch Tickers patch Open/High/Low/Close of the "live" candle in memory every few seconds.

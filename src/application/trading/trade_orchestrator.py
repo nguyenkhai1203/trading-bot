@@ -50,10 +50,9 @@ class TradeOrchestrator:
                 # 4. Manage Active Positions (Profit Lock / Trailing SL)
                 await self._manage_active_positions()
                 
-                # 5. Entry Opportunity Check (Optimized)
+                # 5. Atomic Entry Opportunity Check (New BMS v2.1 Logic)
                 if not skip_entries:
-                    for profile in self.container.sync_service.profiles:
-                        await self._process_profile_entry(profile)
+                    await self._process_all_entries()
                 
                 # 6. Heartbeat
                 print(f"[ORCHESTRATOR] Cycle complete at {time.strftime('%H:%M:%S')}")
@@ -87,41 +86,51 @@ class TradeOrchestrator:
                 except Exception as e:
                     self.logger.error(f"Error managing position {trade.symbol}: {e}")
 
-    async def _process_profile_entry(self, profile: Dict[str, Any]):
-        """Collects all signals for a profile and executes them by priority with symbol locking."""
-        symbols = config.BINANCE_SYMBOLS if profile['exchange'].upper() == 'BINANCE' else config.BYBIT_SYMBOLS
+    async def _process_all_entries(self):
+        """
+        NEW ATOMIC ORCHESTRATION:
+        1. Collect signals from ALL profiles.
+        2. Deduplicate by (Exchange, Symbol) - highest confidence wins.
+        3. Execute winning signals sequentially with symbol locking.
+        """
+        all_signals = [] # List of (profile, signal)
         
-        # A. Parallel Evaluate all symbols
-        tasks = [self._get_best_signal_guarded(profile, s) for s in symbols]
-        signals = await asyncio.gather(*tasks)
-        valid_signals = [s for s in signals if s and s.get('side') != 'SKIP']
-        
-        if not valid_signals:
+        # A. Collect all signals concurrently
+        for profile in self.container.sync_service.profiles:
+            symbols = config.BINANCE_SYMBOLS if profile['exchange'].upper() == 'BINANCE' else config.BYBIT_SYMBOLS
+            tasks = [self._get_best_signal_guarded(profile, s) for s in symbols]
+            signals = await asyncio.gather(*tasks)
+            for sig in signals:
+                if sig and sig.get('side') != 'SKIP':
+                    all_signals.append((profile, sig))
+
+        if not all_signals:
             return
 
-        # B. Sort by confidence descending
-        valid_signals.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+        # B. DEDUPLICATE by (Exchange, Symbol)
+        # We allow same symbol on DIFFERENT exchanges, but only one per exchange.
+        winners = {} # {(exchange, symbol): (profile, signal)}
+        for profile, sig in all_signals:
+            ex_name = profile['exchange'].upper()
+            sym = sig['symbol']
+            key = (ex_name, sym)
+            
+            if key not in winners or sig['confidence'] > winners[key][1]['confidence']:
+                winners[key] = (profile, sig)
 
-        # C. Sequential Execution with Rebalancing
-        for signal in valid_signals:
+        # C. Sequential Execution of winners
+        sorted_winners = sorted(winners.values(), key=lambda x: x[1].get('confidence', 0), reverse=True)
+        
+        for profile, signal in sorted_winners:
             symbol = signal['symbol']
             lock = self.container.get_symbol_lock(symbol)
             
             async with lock:
                 try:
-                    success = await self.container.execute_trade_use_case.execute(profile, signal)
+                    await self.container.execute_trade_use_case.execute(profile, signal)
                 except InsufficientFundsError:
-                    # REBALANCING LOGIC: If no funds, try to cancel a weaker PENDING order
-                    self.logger.info(f"Insufficient funds for {symbol}. Checking for rebalancing...")
-                    if await self._try_rebalance_for_better_signal(profile, signal):
-                        # Retry once after rebalancing
-                        try:
-                            await self.container.execute_trade_use_case.execute(profile, signal)
-                        except Exception:
-                            pass 
-                    else:
-                        # No better signals or no pending to cancel, stop trying for this profile this cycle
-                        break
+                    self.logger.info(f"Insufficient funds for {symbol} on {profile['exchange']}. Skipping signal.")
+                    # In holistic mode, we skip instead of complex rebalancing within one cycle
                 except Exception as e:
                     self.logger.error(f"Error executing signal for {symbol}: {e}")
 

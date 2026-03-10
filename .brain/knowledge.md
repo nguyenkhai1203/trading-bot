@@ -200,7 +200,22 @@ Allows remote interaction with the bot instance.
 *   **Impact**: Bot labeled SL losses as "TP" wins and failed to trigger mandatory SL cooldowns.
 *   **Lesson**: **Prioritize Exchange Metadata.** Use a precision-first resolver (`_infer_exit_reason`) that favors Bybit/Binance native trade categories (e.g., `stopOrderType`) over simple price distance. Cooldowns must be applied in *every* sync path immediately upon SL detection.
 
-### 19. DB Status Race Condition (Cancelled vs Closed)
+### 19. Atomic Cross-Profile Orchestration (The "1h vs 4h" Race)
+*   **Discovery**: Running multiple timeframes (1h, 4h) for the same symbol leads to "Order Spamming" because each profile operates blindly.
+*   **Solution**: **Atomic Collection**. Gather all candidate signals from all profiles *first*, then deduplicate by (Exchange, Symbol) using Confidence as the filter. Execute only the "Winner" of the current cycle.
+
+### 20. The "Bybit V5 Symbol Suffix" Trap
+*   **Discovery**: Bybit V5 private endpoints (like `position/trading-stop`) reject unified CCXT symbols like `BTC/USDT:USDT`.
+*   **Impact**: Bot fails to manage SL/TP for active positions.
+*   **Solution**: Implement explicit normalization (`_get_bybit_symbol`) to strip suffixes before calling private V5 endpoints.
+
+### 21. Signal Upgrading vs. Position Stacking
+*   **Decision**: Instead of stacking multiple positions for the same symbol (expensive and risky), use new signals to **upgrade** existing state.
+*   **Rules**: 
+    - If **Pending**: Replace the order if the new signal is notably better.
+    - If **Active**: Use the new signal's SL/TP levels to "Smart Sync" the current position's protection/targets.
+
+### 22. DB Status Race Condition (Cancelled vs Closed)
 *   **Discovery**: Orders cancelled or evicted for margin reasons were appearing as "CLOSED" in the DB.
 *   **Cause**: `_clear_db_position` was called *after* removing the position from memory. Without the memory record, it couldn't see the `status='pending'` flag and defaulted to `CLOSED`.
 *   **Lesson**: **DB Updates must precede Memory Deletion.** Always call database finalization methods while the object is still in memory to ensure metadata (status, IDs) is available for accurate state recording. Added string-based fallback for "Cancelled/Eviction" reasons as a safety layer.

@@ -283,6 +283,7 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         try:
             if symbol in self.exchange.markets:
                 return self.exchange.markets[symbol].get('symbol', symbol)
+            # Try to find by ID (e.g., BTCUSDT -> BTC/USDT:USDT)
             for m in self.exchange.markets.values():
                 if m.get('id') == symbol:
                     return m.get('symbol', symbol)
@@ -290,9 +291,20 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         except:
             return symbol
 
+    def _get_bybit_symbol(self, symbol: str) -> str:
+        """Internal helper to convert unified symbol to Bybit-native symbol (e.g. BTCUSDT)."""
+        try:
+            if symbol in self.exchange.markets:
+                return self.exchange.markets[symbol].get('id', symbol.replace('/', '').split(':')[0])
+            return symbol.replace('/', '').split(':')[0]
+        except:
+            return symbol.replace('/', '').split(':')[0]
+
     async def set_position_sl_tp(self, symbol: str, side: str, sl: Optional[float] = None, tp: Optional[float] = None) -> Dict:
         """Bybit-specific: Update SL/TP of an existing position."""
-        params = {'category': 'linear', 'symbol': symbol}
+        # Use native symbol format for private Post call
+        native_symbol = self._get_bybit_symbol(symbol)
+        params = {'category': 'linear', 'symbol': native_symbol}
         if sl: params['stopLoss'] = str(self.exchange.price_to_precision(symbol, sl))
         if tp: params['takeProfit'] = str(self.exchange.price_to_precision(symbol, tp))
         params['tpTriggerBy'] = 'MarkPrice'

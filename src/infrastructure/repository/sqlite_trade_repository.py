@@ -28,6 +28,10 @@ class SQLiteTradeRepository(ITradeRepository):
         rows = await self.dm.get_active_positions(profile_id)
         return [Trade(**r) for r in rows]
 
+    async def get_active_positions_on_exchange(self, exchange_name: str) -> List[Trade]:
+        rows = await self.dm.get_active_positions_on_exchange(exchange_name)
+        return [Trade(**r) for r in rows]
+
     async def get_trade_history(self, profile_id: int, limit: int = 100) -> List[Trade]:
         rows = await self.dm.get_trade_history(profile_id, limit)
         return [Trade(**r) for r in rows]
