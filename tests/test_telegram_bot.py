@@ -162,7 +162,7 @@ class TestTelegramBot:
         msg = await get_summary_message('all')
             
         assert "ALL TIME" in msg
-        assert "Total Trades: 2" in msg
+        assert "Total Executed Trades: 2" in msg
         assert "Wins: 1" in msg
         assert "Loss" in msg
         assert "Win Rate: *50.0%*" in msg

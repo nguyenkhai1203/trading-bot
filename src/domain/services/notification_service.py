@@ -10,7 +10,7 @@ class NotificationService:
     def __init__(self):
         self.logger = logging.getLogger("NotificationService")
 
-    async def notify_order_filled(self, trade: Any, score: float, dry_run: bool = False):
+    async def notify_order_filled(self, trade: Any, score: float, dry_run: bool = False, is_virtual: bool = False):
         """Send notification for a filled position."""
         try:
             terminal_msg, telegram_msg = notification.format_position_filled(
@@ -25,6 +25,7 @@ class NotificationService:
                 score=score,
                 leverage=int(trade.leverage or 1),
                 dry_run=dry_run,
+                is_virtual=is_virtual,
                 exchange_name=trade.exchange
             )
             self.logger.info(terminal_msg)
@@ -76,7 +77,8 @@ class NotificationService:
         pnl: float, 
         pnl_pct: float, 
         reason: str, 
-        dry_run: bool = False
+        dry_run: bool = False,
+        is_virtual: bool = False
     ):
         """Send notification for a closed position."""
         try:
@@ -99,6 +101,7 @@ class NotificationService:
                 entry_time=entry_dt,
                 exit_time=exit_dt,
                 dry_run=dry_run,
+                is_virtual=is_virtual,
                 exchange_name=trade.exchange
             )
             self.logger.info(terminal_msg)

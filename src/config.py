@@ -121,10 +121,10 @@ ATR_TRAIL_MIN_MOVE_PCT = 0.001  # 0.1% min move to update exchange
 RSI_OVERBOUGHT_EXIT = 75        # Guard: Pull TP closer
 EMA_BREAK_CLOSE_THRESHOLD = 0.998 # Guard: Emergency exit (0.2% below EMA21)
 
-# Deprecated v3.0 settings (fallback)
+# Deprecated v3.0 settings (now used alongside v4.0 for guaranteed breakeven locks)
 ENABLE_PROFIT_LOCK = True
-PROFIT_LOCK_THRESHOLD = 0.8     # 80% of the way to TP
-PROFIT_LOCK_LEVEL = 0.1         # Lock in 10% of the target profit
+PROFIT_LOCK_THRESHOLD = 0.5     # 50% of the way to TP (more responsive)
+PROFIT_LOCK_LEVEL = 0.05        # Lock in 5% of the target profit (effectively slight positive breakeven)
 MAX_TP_EXTENSIONS = 2           # Limit number of times TP can be moved
 ATR_EXT_MULTIPLIER = 1.5        # Fallback ATR multiplier for TP extension
 

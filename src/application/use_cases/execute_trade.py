@@ -98,10 +98,10 @@ class ExecuteTradeUseCase:
             # Case A: Reversal (Current is BUY, signal is SELL or vice versa)
             if current_trade.side != side.upper():
                 if conf >= 0.6: # Moderate confidence required for reversal
-                    self.logger.info(f"🔄 **REVERSAL** | {symbol}: Closing {current_trade.side} for {side}")
+                    self.logger.info(f"🔄 **REVERSAL** | {symbol}: Cancelling {current_trade.side} for {side}")
                     await adapter.close_position(symbol, current_trade.side, current_trade.qty)
-                    await self.trade_repo.update_status(current_trade.id, 'CLOSED', exit_reason='REVERSAL')
-                    await self.notification_service.notify_generic(f"🔄 **REVERSAL** | {symbol} | Closing {current_trade.side} for {side}")
+                    await self.trade_repo.update_status(current_trade.id, 'CANCELLED', exit_reason='REVERSAL')
+                    await self.notification_service.notify_generic(f"🔄 **REVERSAL** | {symbol} | Cancelling {current_trade.side} for {side}")
                     # Continue to open new position
                 else:
                     return False
@@ -174,8 +174,8 @@ class ExecuteTradeUseCase:
                 sl_price, tp_price = self.risk_service.calculate_sl_tp(entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)
                 params = {
                     'leverage': leverage,
-                    'sl_price': sl_price,
-                    'tp_price': tp_price
+                    'stopLoss': sl_price,
+                    'takeProfit': tp_price
                 }
                 order_res = await adapter.create_order(symbol, 'market', side.lower(), qty, price=None, params=params)
             else:
@@ -261,7 +261,8 @@ class ExecuteTradeUseCase:
                     db = await DataManager.get_instance()
                     await db.log_ai_snapshot(trade_id, json.dumps(signal['snapshot']), conf)
                 
-                await self.notification_service.notify_generic(f"⚠️ **VIRTUAL TRADE** | {symbol} | Insufficient Balance (Vol: ${entry_price*qty:.1f})")
+                
+                await self.notification_service.notify_order_filled(new_trade, conf, dry_run=not adapter.can_trade, is_virtual=True)
                 return True
             else:
                 self.logger.error(f"Trade execution failed for {symbol}: {e}")

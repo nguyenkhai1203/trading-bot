@@ -140,6 +140,150 @@ class TestTraderExecutionLogic:
         trader.recreate_missing_sl_tp.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_update_dynamic_sltp_ta_extension_long(self, trader):
+        """Verify that TP is extended when resistance is found above current TP."""
+        pos_key = "BINANCE_BTC_USDT_1h"
+        # Price is at 54000 (80% of the way from 50000 to 55000)
+        trader.active_positions[pos_key] = {
+            'symbol': 'BTC/USDT',
+            'side': 'BUY',
+            'entry_price': 50000.0,
+            'sl': 49000.0,
+            'tp': 55000.0,
+            'status': 'filled',
+            'timeframe': '1h'
+        }
+        
+        # Mock guard data with Resistance and ATR
+        df_guard = pd.DataFrame({
+            'close': [54000.0],
+            'RSI_14': [60.0],
+            'EMA_21': [52000.0],
+            'resistance': [58000.0], # Target resistance above original TP
+            'ATR_14': [500.0]
+        })
+        df_trail = pd.DataFrame({
+            'high': [54000.0] * 10,
+            'ATR_14': [500.0] * 10
+        })
+        
+        with patch('src.execution.config.ENABLE_DYNAMIC_SLTP', True), \
+             patch('src.execution.config.ENABLE_PROFIT_LOCK', True), \
+             patch('src.execution.config.PROFIT_LOCK_THRESHOLD', 0.5): # Use our new 0.5 threshold
+            
+            await trader.update_dynamic_sltp(pos_key, df_trail=df_trail, df_guard=df_guard)
+            
+        # Verify SL moved to lock profit, then improved by ATR Trailing
+        # Profit Lock: Entry + 10% target = 50500
+        # ATR Trailing: 54000 - (1.5 * 500) = 53250
+        # Result should be 53250
+        assert trader.active_positions[pos_key]['sl'] == 53250.0
+        assert trader.active_positions[pos_key]['tp'] == 57500.0
+        assert trader.active_positions[pos_key]['profit_locked'] is True
+        assert trader.active_positions[pos_key]['tp_extensions'] == 1
+
+    @pytest.mark.asyncio
+    async def test_update_dynamic_sltp_ta_extension_short(self, trader):
+        """Verify that TP is extended for SHORT when support is found below current TP."""
+        pos_key = "BINANCE_BTC_USDT_1h"
+        trader.active_positions[pos_key] = {
+            'symbol': 'BTC/USDT',
+            'side': 'SELL',
+            'entry_price': 50000.0,
+            'sl': 51000.0,
+            'tp': 45000.0,
+            'status': 'filled',
+            'timeframe': '1h'
+        }
+        
+        df_guard = pd.DataFrame({
+            'close': [47000.0], # 60% of the way to 45k
+            'RSI_14': [40.0],
+            'EMA_21': [49000.0],
+            'support': [42000.0], # Support below original TP
+            'ATR_14': [500.0]
+        })
+        df_trail = pd.DataFrame({
+            'low': [47000.0] * 10,
+            'ATR_14': [500.0] * 10
+        })
+        
+        with patch('src.execution.config.ENABLE_DYNAMIC_SLTP', True), \
+             patch('src.execution.config.ENABLE_PROFIT_LOCK', True), \
+             patch('src.execution.config.PROFIT_LOCK_THRESHOLD', 0.5):
+            
+            await trader.update_dynamic_sltp(pos_key, df_trail=df_trail, df_guard=df_guard)
+            
+        assert trader.active_positions[pos_key]['sl'] == 47750.0
+        assert trader.active_positions[pos_key]['tp'] == 42500.0
+        assert trader.active_positions[pos_key]['profit_locked'] is True
+
+    @pytest.mark.asyncio
+    async def test_update_dynamic_sltp_rsi_guard_pulls_tp(self, trader):
+        """Verify RSI Guard pulls TP closer when overbought/oversold."""
+        pos_key = "BINANCE_BTC_USDT_1h"
+        trader.active_positions[pos_key] = {
+            'symbol': 'BTC/USDT',
+            'side': 'BUY',
+            'entry_price': 50000.0,
+            'sl': 49000.0,
+            'tp': 60000.0,
+            'status': 'filled',
+            'timeframe': '1h'
+        }
+        
+        df_guard = pd.DataFrame({
+            'close': [55000.0],
+            'RSI_14': [80.0],
+            'EMA_21': [52000.0],
+            'ATR_14': [500.0]
+        })
+        df_trail = pd.DataFrame({
+            'high': [55000.0] * 10,
+            'ATR_14': [500.0] * 10
+        })
+        
+        with patch('src.execution.config.ENABLE_DYNAMIC_SLTP', True), \
+             patch('src.execution.config.RSI_OVERBOUGHT_EXIT', 75):
+            
+            await trader.update_dynamic_sltp(pos_key, df_trail=df_trail, df_guard=df_guard)
+            
+        assert trader.active_positions[pos_key]['tp'] == 57500.0
+        assert trader.active_positions[pos_key]['tp_tightened'] is True
+
+    @pytest.mark.asyncio
+    async def test_update_dynamic_sltp_ema_guard_emergency_exit(self, trader):
+        """Verify EMA Guard triggers force_close when price breaks EMA21."""
+        pos_key = "BINANCE_BTC_USDT_1h"
+        trader.active_positions[pos_key] = {
+            'symbol': 'BTC/USDT',
+            'side': 'BUY',
+            'entry_price': 50000.0,
+            'sl': 49000.0,
+            'tp': 60000.0,
+            'status': 'filled',
+            'timeframe': '1h'
+        }
+        
+        df_guard = pd.DataFrame({
+            'close': [51000.0],
+            'RSI_14': [50.0],
+            'EMA_21': [52000.0],
+            'ATR_14': [500.0]
+        })
+        df_trail = pd.DataFrame({
+            'high': [51000.0] * 10,
+            'ATR_14': [500.0] * 10
+        })
+        
+        with patch('src.execution.config.ENABLE_DYNAMIC_SLTP', True), \
+             patch('src.execution.config.EMA_BREAK_CLOSE_THRESHOLD', 0.998):
+            
+            await trader.update_dynamic_sltp(pos_key, df_trail=df_trail, df_guard=df_guard)
+            
+        trader.force_close_position.assert_called_once_with(pos_key, reason="EMA21 breakage guard")
+
+    @pytest.mark.asyncio
     async def test_reconcile_positions_adoption(self, trader, mock_exchange):
         """Verify that unknown exchange positions are adopted locally."""
         mock_exchange.fetch_positions.return_value = [{
@@ -292,6 +436,7 @@ class TestExecuteTradeUseCase:
     def mock_notify(self):
         notify = MagicMock()
         notify.notify_order_filled = AsyncMock()
+        notify.notify_generic = AsyncMock()
         return notify
 
     @pytest.fixture
@@ -359,3 +504,121 @@ class TestExecuteTradeUseCase:
         assert 'ensure_isolated' in call_names
         assert 'create_order' in call_names
         assert call_names.index('ensure_isolated') < call_names.index('create_order')
+
+    @pytest.mark.asyncio
+    async def test_execute_trade_sends_correct_sl_tp_keys(self, mock_repo, mock_adapter, mock_risk, mock_notify, mock_cooldown):
+        """Verify that stopLoss and takeProfit keys are correctly sent to create_order"""
+        use_case = ExecuteTradeUseCase(mock_repo, {"BYBIT": mock_adapter}, mock_risk, mock_notify, mock_cooldown)
+        profile = {"id": 1, "exchange": "BYBIT"}
+        signal = {"symbol": "BTC/USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04}
+        
+        await use_case.execute(profile, signal)
+        
+        # risk service mocked to return 49000, 52000
+        mock_adapter.create_order.assert_called_once()
+        call_args = mock_adapter.create_order.call_args[1]
+        params = call_args.get('params', {})
+        assert 'stopLoss' in params
+        assert 'takeProfit' in params
+        assert params['stopLoss'] == 49000.0
+        assert params['takeProfit'] == 52000.0
+
+    @pytest.mark.asyncio
+    async def test_execute_trade_virtual_trade_notification(self, mock_repo, mock_adapter, mock_risk, mock_notify, mock_cooldown):
+        """Verify that virtual trades trigger notify_order_filled with is_virtual=True"""
+        mock_adapter.create_order.side_effect = Exception("Insufficient balance 110007")
+        use_case = ExecuteTradeUseCase(mock_repo, {"BYBIT": mock_adapter}, mock_risk, mock_notify, mock_cooldown)
+        profile = {"id": 1, "exchange": "BYBIT"}
+        signal = {"symbol": "BTC/USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04}
+        
+        result = await use_case.execute(profile, signal)
+        assert result is True
+        
+        # Verify notification
+        mock_notify.notify_order_filled.assert_called_once()
+        call_kwargs = mock_notify.notify_order_filled.call_args[1]
+        assert call_kwargs.get('is_virtual') is True
+
+    @pytest.mark.asyncio
+    async def test_execute_trade_reversal_cancels_trade(self, mock_repo, mock_adapter, mock_risk, mock_notify, mock_cooldown):
+        """Verify that reversal signals cancel the current trade status instead of closing it"""
+        use_case = ExecuteTradeUseCase(mock_repo, {"BYBIT": mock_adapter}, mock_risk, mock_notify, mock_cooldown)
+        profile = {"id": 1, "exchange": "BYBIT"}
+        signal = {"symbol": "BTC/USDT", "side": "SELL", "confidence": 0.8} # Reversal to SELL
+        
+        # Mock active position being BUY
+        mock_trade = MagicMock()
+        mock_trade.symbol = "BTC/USDT"
+        mock_trade.side = "BUY"
+        mock_trade.qty = 1.0
+        mock_trade.id = 123
+        mock_repo.get_active_positions.return_value = [mock_trade]
+        
+        # Mock adapter close position
+        mock_adapter.close_position = AsyncMock()
+        
+        await use_case.execute(profile, signal)
+        
+        mock_repo.update_status.assert_called_once_with(123, 'CANCELLED', exit_reason='REVERSAL')
+
+
+from src.application.use_cases.monitor_positions import MonitorPositionsUseCase
+
+class TestMonitorPositionsUseCase:
+    @pytest.fixture
+    def mock_sync_service(self):
+        sync = MagicMock()
+        sync.profiles = [{"id": 1, "exchange": "BYBIT", "environment": "LIVE"}]
+        # mock adapter for ghost trade resolution
+        adapter = MagicMock()
+        adapter.fetch_my_trades = AsyncMock(return_value=[])
+        sync.adapters = {"BYBIT": adapter}
+        # mock state
+        sync.get_account_state = MagicMock(return_value={'positions': []})
+        return sync
+
+    @pytest.fixture
+    def mock_repo(self):
+        repo = MagicMock()
+        repo.get_active_positions = AsyncMock(return_value=[])
+        repo.update_status = AsyncMock()
+        repo.save_trade = AsyncMock()
+        return repo
+
+    @pytest.fixture
+    def mock_risk(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_notify(self):
+        notify = MagicMock()
+        notify.notify_position_closed = AsyncMock()
+        return notify
+
+    @pytest.fixture
+    def mock_cooldown(self):
+        cd = MagicMock()
+        cd.set_sl_cooldown = AsyncMock()
+        return cd
+
+    @pytest.mark.asyncio
+    async def test_monitor_positions_sync_err_cancels_trade(self, mock_sync_service, mock_repo, mock_risk, mock_notify, mock_cooldown):
+        """Verify that ghost trades with errors updating status are marked CANCELLED with SYNC_ERR"""
+        use_case = MonitorPositionsUseCase(mock_sync_service, mock_repo, mock_risk, mock_notify, mock_cooldown)
+        
+        # Mock a ghost trade
+        mock_trade = MagicMock()
+        mock_trade.id = 999
+        mock_trade.symbol = "BTC/USDT"
+        mock_trade.side = "BUY"
+        mock_trade.meta = {}
+        mock_repo.get_active_positions.return_value = [mock_trade]
+        
+        # Force an exception during _resolve_ghost_trade to trigger fallback update
+        # Missing adapter or adapter fetch throwing error
+        mock_sync_service.adapters["BYBIT"].fetch_my_trades.side_effect = Exception("API Error")
+        
+        await use_case.execute()
+        
+        mock_repo.update_status.assert_called_with(999, status='CANCELLED', exit_reason='SYNC_ERR')
+

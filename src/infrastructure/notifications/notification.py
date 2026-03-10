@@ -145,9 +145,11 @@ def _escape_markdown(text: str) -> str:
     # We use a simple replacement for the most common culprits
     return str(text).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[')
 
-def get_mode_label(dry_run: bool) -> str:
+def get_mode_label(dry_run: bool, is_virtual: bool = False) -> str:
     """Get mode label for notifications."""
-    return "🧪 TEST" if dry_run else "LIVE"
+    if is_virtual:
+        return "VIRTUAL"
+    return "TEST" if dry_run else "LIVE"
 
 # Direction emojis
 def get_direction_emoji(side: str) -> str:
@@ -275,6 +277,7 @@ def format_position_filled(
     score: Optional[float],
     leverage: Optional[int],
     dry_run: bool,
+    is_virtual: bool = False,
     exchange_name: Optional[str] = None,
     profile_label: Optional[str] = None
 ) -> Tuple[str, str]:
@@ -288,7 +291,7 @@ def format_position_filled(
     dir_label = get_direction_label(side)
     safe_symbol = format_symbol(symbol)
     base_currency = get_base_currency(symbol)
-    mode = get_mode_label(dry_run)
+    mode = get_mode_label(dry_run, is_virtual)
     
     ex_tag = f" | {_escape_markdown(profile_label) if profile_label else _escape_markdown(exchange_name).upper() if exchange_name else ''}"
     
@@ -320,6 +323,7 @@ def format_position_closed(
     entry_time: Optional[datetime] = None,
     exit_time: Optional[datetime] = None,
     dry_run: bool = False,
+    is_virtual: bool = False,
     exchange_name: Optional[str] = None,
     profile_label: Optional[str] = None
 ) -> Tuple[str, str]:
@@ -336,16 +340,17 @@ def format_position_closed(
     status_emoji = "🟢" if pnl >= 0 else "🔴"
     dir_emoji = get_direction_emoji(side)
     dir_label = get_direction_label(side)
-    mode = get_mode_label(dry_run)
+    mode = get_mode_label(dry_run, is_virtual)
     safe_symbol = format_symbol(symbol)
     
     # Reason label
-    if reason.upper() == 'TP':
+    r_upper = reason.upper()
+    if r_upper == 'TP' or r_upper == 'VIRTUAL_TP':
         reason_label = "TAKE PROFIT"
-    elif reason.upper() == 'SL':
-        reason_label = "STOP LOSS"
+    elif r_upper == 'SL' or r_upper == 'VIRTUAL_SL':
+        reason_label = "PROFIT STOP" if pnl > 0 else "STOP LOSS"
     else:
-        reason_label = reason.upper()
+        reason_label = r_upper
     
     terminal = (
         f"{status_emoji} [{symbol} {timeframe}] {reason_label} @ {format_price(exit_price)} | "

@@ -187,7 +187,7 @@ class MonitorPositionsUseCase:
         except Exception as e:
             self.logger.error(f"Failed to resolve ghost {symbol}: {e}")
             # Fallback update to prevent infinite loop
-            await self.trade_repo.update_status(trade.id, status='CLOSED', exit_reason='SYNC_ERR')
+            await self.trade_repo.update_status(trade.id, status='CANCELLED', exit_reason='SYNC_ERR')
 
     async def _monitor_virtual_trade(self, profile: Dict[str, Any], trade: Any):
         """Monitors a virtual trade by checking ticker prices manually."""

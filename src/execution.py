@@ -1170,7 +1170,15 @@ class Trader:
             
         if not config.ENABLE_DYNAMIC_SLTP:
             # Fallback to legacy profit lock if enabled
-            return await self.adjust_sl_tp_for_profit_lock(pos_key, df_guard.iloc[-1]['close'] if df_guard is not None else None)
+            res = None
+            sup = None
+            atr = None
+            if df_guard is not None and not df_guard.empty:
+                last_g = df_guard.iloc[-1]
+                res = last_g.get('resistance')
+                sup = last_g.get('support')
+                atr = last_g.get('ATR_14')
+            return await self.adjust_sl_tp_for_profit_lock(pos_key, df_guard.iloc[-1]['close'] if df_guard is not None else None, resistance=res, support=sup, atr=atr)
 
         if pos_key not in self.active_positions:
             return False
@@ -1195,6 +1203,14 @@ class Trader:
             return False
             
         current_price = last_row_guard['close']
+        
+        # 1. LAYER 1: Hard Profit Lock (Breakeven+) + TA Extensions
+        # Extract TA data from the guard dataframe for TP extensions
+        if config.ENABLE_PROFIT_LOCK:
+            res = last_row_guard.get('resistance')
+            sup = last_row_guard.get('support')
+            atr_guard = last_row_guard.get('ATR_14')
+            await self.adjust_sl_tp_for_profit_lock(pos_key, current_price, resistance=res, support=sup, atr=atr_guard)
         changes = False
         
         # --- PHASE 6: Track Max PnL ---
