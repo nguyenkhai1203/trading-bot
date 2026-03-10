@@ -59,6 +59,15 @@ class MonitorPositionsUseCase:
             )
             
             if not matched:
+                import time
+                current_time = int(time.time() * 1000)
+                entry_time = trade.entry_time or 0
+                
+                # Grace period of 5 minutes for newly opened positions
+                if current_time - entry_time < 300000:
+                    self.logger.debug(f"Trade {trade.id} ({trade.symbol}) not found on exchange, but within 5m grace period. Skipping ghost check.")
+                    continue
+                    
                 # Ghost trade: closed on exchange but OPEN in DB
                 self.logger.info(f"Trade {trade.id} ({trade.symbol}) closed on exchange. Syncing history...")
                 

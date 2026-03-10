@@ -612,6 +612,7 @@ class TestMonitorPositionsUseCase:
         mock_trade.symbol = "BTC/USDT"
         mock_trade.side = "BUY"
         mock_trade.meta = {}
+        mock_trade.entry_time = 0
         mock_repo.get_active_positions.return_value = [mock_trade]
         
         # Force an exception during _resolve_ghost_trade to trigger fallback update
