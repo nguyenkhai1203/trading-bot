@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS trades (
     tp_order_id TEXT, 
     pos_key TEXT,                     -- EXCHANGE_SYMBOL_TIMEFRAME (Slot ID)
     status TEXT DEFAULT 'OPENED'
-        CHECK(status IN ('OPENED', 'ACTIVE', 'CLOSED', 'CANCELLED')),
+        CHECK(status IN ('OPENED', 'PENDING', 'ACTIVE', 'CLOSED', 'CANCELLED')),
     timeframe TEXT,
     entry_time INTEGER,
     exit_time INTEGER,

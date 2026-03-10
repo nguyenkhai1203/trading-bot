@@ -136,10 +136,14 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
         return 'SYNC'
 
     async def ensure_isolated_and_leverage(self, symbol: str, leverage: int):
+        # Standardize: most CCXT unified exchanges use lowercase for position/margin modes
         try:
-            await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, 'ISOLATED', symbol)
+            await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, 'isolated', symbol)
         except:
-            pass
+            try:
+                await self._execute_with_timestamp_retry(self.exchange.set_margin_mode, 'ISOLATED', symbol)
+            except:
+                pass
         try:
             await self.set_leverage(symbol, leverage)
         except:

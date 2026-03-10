@@ -110,6 +110,33 @@ class DataManager:
                     self.logger.warning("PRAGMA foreign_keys=ON did not return 1. Integrity constraints might be disabled.")
             
             await self._db.commit()
+            
+            # [CRITICAL] Auto-seed active exchanges if profiles table is empty
+            async with self._db.execute("SELECT COUNT(*) FROM profiles WHERE id > 0") as cursor:
+                count_row = await cursor.fetchone()
+                if count_row and count_row[0] == 0:
+                    from src import config
+                    self.logger.info("Database is empty. Seeding active exchanges from config...")
+                    for ex in config.ACTIVE_EXCHANGES:
+                        ex_name = ex.strip().upper()
+                        if not ex_name: continue
+                        
+                        api_key = config.BINANCE_API_KEY if ex_name == 'BINANCE' else config.BYBIT_API_KEY
+                        api_secret = config.BINANCE_API_SECRET if ex_name == 'BINANCE' else config.BYBIT_API_SECRET
+                        color = "yellow" if ex_name == 'BINANCE' else "cyan"
+                        
+                        await self.add_profile(
+                            name=f"{ex_name.capitalize()} Live",
+                            env="LIVE",
+                            exchange=ex_name,
+                            label=f"Auto-generated global profile for {ex_name}",
+                            api_key=api_key or "",
+                            api_secret=api_secret or "",
+                            color=color
+                        )
+                    self.logger.info("Auto-seeding complete.")
+            
+            await self._db.commit()
         else:
             self.logger.error(f"Schema file not found at {schema_path}")
 
@@ -277,7 +304,7 @@ class DataManager:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT * FROM trades 
-            WHERE profile_id = ? AND status IN ('ACTIVE', 'OPENED')
+            WHERE profile_id = ? AND status IN ('ACTIVE', 'OPENED', 'PENDING')
         """, (profile_id,)) as cursor:
             rows = await cursor.fetchall()
             result = []
@@ -294,7 +321,7 @@ class DataManager:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT * FROM trades 
-            WHERE exchange = ? AND status IN ('ACTIVE', 'OPENED')
+            WHERE exchange = ? AND status IN ('ACTIVE', 'OPENED', 'PENDING')
         """, (exchange_name.upper(),)) as cursor:
             rows = await cursor.fetchall()
             result = []

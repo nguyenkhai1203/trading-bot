@@ -38,7 +38,7 @@ async def test_bybit_adapter_promotes_sltp():
     
     assert len(positions) == 1
     p = positions[0]
-    assert p['symbol'] == 'BTCUSDT'
+    assert p['symbol'] == 'BTC/USDT:USDT'
     # Verification of promotion
     assert p['stopLoss'] == 48000.0
     assert p['takeProfit'] == 55000.0
@@ -61,7 +61,7 @@ async def test_reconcile_bybit_symbol_normalization():
     # Adapter method mocks
     mock_ex.fetch_positions = AsyncMock(return_value=[
         {
-            'symbol': 'BTCUSDT',
+            'symbol': 'BTC/USDT:USDT',
             'contracts': 0.001,
             'side': 'BUY',
             'entryPrice': 50000,
@@ -109,7 +109,7 @@ async def test_reconcile_bybit_updates_sl_tp_from_exchange():
     # Exchange has different values than local state
     mock_ex.fetch_positions = AsyncMock(return_value=[
         {
-            'symbol': 'ETHUSDT',
+            'symbol': 'ETH/USDT:USDT',
             'contracts': 0.1,
             'side': 'BUY',
             'entryPrice': 3000,

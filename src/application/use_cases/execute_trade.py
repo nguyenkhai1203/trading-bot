@@ -214,18 +214,82 @@ class ExecuteTradeUseCase:
 
             # 8. Place Order
             order_res = {}
+            use_limit = getattr(config, 'USE_LIMIT_ORDERS', False)
+            patience_pct = getattr(config, 'PATIENCE_ENTRY_PCT', 0.01)
+            
+            # Use provided entry_price from signal (or ticker) as base
+            base_price = entry_price
+            order_type = 'market'
+            order_price = None
+            
+            if use_limit:
+                order_type = 'limit'
+                # --- STRICT TECHNICAL ENTRY LOGIC (v4.2) ---
+                # REMOVED FALLBACK: We only enter if we find a valid technical level.
+                tech_entry = None
+                
+                # Try to find technical levels from signal snapshot or TA row
+                # Priority: Support/Resistance > Fibo > EMAs
+                ta_data = signal.get('snapshot') or {}
+                
+                if side.upper() == 'BUY':
+                    # For BUY, we want to buy at SUPPORT or FIBO below current price
+                    candidates = []
+                    # Check both snake_case and TitleCase
+                    candidates.append(signal.get('support_level'))
+                    candidates.append(signal.get('Support'))
+                    candidates.append(signal.get('fibo_618'))
+                    candidates.append(signal.get('Fibo 0.618'))
+                    candidates.append(signal.get('fibo_50'))
+                    candidates.append(signal.get('EMA_21'))
+                    
+                    # Filter out None and cast to float
+                    candidates = [float(c) for c in candidates if c is not None]
+                    
+                    # Pick the highest candidate that is BELOW current price (Patience Entry)
+                    valid_candidates = [c for c in candidates if c < entry_price * 0.998]
+                    if valid_candidates:
+                        tech_entry = max(valid_candidates)
+                else:
+                    # For SELL, we want to sell at RESISTANCE or FIBO above current price
+                    candidates = []
+                    candidates.append(signal.get('resistance_level'))
+                    candidates.append(signal.get('Resistance'))
+                    candidates.append(signal.get('fibo_618'))
+                    candidates.append(signal.get('Fibo 0.618'))
+                    candidates.append(signal.get('fibo_50'))
+                    candidates.append(signal.get('EMA_21'))
+                    
+                    # Filter out None and cast to float
+                    candidates = [float(c) for c in candidates if c is not None]
+                    
+                    # Pick the lowest candidate that is ABOVE current price
+                    valid_candidates = [c for c in candidates if c > entry_price * 1.002]
+                    if valid_candidates:
+                        tech_entry = min(valid_candidates)
+
+                if tech_entry is None:
+                    self.logger.info(f"[{symbol}] No valid technical entry level found. Skipping signal (Strict Entry).")
+                    return False
+
+                order_price = tech_entry
+                # Update entry_price to the limit price for DB/SLTP calculations
+                entry_price = order_price
+            
+            self.logger.info(f"[{symbol}] Type: {order_type.upper()} | Target: {entry_price:.4f} | Qty: {qty:.4f}")
+
             if adapter.can_trade:
-                # Calculate SL/TP prices
+                # Calculate SL/TP prices based on the actual entry target
                 sl_price, tp_price = self.risk_service.calculate_sl_tp(entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)
                 params = {
                     'leverage': leverage,
                     'stopLoss': sl_price,
                     'takeProfit': tp_price
                 }
-                order_res = await adapter.create_order(symbol, 'market', side.lower(), qty, price=None, params=params)
+                order_res = await adapter.create_order(symbol, order_type, side.lower(), qty, price=order_price, params=params)
             else:
                 sl_price, tp_price = self.risk_service.calculate_sl_tp(entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)
-                self.logger.info(f"[DRY-RUN] Signal {symbol} would open {side} at {entry_price}")
+                self.logger.info(f"[DRY-RUN] Signal {symbol} would open {side} ({order_type}) at {entry_price}")
                 order_res = {'id': f'dry_{int(time.time()*1000)}'}
             
             # 9. Save to Repository
@@ -237,19 +301,20 @@ class ExecuteTradeUseCase:
                 qty=qty,
                 entry_price=entry_price,
                 leverage=leverage,
-                status='ACTIVE', # In basic flow, market means active
+                status='PENDING' if order_type == 'limit' else 'ACTIVE',
                 timeframe=timeframe,
                 pos_key=pos_key,
                 sl_price=sl_price,
                 tp_price=tp_price,
                 exchange_order_id=str(order_res.get('id', '')),
-                entry_time=int(time.time() * 1000), # FIX: Set entry time for ghost trade resolution
+                entry_time=int(time.time() * 1000), 
                 meta={
                     'signal_confidence': conf, 
                     'rr_ratio': tp_pct / sl_pct if sl_pct > 0 else 1.0,
                     'tp_pct': tp_pct,
                     'sl_pct': sl_pct,
-                    'comment': signal.get('comment')
+                    'comment': signal.get('comment'),
+                    'order_type': order_type
                 }
             )
             
@@ -262,9 +327,16 @@ class ExecuteTradeUseCase:
                 await db.log_ai_snapshot(trade_id, json.dumps(signal['snapshot']), conf)
 
             # 11. Notify User
-            await self.notification_service.notify_order_filled(new_trade, conf, dry_run=not adapter.can_trade)
+            if order_type == 'limit':
+                await self.notification_service.notify_order_pending(
+                    symbol=symbol, timeframe=timeframe, side=side, price=entry_price,
+                    sl=sl_price, tp=tp_price, score=conf, leverage=leverage,
+                    dry_run=not adapter.can_trade, exchange=ex_name
+                )
+            else:
+                await self.notification_service.notify_order_filled(new_trade, conf, dry_run=not adapter.can_trade)
             
-            self.logger.info(f"Successfully registered {side} on {symbol} (Conf: {conf:.2f})")
+            self.logger.info(f"Successfully registered {order_type.upper()} on {symbol}")
             return True
 
         except Exception as e:

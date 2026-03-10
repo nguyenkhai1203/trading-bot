@@ -456,7 +456,7 @@ class TestExecuteTradeUseCase:
     async def test_execute_trade_sets_entry_time(self, mock_repo, mock_adapter, mock_risk, mock_notify, mock_cooldown):
         use_case = ExecuteTradeUseCase(mock_repo, {"BYBIT": mock_adapter}, mock_risk, mock_notify, mock_cooldown)
         profile = {"id": 1, "exchange": "BYBIT"}
-        signal = {"symbol": "BTC/USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04}
+        signal = {"symbol": "BTC/USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04, "support_level": 49500.0}
         
         await use_case.execute(profile, signal)
         
@@ -481,7 +481,7 @@ class TestExecuteTradeUseCase:
         """Verify that ensure_isolated_and_leverage is called before sizing and trading."""
         use_case = ExecuteTradeUseCase(mock_repo, {"BINANCE": mock_adapter}, mock_risk, mock_notify, mock_cooldown)
         profile = {"id": 1, "exchange": "BINANCE"}
-        signal = {"symbol": "BTCDOM/USDT:USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04}
+        signal = {"symbol": "BTCDOM/USDT:USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04, "support_level": 49500.0}
         
         # We want to verify the CALL ORDER specifically
         # 1. ensure_isolated_and_leverage must be called
@@ -515,7 +515,7 @@ class TestExecuteTradeUseCase:
         """Verify that stopLoss and takeProfit keys are correctly sent to create_order"""
         use_case = ExecuteTradeUseCase(mock_repo, {"BYBIT": mock_adapter}, mock_risk, mock_notify, mock_cooldown)
         profile = {"id": 1, "exchange": "BYBIT"}
-        signal = {"symbol": "BTC/USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04}
+        signal = {"symbol": "BTC/USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04, "support_level": 49500.0}
         
         await use_case.execute(profile, signal)
         
@@ -534,7 +534,7 @@ class TestExecuteTradeUseCase:
         mock_adapter.create_order.side_effect = Exception("Insufficient balance 110007")
         use_case = ExecuteTradeUseCase(mock_repo, {"BYBIT": mock_adapter}, mock_risk, mock_notify, mock_cooldown)
         profile = {"id": 1, "exchange": "BYBIT"}
-        signal = {"symbol": "BTC/USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04}
+        signal = {"symbol": "BTC/USDT", "side": "BUY", "confidence": 0.8, "sl_pct": 0.02, "tp_pct": 0.04, "support_level": 49500.0}
         
         result = await use_case.execute(profile, signal)
         assert result is True

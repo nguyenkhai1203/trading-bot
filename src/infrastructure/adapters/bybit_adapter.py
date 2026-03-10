@@ -88,8 +88,12 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             for p in raw_list:
                 size = float(p.get('size', 0))
                 if size > 0:
+                    raw_sym = p.get('symbol', '')
+                    # Normalize raw symbol (e.g. DOTUSDT) to CCXT standard (e.g. DOT/USDT:USDT)
+                    norm_sym = f"{raw_sym[:-4]}/USDT:USDT" if raw_sym.endswith("USDT") else raw_sym
+                    
                     active.append({
-                        'symbol': p.get('symbol'),
+                        'symbol': norm_sym,
                         'contracts': size,
                         'side': p.get('side', '').upper(),
                         'entryPrice': float(p.get('avgPrice', 0)),
@@ -127,6 +131,9 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         else:
             extra['positionIdx'] = 0
             
+        if price:
+            price = float(self.exchange.price_to_precision(symbol, price))
+            type = 'limit' # Force limit if price is provided, safety check
         # SL/TP Parameter Enrichment (strictly typed for Bybit V5)
         if 'stopLoss' in params:
             params['stopLoss'] = str(self.exchange.price_to_precision(symbol, float(params['stopLoss'])))
@@ -249,7 +256,7 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         try:
             try:
                 await self._execute_with_timestamp_retry(
-                    self.exchange.set_margin_mode, 'ISOLATED', symbol, params={'category': 'linear', 'buyLeverage': str(leverage), 'sellLeverage': str(leverage)}
+                    self.exchange.set_margin_mode, 'isolated', symbol, params={'category': 'linear', 'buyLeverage': str(leverage), 'sellLeverage': str(leverage)}
                 )
             except Exception as e:
                 err = str(e).lower()

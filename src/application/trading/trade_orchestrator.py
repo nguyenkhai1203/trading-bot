@@ -59,7 +59,8 @@ class TradeOrchestrator:
                 await asyncio.sleep(config.HEARTBEAT_INTERVAL)
                 
         except Exception as e:
-            self.logger.error(f"Critical error in Orchestrator loop: {e}")
+            import traceback
+            self.logger.error(f"Critical error in Orchestrator loop: {e}\n{traceback.format_exc()}")
         finally:
             await self.stop()
 

@@ -18,13 +18,15 @@ class MonitorPositionsUseCase:
         trade_repo: ITradeRepository,
         risk_service: RiskService,
         notification_service: NotificationService,
-        cooldown_manager: CooldownManager
+        cooldown_manager: CooldownManager,
+        evaluate_strategy_use_case: Any = None
     ):
         self.sync_service = sync_service
         self.trade_repo = trade_repo
         self.risk_service = risk_service
         self.notification_service = notification_service
         self.cooldown_manager = cooldown_manager
+        self.evaluate_strategy_use_case = evaluate_strategy_use_case
         self.logger = logging.getLogger("MonitorPositionsUseCase")
 
     async def execute(self):
@@ -33,6 +35,7 @@ class MonitorPositionsUseCase:
         """
         for profile in self.sync_service.profiles:
             await self._monitor_profile(profile)
+            await self._manage_pending_trades(profile)
 
     async def _monitor_profile(self, profile: Dict[str, Any]):
         # 1. Get cached state for this profile's account
@@ -146,6 +149,7 @@ class MonitorPositionsUseCase:
             exit_price = trade.entry_price # Default / Fallback
             reason = 'SYNC'
             pnl = 0.0
+            pnl_pct = 0.0
             
             if close_trade:
                 exit_price = float(close_trade.get('price', exit_price))
@@ -256,3 +260,73 @@ class MonitorPositionsUseCase:
                 )
         except Exception as e:
             self.logger.error(f"Error monitoring virtual trade {trade.symbol}: {e}")
+
+    async def _manage_pending_trades(self, profile: Dict[str, Any]):
+        """
+        Manages trades with 'PENDING' status in DB:
+        1. Expiration: Cancel if older than 2 hours.
+        2. Reversal: Cancel if signal side changed.
+        """
+        import time
+        from src import config
+        
+        db_trades = await self.trade_repo.get_active_positions(profile['id'])
+        pending_trades = [t for t in db_trades if t.status == 'PENDING']
+        
+        if not pending_trades:
+            return
+
+        ex_name = profile['exchange'].upper()
+        adapter = self.sync_service.adapters.get(ex_name)
+        if not adapter: return
+
+        # Get current state to see if orders still exist
+        state = self.sync_service.get_account_state(profile)
+        exchange_orders = state.get('orders', []) if state else []
+
+        for trade in pending_trades:
+            # 1. Existence check
+            match = next((o for o in exchange_orders if str(o.get('id')) == str(trade.exchange_order_id)), None)
+            
+            # If filled or cancelled on exchange, we'll let ghost check handle status updates
+            # But if it's still there, we check for expiration or reversal
+            if match:
+                current_time = int(time.time() * 1000)
+                entry_time = trade.entry_time or 0
+                
+                # A. Expiration (2 hours)
+                if entry_time > 0 and (current_time - entry_time) > 7200000:
+                    self.logger.info(f"[{trade.symbol}] Pending order expired (2h). Cancelling...")
+                    await self._cancel_pending_trade(profile, adapter, trade, "EXPIRED")
+                    continue
+
+                # B. Reversal Check
+                if self.evaluate_strategy_use_case:
+                    # Evaluate current signal
+                    sig = await self.evaluate_strategy_use_case.execute(trade.symbol, trade.timeframe, ex_name)
+                    if sig and sig.get('side') != 'SKIP' and sig.get('side').upper() != trade.side:
+                        self.logger.info(f"[{trade.symbol}] Signal reversal detected ({trade.side} -> {sig.get('side')}). Cancelling pending...")
+                        await self._cancel_pending_trade(profile, adapter, trade, "REVERSED")
+                        continue
+
+    async def _cancel_pending_trade(self, profile: Dict[str, Any], adapter: BaseAdapter, trade: Any, reason: str):
+        """Helper to cancel a pending order on exchange and DB."""
+        try:
+            await adapter.cancel_order(trade.exchange_order_id, trade.symbol)
+            await self.trade_repo.update_status(trade.id, status='CANCELLED', exit_reason=reason)
+            
+            # Notify
+            await self.notification_service.notify_order_cancelled(
+                symbol=trade.symbol,
+                timeframe=trade.timeframe,
+                side=trade.side,
+                price=trade.entry_price,
+                reason=reason,
+                dry_run=not adapter.can_trade,
+                exchange=profile['exchange'].upper()
+            )
+            self.logger.info(f"Successfully cancelled pending {trade.symbol} due to {reason}")
+        except Exception as e:
+            self.logger.error(f"Failed to cancel pending {trade.symbol}: {e}")
+            # If not found, it might have just filled. Let ghost sync fix it later.
+

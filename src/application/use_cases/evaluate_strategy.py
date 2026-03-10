@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional
 import logging
+import pandas as pd
 from src.domain.services.strategy_service import StrategyService
 from src import config
 
@@ -41,5 +42,10 @@ class EvaluateStrategyUseCase:
         if conf is None or conf < config.MIN_CONFIDENCE_TO_TRADE:
             return None
             
-        signal['last_row'] = last_row
+        # 4. Enrich signal with Technical Levels for Limit Entry
+        for level in ['support_level', 'resistance_level', 'fibo_618', 'fibo_50', 'fibo_382', 'EMA_21', 'EMA_50', 'EMA_200']:
+            if level in df.columns:
+                signal[level] = float(last_row[level]) if not pd.isna(last_row[level]) else None
+
+        signal['last_row_summary'] = last_row.to_dict()
         return signal

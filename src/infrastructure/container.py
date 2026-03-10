@@ -99,7 +99,8 @@ class Container:
             self.trade_repo, 
             self.risk_service, 
             self.notification_service,
-            self.cooldown_manager
+            self.cooldown_manager,
+            self.evaluate_strategy_use_case
         )
         
         self.execute_trade_use_case = ExecuteTradeUseCase(

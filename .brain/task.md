@@ -141,3 +141,4 @@
 ### Phase 30: Account Depletion Safeguards [COMPLETED]
 - [x] **Available Balance Guard**: Update `ExecuteTradeUseCase.execute` to check available USDT balance before order creation.
 - [x] **Verification**: Add unit tests for balance guard.
+- [x] **Active Position Spam Fix**: Fixed `BybitAdapter.fetch_positions` returning native `DOTUSDT` format instead of CCXT `DOT/USDT:USDT`. This mismatch caused the bot to perpetually place orders because it couldn't see its own active database trades.

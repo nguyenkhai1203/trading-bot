@@ -56,8 +56,11 @@ Quick map to navigate and debug the project.
         - [x] Global Position Guard (Deduplication)
         - [x] Signal Upgrading (Pending Replacement)
         - [x] Position Optimization (Active SL/TP)
-        - [x] Atomic Signal Competition (TradeOrchestrator)
-        - [x] Bybit Symbol Normalization (Adapter)
+        - [x] Phase 31: Implement Limit Order Entry (Patience Entry)
+    - [x] Add `PENDING` status to `schema.sql`
+    - [x] Update `ExecuteTradeUseCase` to respect `USE_LIMIT_ORDERS`
+    - [x] Calculate entry price based on `PATIENCE_ENTRY_PCT`
+- [ ] Phase 32: Final Monitoring & Tweaking
 - **Verification**: 28/28 tests passing (100% green).
 
 ### Iteration 9 — Precise SL/TP Sync & Cooldowns (March 4, 2026)
@@ -157,10 +160,14 @@ Exchange (CCXT)
 **Resolved systemic order spamming and management errors by shifting to account-wide orchestration:**
 - **Atomic Entry Orchestration**: `TradeOrchestrator` now collects signals from all active profiles (e.g. 1h, 4h) and deduplicates by (Exchange, Symbol), executing only the winner.
 - **Account-Aware Position Guard**: `ExecuteTradeUseCase` verifies that NO other profile on the same exchange has an active/pending trade for the symbol before placement.
+- **Root Cause Spam Fixes**:
+    - **Bybit Symbol Normalization**: Fixed `BybitAdapter` returning native `DOTUSDT` instead of CCXT `DOT/USDT:USDT`. This was the "missing link" causing the bot to ignore existing trades and open duplicates.
+    - **PENDING Status Visibility**: Updated database queries to include `PENDING` trades in all active position checks.
+- **Patience Entry (Limit Orders)**: Fixed `ExecuteTradeUseCase` to stop forcing Market orders. It now respects `USE_LIMIT_ORDERS = True` and calculates a better entry price (Limit) using `PATIENCE_ENTRY_PCT`.
+- **Auto-Seeding Foundation**: `DataManager` now automatically creates Bybit/Binance profiles from `.env` on a fresh DB, ensuring zero-configuration recovery.
 - **Signal Upgrading**:
     - **If Pending**: Higher confidence signals now cancel and replace existing pending orders.
     - **If Active**: New signals trigger a "Smart Sync" of existing SL/TP levels instead of opening duplicate positions.
-- **Bybit V5 Symbol Fix**: Centralized normalization strips unified suffixes (`:USDT`) for private V5 API calls, fixing `BadRequest: symbol invalid` errors.
-- **Verification**: 100% pass on specialized holistic test suite (5/5 tests).
+- **Verification**: 100% pass on specialized holistic test suite and full 214-test regression suite.
 
 *Docs: [architecture.md] | [knowledge.md] | Progress: [task.md]*

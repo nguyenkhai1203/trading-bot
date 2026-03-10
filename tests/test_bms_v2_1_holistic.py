@@ -56,6 +56,7 @@ class TestBMSv21Holistic:
         notif = MagicMock()
         notif.notify_generic = AsyncMock()
         notif.notify_order_filled = AsyncMock()
+        notif.notify_order_pending = AsyncMock()
         cooldown = MagicMock()
         cooldown.is_in_cooldown = MagicMock(return_value=False)
         cooldown.is_margin_throttled = MagicMock(return_value=False)
@@ -90,7 +91,7 @@ class TestBMSv21Holistic:
     def test_signal_upgrade_replaces_pending(self, execute_use_case, mock_repo, mock_adapter):
         """Verify that a higher confidence signal replaces a PENDING order."""
         profile = {'id': 1, 'exchange': 'BYBIT'}
-        new_signal = {'symbol': 'BTC/USDT', 'side': 'BUY', 'confidence': 0.8, 'sl_pct': 0.01, 'tp_pct': 0.1}
+        new_signal = {'symbol': 'BTC/USDT', 'side': 'BUY', 'confidence': 0.8, 'sl_pct': 0.01, 'tp_pct': 0.1, 'support_level': 49500.0, 'Support': 49500.0}
         
         # Scenario: A low-confidence PENDING order exists
         pending_trade = Trade(
