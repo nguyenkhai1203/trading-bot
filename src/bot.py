@@ -443,8 +443,8 @@ async def main():
             balance_tracker.reset_reservations()
             
             # A. Update Market Data & BMS (BMS throttled to 15m)
-            await manager.update_tickers(config.TRADING_SYMBOLS)
-            updated = await manager.update_data(config.TRADING_SYMBOLS, config.TRADING_TIMEFRAMES)
+            await manager.update_tickers(config.DATA_SYMBOLS)
+            updated = await manager.update_data(config.DATA_SYMBOLS, config.TRADING_TIMEFRAMES)
             
             if curr_time - last_bms_update_time > 900: # 15 minutes
                 print("🔄 Updating BTC Market Sentiment (BMS)...")

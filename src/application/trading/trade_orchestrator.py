@@ -41,8 +41,8 @@ class TradeOrchestrator:
 
                 # 2. Update Market Data
                 if self.container.data_manager:
-                    await self.container.data_manager.update_tickers(config.TRADING_SYMBOLS)
-                    await self.container.data_manager.update_data(config.TRADING_SYMBOLS, config.TRADING_TIMEFRAMES)
+                    await self.container.data_manager.update_tickers(config.DATA_SYMBOLS)
+                    await self.container.data_manager.update_data(config.DATA_SYMBOLS, config.TRADING_TIMEFRAMES)
                 
                 # 3. Monitor Positions (Reconcile & Sync)
                 await self.container.monitor_positions_use_case.execute()

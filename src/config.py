@@ -142,7 +142,12 @@ BMS_CONFIG = {
     'MTF_WEIGHTS': {'1h': 0.3, '4h': 0.4, '1d': 0.3}
 }
 
-# Add BTCDOM to Binance symbols to ensure download_data fetches it
-if 'BTCDOM/USDT:USDT' not in BINANCE_SYMBOLS:
-    BINANCE_SYMBOLS.append('BTCDOM/USDT:USDT')
-    TRADING_SYMBOLS = list(set(BINANCE_SYMBOLS + BYBIT_SYMBOLS))
+# Macro / Analytical Symbols (Not TRADED)
+MACRO_SYMBOLS = ['BTCDOM/USDT:USDT']
+
+# General data fetching lists spanning tradable and macro symbols.
+DATA_SYMBOLS_BINANCE = list(set(BINANCE_SYMBOLS + MACRO_SYMBOLS))
+DATA_SYMBOLS_BYBIT = list(set(BYBIT_SYMBOLS))
+
+# Unified list for general data fetching (union of both + macro)
+DATA_SYMBOLS = list(set(DATA_SYMBOLS_BINANCE + DATA_SYMBOLS_BYBIT))
