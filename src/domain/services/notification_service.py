@@ -84,7 +84,8 @@ class NotificationService:
             
             # Convert timestamps if available
             entry_dt = datetime.fromtimestamp(trade.entry_time / 1000) if getattr(trade, 'entry_time', None) else None
-            exit_dt = datetime.now() # Use now as fallback for sync-detected closure
+            # FIX: Ensure exit_dt is never None to allow duration calculation
+            exit_dt = datetime.fromtimestamp(trade.exit_time / 1000) if getattr(trade, 'exit_time', None) else datetime.now()
             
             terminal_msg, telegram_msg = notification.format_position_closed(
                 symbol=trade.symbol,

@@ -40,18 +40,26 @@ class ExecuteTradeUseCase:
         symbol = signal['symbol']
         ex_name = profile.get('exchange', '').upper()
         
+        adapter = self.adapters.get(ex_name)
+        if not adapter:
+            self.logger.error(f"No adapter found for {ex_name}")
+            return False
+
+        acc_key = getattr(adapter, 'account_key', f"{ex_name}_GLOBAL")
+
         # 1. Safety Checks (Cooldown & Margin)
         if self.cooldown_manager.is_in_cooldown(ex_name, symbol):
             self.logger.info(f"Signal for {symbol} skipped: In SL Cooldown.")
             return False
             
-        # Margin throttling (Profile specific check via shared cache in CooldownManager)
-        # We use profile['id'] as part of the check if needed, but CooldownManager uses account_key
-        # In this refactor, we'll use a simplified check or pass the account_key
-        # Assuming CooldownManager.is_margin_throttled handles the logic
-        # For simplicity, we'll check if the profile's exchange is throttled
-        # (In old code, this was account-wide)
-        
+        # 1b. Margin Throttling Check
+        if self.cooldown_manager.is_margin_throttled(acc_key):
+            if self.cooldown_manager.should_log_margin_throttle(acc_key):
+                self.logger.warning(f"Signal for {symbol} skipped: Account {acc_key} is margin throttled (Log throttled).")
+            else:
+                self.logger.debug(f"Signal for {symbol} skipped: Account {acc_key} is margin throttled.")
+            return False
+
         # 2. Confidence Check (Strict)
         conf = signal.get('confidence')
         if conf is None:
@@ -77,11 +85,6 @@ class ExecuteTradeUseCase:
              # Fallback to defaults or return False
              sl_pct = sl_pct or getattr(config, 'STOP_LOSS_PCT', 0.02)
              tp_pct = tp_pct or getattr(config, 'TAKE_PROFIT_PCT', 0.04)
-
-        adapter = self.adapters.get(ex_name)
-        if not adapter:
-            self.logger.error(f"No adapter found for {ex_name}")
-            return False
 
         profile_id = profile['id']
         side = signal['side']
@@ -141,6 +144,10 @@ class ExecuteTradeUseCase:
             leverage = selected_tier.get('leverage', 5)
             cost_usdt = selected_tier.get('cost_usdt', 5.0)
             
+            # --- CRITICAL: Enforce ISOLATED Margin and Leverage before sizing/trading ---
+            # This ensures BTCDOM isn't CROSS and TAO doesn't exceed capital targets
+            await adapter.ensure_isolated_and_leverage(symbol, leverage)
+            
             qty = self.risk_service.calculate_size_by_cost(entry_price, cost_usdt, leverage)
             
             # 7. STRICT NOTIONAL CHECK (Safety against exchange rejections)
@@ -191,6 +198,7 @@ class ExecuteTradeUseCase:
                 sl_price=sl_price,
                 tp_price=tp_price,
                 exchange_order_id=str(order_res.get('id', '')),
+                entry_time=int(time.time() * 1000), # FIX: Set entry time for ghost trade resolution
                 meta={
                     'signal_confidence': conf, 
                     'rr_ratio': tp_pct / sl_pct if sl_pct > 0 else 1.0,
@@ -217,13 +225,44 @@ class ExecuteTradeUseCase:
         except Exception as e:
             err_msg = str(e).lower()
             if "insufficient" in err_msg or "balance" in err_msg or "110007" in err_msg:
-                # Log as WARNING instead of ERROR since Orchestrator handles rebalancing
-                self.logger.warning(f"Insufficient funds for {symbol} (Bybit code 110007). Rebalancing may be triggered.")
+                self.logger.warning(f"⚠️ [MARGIN-FAIL] {symbol} failed (Bybit 110007). Creating VIRTUAL trade for AI tracking.")
                 
-                # Trigger Margin Throttling (account-wide via shared cache)
-                acc_key = getattr(adapter, 'account_key', f"{ex_name}_GLOBAL")
+                # Trigger Margin Throttling
                 await self.cooldown_manager.handle_margin_error(acc_key, ex_name) 
-                raise InsufficientFundsError(str(e))
+
+                # Fallback: Save as a VIRTUAL trade so we don't lose the AI snapshot and TP/SL tracking
+                new_trade = Trade(
+                    profile_id=profile_id,
+                    exchange=ex_name,
+                    symbol=symbol,
+                    side=side.upper(),
+                    qty=qty,
+                    entry_price=entry_price,
+                    leverage=leverage,
+                    status='ACTIVE', # Keep as ACTIVE so MonitorPosition picks it up
+                    timeframe=timeframe,
+                    pos_key=pos_key,
+                    sl_price=sl_price,
+                    tp_price=tp_price,
+                    exchange_order_id=f"virtual_{int(time.time())}",
+                    entry_time=int(time.time() * 1000),
+                    meta={
+                        'signal_confidence': conf, 
+                        'rr_ratio': tp_pct / sl_pct if sl_pct > 0 else 1.0,
+                        'is_virtual': True, # Flag as virtual due to margin
+                        'original_error': str(e)
+                    }
+                )
+                trade_id = await self.trade_repo.save_trade(new_trade)
+                
+                # Log AI Snapshot even for virtual trade
+                if signal.get('snapshot'):
+                    from src.infrastructure.repository.database import DataManager
+                    db = await DataManager.get_instance()
+                    await db.log_ai_snapshot(trade_id, json.dumps(signal['snapshot']), conf)
+                
+                await self.notification_service.notify_generic(f"⚠️ **VIRTUAL TRADE** | {symbol} | Insufficient Balance (Vol: ${entry_price*qty:.1f})")
+                return True
             else:
                 self.logger.error(f"Trade execution failed for {symbol}: {e}")
                 import traceback

@@ -47,7 +47,12 @@ class MonitorPositionsUseCase:
         
         # 3. Reconcile
         for trade in db_trades:
-            # Find matching position on exchange
+            # A. Handle Virtual Trades (No exchange presence)
+            if trade.meta.get('is_virtual'):
+                await self._monitor_virtual_trade(profile, trade)
+                continue
+
+            # B. Real Trades: Find matching position on exchange
             matched = next(
                 (p for p in exchange_positions if p.get('symbol') == trade.symbol), 
                 None
@@ -91,6 +96,7 @@ class MonitorPositionsUseCase:
                         sl_price=float(ep.get('stopLoss') or 0) or None,
                         tp_price=float(ep.get('takeProfit') or 0) or None,
                         exchange_order_id=f"adopted_{int(time.time())}",
+                        entry_time=int(time.time() * 1000), # FIX: Include entry_time for adopted orphans
                         meta={'is_orphan': True, 'adopted_at': int(time.time() * 1000)}
                     )
                     
@@ -118,10 +124,13 @@ class MonitorPositionsUseCase:
             target_side = 'sell' if trade.side == 'BUY' else 'buy'
             close_trade = None
             
+            # Anchor time: Use entry_time (fallback to 0)
+            anchor_time = (trade.entry_time or 0)
+            
             for t in reversed(trades or []):
                 # Simple check: trade must be roughly newer than entry
-                # trade.entry_time is in ms
-                if t.get('timestamp', 0) >= (trade.entry_time - 5000) and t.get('side', '').lower() == target_side:
+                # FIX: Handle missing entry_time gracefully
+                if t.get('timestamp', 0) >= (anchor_time - 5000) and t.get('side', '').lower() == target_side:
                     close_trade = t
                     break
             
@@ -179,3 +188,62 @@ class MonitorPositionsUseCase:
             self.logger.error(f"Failed to resolve ghost {symbol}: {e}")
             # Fallback update to prevent infinite loop
             await self.trade_repo.update_status(trade.id, status='CLOSED', exit_reason='SYNC_ERR')
+
+    async def _monitor_virtual_trade(self, profile: Dict[str, Any], trade: Any):
+        """Monitors a virtual trade by checking ticker prices manually."""
+        ex_name = profile['exchange'].upper()
+        adapter = self.sync_service.adapters.get(ex_name)
+        if not adapter: return
+
+        try:
+            ticker = await adapter.fetch_ticker(trade.symbol)
+            current_price = float(ticker['last'])
+            
+            side = trade.side.upper()
+            sl = trade.sl_price
+            tp = trade.tp_price
+            
+            hit_reason = None
+            if side == 'BUY':
+                if sl and current_price <= sl: hit_reason = 'SL'
+                elif tp and current_price >= tp: hit_reason = 'TP'
+            else: # SELL
+                if sl and current_price >= sl: hit_reason = 'SL'
+                elif tp and current_price <= tp: hit_reason = 'TP'
+                
+            if hit_reason:
+                self.logger.info(f"🚀 [VIRTUAL] {trade.symbol} hit {hit_reason} at {current_price}")
+                
+                # Calculate PnL
+                qty = float(trade.qty)
+                leverage = float(trade.leverage or 10)
+                if side == 'BUY':
+                    pnl = (current_price - trade.entry_price) * qty
+                else:
+                    pnl = (trade.entry_price - current_price) * qty
+                
+                margin = (trade.entry_price * qty) / leverage
+                pnl_pct = (pnl / margin * 100) if margin > 0 else 0.0
+
+                # Update DB
+                await self.trade_repo.update_status(
+                    trade.id, 
+                    status='CLOSED',
+                    exit_reason=f'VIRTUAL_{hit_reason}',
+                    exit_price=current_price,
+                    pnl=pnl
+                )
+                
+                # Notify
+                # Ensure profile environment is checked for notification label
+                is_live = str(profile.get('environment', 'LIVE')).upper() == 'LIVE'
+                await self.notification_service.notify_position_closed(
+                    trade=trade,
+                    exit_price=current_price,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    reason=f'VIRTUAL_{hit_reason}',
+                    dry_run=True # Virtual is always reported as simulated
+                )
+        except Exception as e:
+            self.logger.error(f"Error monitoring virtual trade {trade.symbol}: {e}")

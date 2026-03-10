@@ -101,3 +101,19 @@ class CooldownManager:
         self.logger.warning(
             f"[{exchange_name}] Insufficient margin detected. Throttling entries for 15 minutes."
         )
+
+    def should_log_margin_throttle(self, account_key: str, interval: int = 60) -> bool:
+        """
+        Throttles logging for margin-related messages. 
+        Returns True if the message should be logged (if interval has passed).
+        """
+        now = time.time()
+        acc_data = self._shared_account_cache.get(account_key, {})
+        last_log = acc_data.get('last_margin_throttle_log', 0)
+        
+        if now - last_log > interval:
+            if account_key not in self._shared_account_cache:
+                self._shared_account_cache[account_key] = {}
+            self._shared_account_cache[account_key]['last_margin_throttle_log'] = now
+            return True
+        return False

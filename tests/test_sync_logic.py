@@ -259,3 +259,75 @@ class TestSyncLogic:
         }
         reason = self.trader._infer_exit_reason(trade, pos)
         assert reason == 'SL'
+
+# --- New Architecture: MonitorPositionsUseCase Tests ---
+from src.application.use_cases.monitor_positions import MonitorPositionsUseCase
+import time
+
+class TestMonitorPositionsUseCaseIntegration:
+    @pytest.fixture
+    def mock_repo(self):
+        repo = MagicMock()
+        repo.save_trade = AsyncMock(return_value=1)
+        repo.update_status = AsyncMock()
+        repo.get_active_positions = AsyncMock(return_value=[])
+        return repo
+
+    @pytest.fixture
+    def mock_notify(self):
+        return MagicMock(notify_position_closed=AsyncMock())
+
+    @pytest.fixture
+    def mock_cooldown(self):
+        return MagicMock()
+
+    @pytest.mark.asyncio
+    async def test_monitor_positions_resolves_ghost_robustly(self, mock_repo, mock_notify, mock_cooldown):
+        sync_service = MagicMock()
+        sync_service.profiles = [{"id": 1, "exchange": "BYBIT"}]
+        sync_service.get_account_state.return_value = {"positions": []}
+        
+        # Stale trade with NO entry_time
+        stale_trade = MagicMock(id=999, symbol="ETH/USDT", side="BUY", entry_time=None, entry_price=2000.0, status="ACTIVE", meta={})
+        mock_repo.get_active_positions.return_value = [stale_trade]
+        
+        mock_adapter = AsyncMock()
+        mock_adapter.fetch_my_trades.return_value = [{'symbol': 'ETH/USDT', 'side': 'sell', 'price': 2100.0, 'timestamp': int(time.time()*1000)}]
+        sync_service.adapters = {"BYBIT": mock_adapter}
+        
+        use_case = MonitorPositionsUseCase(sync_service, mock_repo, MagicMock(), mock_notify, mock_cooldown)
+        await use_case.execute()
+        
+        mock_repo.update_status.assert_called_once()
+        mock_notify.notify_position_closed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_monitor_virtual_trade_simulation(self, mock_repo, mock_notify, mock_cooldown):
+        """Verify virtual trade hits TP/SL based on ticker prices."""
+        sync_service = MagicMock()
+        sync_service.profiles = [{"id": 1, "exchange": "BYBIT"}]
+        
+        # Virtual trade with TP hit
+        virtual_trade = MagicMock(
+            id=101, symbol="BTC/USDT", side="BUY", 
+            entry_price=50000.0, sl_price=49000.0, tp_price=55000.0,
+            qty=0.01, leverage=10, meta={'is_virtual': True}
+        )
+        mock_repo.get_active_positions.return_value = [virtual_trade]
+        
+        mock_adapter = AsyncMock()
+        mock_adapter.fetch_ticker.return_value = {'last': 56000.0} # TP HIT
+        sync_service.adapters = {"BYBIT": mock_adapter}
+        sync_service.get_account_state.return_value = {"positions": []}
+        
+        use_case = MonitorPositionsUseCase(sync_service, mock_repo, MagicMock(), mock_notify, mock_cooldown)
+        await use_case.execute()
+        
+        # Verify closure
+        args, kwargs = mock_repo.update_status.call_args
+        assert args[0] == 101 # trade_id
+        assert kwargs['status'] == 'CLOSED'
+        assert kwargs['exit_reason'] == 'VIRTUAL_TP'
+        assert kwargs['exit_price'] == 56000.0
+        
+        mock_notify.notify_position_closed.assert_called_once()

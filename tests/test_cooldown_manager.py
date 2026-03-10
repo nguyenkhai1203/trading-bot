@@ -41,16 +41,37 @@ class TestCooldownManager:
     async def test_margin_throttling_logic(self, manager):
         """Verify account-level margin throttling via shared cache."""
         account_key = "MOCK_ACC_1"
+        current_time = 1700000000.0
         
-        # 1. Initially not throttled
+        with patch('time.time', return_value=current_time):
+            # 1. Initially not throttled
+            assert manager.is_margin_throttled(account_key) is False
+            
+            # 2. Handle margin error
+            await manager.handle_margin_error(account_key, "BINANCE")
+            
+            # 3. Should now be throttled
+            assert manager.is_margin_throttled(account_key) is True
+            # Check value
+            assert manager._shared_account_cache[account_key]['margin_cooldown_until'] == current_time + 900
+            
+            # 4. Verify cross-profile awareness (different profile, same account_key)
+            shared_cache = manager._shared_account_cache
+            new_manager = CooldownManager(AsyncMock(), MagicMock(), shared_cache=shared_cache)
+            assert new_manager.is_margin_throttled(account_key) is True
+
+    @pytest.mark.asyncio
+    async def test_margin_throttled_expiry_behavior(self, manager):
+        """Verify margin throttling expires correctly."""
+        account_key = "MOCK_ACC_EXPIRY"
+        
+        # Set to expired
+        manager._shared_account_cache[account_key] = {
+            'margin_cooldown_until': time.time() - 100,
+            'last_margin_error': time.time() - 100
+        }
+        
         assert manager.is_margin_throttled(account_key) is False
-        
-        # 2. Handle margin error
-        await manager.handle_margin_error(account_key, "BINANCE")
-        
-        # 3. Should now be throttled
-        assert manager.is_margin_throttled(account_key) is True
-        assert manager._shared_account_cache[account_key]['margin_cooldown_until'] > time.time()
 
     @pytest.mark.asyncio
     async def test_db_sync_hydration(self, manager):
