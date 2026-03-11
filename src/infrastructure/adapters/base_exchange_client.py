@@ -152,7 +152,8 @@ class BaseExchangeClient:
                             "side cannot be changed",
                             "last 500 orders", "acknowledged", "already", "not modified",
                             "-2011", "-2013", "order does not exist",
-                            "fetchpositionmode", "is not supported", "missing some parameters"
+                            "fetchpositionmode", "is not supported", "missing some parameters",
+                            "can not set tp/sl/ts for zero position", "10001"
                         ]
                         if not any(s.lower() in error_msg for s in silence_errors):
                             self.logger.error(f"[API ERROR] {type(e).__name__} in {api_call.__name__} for {args}: {str(e)[:250]}")

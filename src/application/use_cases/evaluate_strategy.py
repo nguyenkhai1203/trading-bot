@@ -27,27 +27,49 @@ class EvaluateStrategyUseCase:
         if df is None or df.empty:
             return None
 
-        # BUG 23 FIX: Check data freshness
+        # 3. Data Freshness Guard
         import time
-        raw_ts = df.iloc[-1]['timestamp']
-        # Ensure last_ts is in milliseconds
-        if hasattr(raw_ts, 'timestamp'):
-            last_ts = int(raw_ts.timestamp() * 1000)
-        else:
-            last_ts = int(raw_ts) if raw_ts > 1e11 else int(raw_ts * 1000)
+        import pandas as pd
+        import numpy as np
+
+        # Determine last candle timestamp
+        try:
+            raw_ts = df.iloc[-1]['timestamp']
+            last_ts = 0
             
+            # Robust conversion to milliseconds
+            if isinstance(raw_ts, pd.Timestamp):
+                last_ts = int(raw_ts.timestamp() * 1000)
+            elif isinstance(raw_ts, np.datetime64):
+                # Convert ns to ms
+                last_ts = int(raw_ts.astype('datetime64[ms]').astype(int))
+            elif hasattr(raw_ts, 'timestamp'):
+                last_ts = int(raw_ts.timestamp() * 1000)
+            else:
+                try:
+                    val = float(raw_ts)
+                    # If it's in seconds (e.g. 1.7e9), convert to ms
+                    last_ts = int(val * 1000) if val < 1e11 else int(val)
+                except:
+                    last_ts = 0
+        except Exception as e:
+            self.logger.error(f"Error extracting timestamp: {e}")
+            last_ts = 0
+        
         now_ts = int(time.time() * 1000)
         
-        # Calculate max allowable age based on timeframe
+        # Calculate max allowable age based on timeframe (allow 3 candles lag)
         tf_ms = 3600000 # Default 1h
-        if timeframe.endswith('m'): tf_ms = int(timeframe[:-1]) * 60000
-        elif timeframe.endswith('h'): tf_ms = int(timeframe[:-1]) * 3600000
-        elif timeframe.endswith('d'): tf_ms = int(timeframe[:-1]) * 86400000
+        if str(timeframe).endswith('m'): tf_ms = int(str(timeframe)[:-1]) * 60000
+        elif str(timeframe).endswith('h'): tf_ms = int(str(timeframe)[:-1]) * 3600000
+        elif str(timeframe).endswith('d'): tf_ms = int(str(timeframe)[:-1]) * 86400000
         
-        # If data is older than 2 candles, skip to be safe (allow 2 intervals for lag)
-        # Using 3 intervals as buffer is safer to prevent false positives during exchange lag
-        if now_ts - last_ts > tf_ms * 3:
-            self.logger.warning(f"[{symbol}] STALE DATA DETECTED ({int((now_ts-last_ts)/60000)}m old). Skipping evaluation.")
+        if (now_ts - last_ts) > (tf_ms * 3):
+            age_mins = int((now_ts - last_ts) / 60000)
+            self.logger.warning(
+                f"[{symbol}:{timeframe}] STALE DATA DETECTED ({age_mins}m old). "
+                f"last_ts={last_ts}, now_ts={now_ts}, raw_ts={raw_ts} (type:{type(raw_ts)}). Skipping evaluation."
+            )
             return None
 
         # 2. Extract last row

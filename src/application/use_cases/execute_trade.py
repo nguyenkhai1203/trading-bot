@@ -288,6 +288,9 @@ class ExecuteTradeUseCase:
                 entry_price = order_price
             
             self.logger.info(f"[{symbol}] Type: {order_type.upper()} | Target: {entry_price:.4f} | Qty: {qty:.4f}")
+            if order_type == 'limit' and base_price:
+                dist_pct = abs(entry_price - base_price) / base_price * 100
+                self.logger.info(f"[{symbol}] Limit Distance: {dist_pct:.4f}% from signal price ({base_price:.4f})")
 
             if adapter.can_trade:
                 # Calculate SL/TP prices based on the actual entry target
