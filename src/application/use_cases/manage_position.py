@@ -25,6 +25,12 @@ class ManagePositionUseCase:
         """
         Calculates and applies Emergency Close, ATR Trailing, and Profit Lock.
         """
+        ex_name = profile['exchange'].upper()
+        adapter = self.adapters.get(ex_name)
+        if not adapter:
+            self.logger.error(f"Adapter not found for exchange {ex_name}")
+            return False
+
         # 0. Emergency SLTP Guardian (8% Hard-Close)
         entry = trade.entry_price
         side = trade.side
@@ -36,16 +42,13 @@ class ManagePositionUseCase:
         
         if is_emergency:
             self.logger.warning(f"🚨 [EMERGENCY] {trade.symbol} hit {emergency_pct*100}% threshold. Hard-closing!")
-            ex_name = profile['exchange'].upper()
-            adapter = self.adapters.get(ex_name)
-            if adapter:
-                try:
-                    await adapter.close_position(trade.symbol, side, trade.qty)
-                    await self.trade_repo.update_status(trade.id, 'CLOSED', exit_reason='EMERGENCY_SL', exit_price=current_price)
-                    await self.notification_service.notify_generic(f"🚨 **EMERGENCY CLOSE** | {trade.symbol} | Price: {current_price}")
-                    return True
-                except Exception as e:
-                    self.logger.error(f"Failed emergency close for {trade.symbol}: {e}")
+            try:
+                await adapter.close_position(trade.symbol, side, trade.qty)
+                await self.trade_repo.update_status(trade.id, 'CLOSED', exit_reason='EMERGENCY_SL', exit_price=current_price)
+                await self.notification_service.notify_generic(f"🚨 **EMERGENCY CLOSE** | {trade.symbol} | Price: {current_price}")
+                return True
+            except Exception as e:
+                self.logger.error(f"Failed emergency close for {trade.symbol}: {e}")
 
         # 1. Continuous ATR Trailing SL
         changes = False
@@ -64,12 +67,12 @@ class ManagePositionUseCase:
                 if side == 'BUY':
                     atr_sl = current_price - trail_dist
                     if final_sl is None or (atr_sl > final_sl + min_move):
-                        final_sl = round(atr_sl, 6)
+                        final_sl = atr_sl
                         changes = True
                 else: # SELL
                     atr_sl = current_price + trail_dist
                     if final_sl is None or (atr_sl < final_sl - min_move):
-                        final_sl = round(atr_sl, 6)
+                        final_sl = atr_sl
                         changes = True
 
         # 2. Profit Lock / TP Extension Logic (Only if ATR trail didn't already trigger changes)
@@ -95,12 +98,12 @@ class ManagePositionUseCase:
                             if side == 'BUY':
                                 lock_sl = entry + lock_amount
                                 if sl is None or lock_sl > sl:
-                                    final_sl = round(lock_sl, 6)
+                                    final_sl = lock_sl
                                     changes = True
                             else:
                                 lock_sl = entry - lock_amount
                                 if sl is None or lock_sl < sl:
-                                    final_sl = round(lock_sl, 6)
+                                    final_sl = lock_sl
                                     changes = True
 
         # 3. TA-Based TP Extension (Restore v3.0 logic)
@@ -120,17 +123,20 @@ class ManagePositionUseCase:
                 max_tp = entry - (abs(trade.tp_price - entry) * 1.5) if trade.tp_price else 0
                 ext_tp = max(support, max_tp) if max_tp > 0 else support
                 if ext_tp < final_tp:
-                    final_tp = round(ext_tp, 6)
+                    final_tp = adapter.price_to_precision(trade.symbol, ext_tp)
                     trade.meta['tp_extensions'] = extension_count + 1
                     changes = True
 
         if changes:
+            if final_sl is not None:
+                final_sl = float(adapter.price_to_precision(trade.symbol, final_sl))
+            if final_tp is not None:
+                final_tp = float(adapter.price_to_precision(trade.symbol, final_tp))
+                
             self.logger.info(f"🛡️ [MANAGEMENT] {trade.symbol}: SL={final_sl}, TP={final_tp}")
             
             # Update Exchange
-            ex_name = profile['exchange'].upper()
-            adapter = self.adapters.get(ex_name)
-            if adapter and adapter.can_trade:
+            if adapter.can_trade:
                 try:
                     # Bybit supports attached SL/TP, but we might need to recreate them
                     # We'll use the adapter's set_position_sl_tp if available

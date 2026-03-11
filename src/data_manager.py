@@ -140,8 +140,7 @@ class MarketDataManager:
                 if fe:
                     for key in updated_keys:
                         # Clear cache so get_data_with_features() doesn't return stale indicators
-                        if key in self.features_cache:
-                            del self.features_cache[key]
+                        self.features_cache.pop(key, None)
                         
                         # Trigger immediate recalc in data_store if needed for shared state
                         # Note: We keep the raw data in data_store, and features in the cache.
@@ -198,7 +197,7 @@ class MarketDataManager:
             async with semaphore:
                 try:
                     # 2. Skip if symbol is in SL cooldown
-                    if self._cooldown_manager and self._cooldown_manager.is_in_cooldown(name, symbol):
+                    if self._cooldown_manager and self._cooldown_manager.is_in_cooldown(name, symbol, 0):
                         self.logger.debug(f"⏳ Skipping {symbol} (SL Cooldown)")
                         return
                     
@@ -368,3 +367,23 @@ class MarketDataManager:
             return True
             
         return False
+
+    def prune_caches(self, active_symbols: list):
+        """Prune caches for symbols no longer in the active list to prevent memory bloat."""
+        active_set = set(active_symbols)
+        
+        def _key_matches_any_symbol(k: str) -> bool:
+            return any(sym in k for sym in active_set)
+        
+        # 1. Prune ticker cache
+        stale_tickers = [k for k in list(self._ticker_cache.keys()) if not _key_matches_any_symbol(k)]
+        for k in stale_tickers: 
+            self._ticker_cache.pop(k, None)
+            
+        # 2. Prune features cache
+        stale_features = [k for k in list(self.features_cache.keys()) if not _key_matches_any_symbol(k)]
+        for k in stale_features:
+            self.features_cache.pop(k, None)
+            
+        if stale_tickers or stale_features:
+            self.logger.info(f"💾 Pruned {len(stale_tickers)} tickers and {len(stale_features)} feature sets from memory.")

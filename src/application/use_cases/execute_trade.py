@@ -49,8 +49,13 @@ class ExecuteTradeUseCase:
 
         acc_key = getattr(adapter, 'account_key', f"{ex_name}_GLOBAL")
 
+        # Extract core identifiers early — needed by cooldown checks
+        profile_id = profile['id']
+        side = signal['side']
+        timeframe = signal.get('timeframe', '1h')
+
         # 1. Safety Checks (Cooldown & Margin)
-        if self.cooldown_manager.is_in_cooldown(ex_name, symbol):
+        if self.cooldown_manager.is_in_cooldown(ex_name, symbol, profile_id):
             self.logger.info(f"Signal for {symbol} skipped: In SL Cooldown.")
             return False
             
@@ -87,10 +92,6 @@ class ExecuteTradeUseCase:
              # Fallback to defaults or return False
              sl_pct = sl_pct or getattr(config, 'STOP_LOSS_PCT', 0.02)
              tp_pct = tp_pct or getattr(config, 'TAKE_PROFIT_PCT', 0.04)
-
-        profile_id = profile['id']
-        side = signal['side']
-        timeframe = signal.get('timeframe', '1h')
         
         # 4. GLOBAL ACCOUNT GUARD (Deduplication across ALL profiles on this exchange)
         # Check Database for any profile on this exchange
@@ -101,15 +102,15 @@ class ExecuteTradeUseCase:
         if not existing_on_account and self.sync_service:
             state = self.sync_service.get_account_state(profile)
             if state:
-                # Check positions
+                # FIX D1: Match by (symbol, side) to allow opposite-direction signals (e.g. reversal).
+                # Previously matched by symbol alone, which blocked SELL when BUY was in cache.
                 for p in state.get('positions', []):
-                    if p.get('symbol') == symbol:
-                        self.logger.info(f"Signal for {symbol} skipped: Position already found in exchange cache.")
+                    if p.get('symbol') == symbol and p.get('side', '').upper() == side.upper():
+                        self.logger.info(f"Signal for {symbol} skipped: {side} position already found in exchange cache.")
                         return False
-                # Check orders
                 for o in state.get('orders', []):
-                    if o.get('symbol') == symbol:
-                        self.logger.info(f"Signal for {symbol} skipped: Open order already found in exchange cache.")
+                    if o.get('symbol') == symbol and o.get('side', '').upper() == side.upper():
+                        self.logger.info(f"Signal for {symbol} skipped: {side} open order already found in exchange cache.")
                         return False
 
         if existing_on_account:
@@ -131,14 +132,16 @@ class ExecuteTradeUseCase:
                 old_rr = existing_on_account.meta.get('rr_ratio') or 1.5
                 new_rr = tp_pct / sl_pct if sl_pct > 0 else 1.0
                 
-                # Logic: Replace if confidence is significantly better (+0.1) OR R/R is better
-                is_better = (conf > old_conf + 0.1) or (conf >= old_conf and new_rr > old_rr + 0.5)
+                # Logic: Replace if confidence is significantly better (+0.2) OR R/R is better
+                is_better = (conf > old_conf + 0.2) or (conf >= old_conf and new_rr > old_rr + 1.0)
                 
                 if is_better:
                     self.logger.info(f"⚖️ **UPGRADE** | {symbol}: Replacing PENDING (Conf {old_conf:.2f}➔{conf:.2f})")
                     if existing_on_account.exchange_order_id:
                         await adapter.cancel_order(existing_on_account.exchange_order_id, symbol)
                     await self.trade_repo.update_status(existing_on_account.id, 'CANCELLED', exit_reason='UPGRADE')
+                    # Apply short cooldown to prevent re-entry loop in next heartbeat
+                    await self.cooldown_manager.set_sl_cooldown(ex_name, symbol, profile_id, custom_duration=300)
                     # Continue to open new position
                 else:
                     return False
@@ -159,6 +162,14 @@ class ExecuteTradeUseCase:
                 return False
             else:
                 return False
+
+        # Initialise before try-block so the except handler can safely log them
+        # even if an exception fires before they are calculated.
+        sl_price: Optional[float] = None
+        tp_price: Optional[float] = None
+        qty: float = 0.0
+        entry_price: float = 0.0
+        pos_key: str = ""
 
         try:
             # 5. Fetch Fresh Ticker (for current price)
@@ -281,12 +292,34 @@ class ExecuteTradeUseCase:
             if adapter.can_trade:
                 # Calculate SL/TP prices based on the actual entry target
                 sl_price, tp_price = self.risk_service.calculate_sl_tp(entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)
+                
+                # Generate deterministic Idempotency Key (clientOrderId)
+                tf_secs = 3600 # Default 1h
+                if timeframe.endswith('m'): tf_secs = int(timeframe[:-1]) * 60
+                elif timeframe.endswith('h'): tf_secs = int(timeframe[:-1]) * 3600
+                elif timeframe.endswith('d'): tf_secs = int(timeframe[:-1]) * 86400
+                
+                candle_start = int(time.time() / tf_secs) * tf_secs
+                clean_sym = symbol.replace('/', '').replace('-', '')
+                
+                # Format: BMS_BTCUSDT_B_15m_1710000000 (Bybit max length: 36)
+                client_oid = f"BMS_{clean_sym}_{side.upper()[:1]}_{timeframe}_{candle_start}"
+
                 params = {
                     'leverage': leverage,
                     'stopLoss': sl_price,
-                    'takeProfit': tp_price
+                    'takeProfit': tp_price,
+                    'clientOrderId': client_oid
                 }
-                order_res = await adapter.create_order(symbol, order_type, side.lower(), qty, price=order_price, params=params)
+                
+                try:
+                    order_res = await adapter.create_order(symbol, order_type, side.lower(), qty, price=order_price, params=params)
+                except Exception as api_err:
+                    err_str = str(api_err).lower()
+                    if "already exists" in err_str or "10002" in err_str:
+                        self.logger.warning(f"[{symbol}] Idempotency Key saved us! Order {client_oid} already exists on Bybit. Skipping duplicate creation.")
+                        return False
+                    raise api_err # Re-raise to trigger virtual trade tracking/error handling
             else:
                 sl_price, tp_price = self.risk_service.calculate_sl_tp(entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)
                 self.logger.info(f"[DRY-RUN] Signal {symbol} would open {side} ({order_type}) at {entry_price}")
@@ -319,6 +352,13 @@ class ExecuteTradeUseCase:
             )
             
             trade_id = await self.trade_repo.save_trade(new_trade)
+            
+            # CRITICAL: Immediately update the in-memory state cache to prevent
+            # the same order being placed again in the same heartbeat cycle.
+            # Without this, sync_service cache is stale until the next sync_all() (5s later).
+            if self.sync_service and hasattr(self.sync_service, 'register_pending_order'):
+                order_id = str(order_res.get('id', ''))
+                self.sync_service.register_pending_order(profile, symbol, side, order_id)
             
             # 10. AI Snapshot Logging
             if signal.get('snapshot'):

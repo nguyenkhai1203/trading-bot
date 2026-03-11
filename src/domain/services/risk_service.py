@@ -15,12 +15,14 @@ class RiskService:
             return 0.0
             
         risk_amount = balance * risk_per_trade
-        price_diff_pct = abs(entry_price - stop_loss_price) / entry_price
+        price_diff = abs(entry_price - stop_loss_price)
         
-        if price_diff_pct == 0: return 0.0
-        
+        # SL Directional Safety: Avoid tiny diffs or zero division
+        if price_diff < (entry_price * 0.0001): 
+            return 0.0
+            
         # 1. Risk-based quantity
-        raw_qty = risk_amount / abs(entry_price - stop_loss_price)
+        raw_qty = risk_amount / price_diff
         
         # 2. Leverage-based capping (Max Notional)
         max_notional = balance * leverage

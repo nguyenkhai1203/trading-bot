@@ -65,7 +65,16 @@ def main():
                 break
             time.sleep(5)
     except KeyboardInterrupt:
-        print("\nStopping system...")
+        print("\n[SIGINT] Stopping system gracefully...")
+        # Create stop signal file
+        try:
+            with open("stop_bot.txt", "w") as f:
+                f.write("stop")
+            print("   ↳ Stop signal sent to Orchestrator. Waiting for cleanup...")
+            # Give it a few seconds to see the file and shut down
+            time.sleep(5)
+        except Exception as e:
+            print(f"   ↳ [WARN] Failed to create stop file: {e}")
     finally:
         # 8. Clean termination
         print("   ↳ Terminating processes...")
@@ -83,6 +92,11 @@ def main():
             if telegram_proc:
                 telegram_proc.kill()
             trading_proc.kill()
+            
+        # Delete stop signal file if it exists
+        if os.path.exists("stop_bot.txt"):
+            try: os.remove("stop_bot.txt")
+            except: pass
             
     print("System shutdown complete.")
 

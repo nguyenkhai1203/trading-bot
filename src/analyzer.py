@@ -796,13 +796,20 @@ async def run_global_optimization(download=False):
                 weights_by_tf[tf] = weights
         return (exchange, symbol), weights_by_tf
     
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(analyze_task, task): task for task in active_tasks}
-        for i, future in enumerate(as_completed(futures)):
-            task_key, weights_by_tf = future.result()
-            all_weights[task_key] = weights_by_tf
-            if (i + 1) % 5 == 0:
-                print(f"  [{i+1}/{len(active_tasks)}] tasks analyzed...")
+    try:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(analyze_task, task): task for task in active_tasks}
+            for i, future in enumerate(as_completed(futures)):
+                task_key, weights_by_tf = future.result()
+                all_weights[task_key] = weights_by_tf
+                if (i + 1) % 5 == 0:
+                    print(f"  [{i+1}/{len(active_tasks)}] tasks analyzed...")
+    except KeyboardInterrupt:
+        print("\n⚠️  Optimization interrupted by user. Shutting down threads...")
+        return
+    except Exception as e:
+        print(f"❌ Step 1 failed: {e}")
+        return
     
     step1_time = time.time() - step1_start
     print(f"  ✨ Step 1 complete: {step1_time:.1f}s")
@@ -833,15 +840,22 @@ async def run_global_optimization(download=False):
         return None
     
     validation_results = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(validate_task, task) for task in validation_tasks]
-        total_tasks = len(futures)
-        for i, future in enumerate(as_completed(futures)):
-            result = future.result()
-            if result is not None:
-                validation_results.append(result)
-            if (i + 1) % 10 == 0 or (i + 1) == total_tasks:
-                print(f"  [{i+1}/{total_tasks}] tasks validated...", end='\r')
+    try:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [executor.submit(validate_task, task) for task in validation_tasks]
+            total_tasks = len(futures)
+            for i, future in enumerate(as_completed(futures)):
+                result = future.result()
+                if result is not None:
+                    validation_results.append(result)
+                if (i + 1) % 10 == 0 or (i + 1) == total_tasks:
+                    print(f"  [{i+1}/{total_tasks}] tasks validated...", end='\r')
+    except KeyboardInterrupt:
+        print("\n⚠️  Validation interrupted by user. Shutting down threads...")
+        return
+    except Exception as e:
+        print(f"❌ Step 2 failed: {e}")
+        return
     print() # newline after progress bar
     
     step2_time = time.time() - step2_start

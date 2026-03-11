@@ -56,7 +56,7 @@ TRADING_TIMEFRAMES = [ '15m', '30m', '1h', '2h', '4h', '8h', '1d']
 TIMEFRAMES = TRADING_TIMEFRAMES  # Alias for backward compatibility
 
 # Parallel Processing
-MAX_WORKERS = 8  # ThreadPoolExecutor workers for symbol-level parallelism
+MAX_WORKERS = 4  # Reduced from 8 to 4 for better stability on Windows/experimental Python versions
 
 LEVERAGE = 5  # Initial target leverage
 RISK_PER_TRADE = 0.05
@@ -80,7 +80,7 @@ AUTO_CREATE_SL_TP = True
 USE_LIMIT_ORDERS = True  # Use limit orders for better entry price
 PATIENCE_ENTRY_PCT = 0.01   # 1.0% better entry price target (reduced from 1.5% to fill faster)
 GLOBAL_MAX_COST_PER_TRADE = 5.0 # Absolute max USDT margin per position
-LIMIT_ORDER_TIMEOUT = 90  # Changed from 300 to 90 seconds for better capital efficiency
+LIMIT_ORDER_TIMEOUT = 3000  # Changed from 300 to 90 seconds for better capital efficiency
 DAILY_LOSS_LIMIT_PCT = 0.05  # Max daily drawdown (5% of equity)
 TRAILING_STOP_PCT = 0.02   # 2% Trailing Stop
 REQUIRE_TECHNICAL_CONFIRMATION = False  # Require Fibo/S/R alignment before entry (disabled for now)
@@ -97,18 +97,18 @@ OHLCV_REFRESH_INTERVAL = 60  # OHLCV data refresh interval in seconds (1 minute)
 CONFIDENCE_TIERS = {
     "high": {
         "min_confidence": 0.70,  # 70%+ confidence
-        "leverage": 5,          # Max leverage      
-        "cost_usdt": 8.0         # $8 per trade (Matches Global Max)
+        "leverage": 3,          # Max leverage      
+        "cost_usdt": 2.0         # $8 per trade (Matches Global Max)
     },
     "medium": {
         "min_confidence": 0.50,  # 50-70% confidence
-        "leverage": 4,           # Medium leverage
-        "cost_usdt": 6.0         # $6 per trade
+        "leverage": 3,           # Medium leverage
+        "cost_usdt": 1.0         # $6 per trade
     },
     "low": {
         "min_confidence": 0.30,  # 30-50% confidence
-        "leverage": 4,           # Low leverage for safety
-        "cost_usdt": 4.0         # $4 per trade (Allows smaller entries)
+        "leverage": 2,           # Low leverage for safety
+        "cost_usdt": 1.0         # $4 per trade (Allows smaller entries)
     }
 }
 MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade

@@ -128,17 +128,16 @@ class BaseExchangeClient:
                 )
                 
                 if is_timestamp_error and attempt < max_retries - 1:
-                    print(f"[TIMESTAMP ERROR] Attempt {attempt + 1}/{max_retries}: {str(e)[:100]}")
+                    self.logger.warning(f"[TIMESTAMP ERROR] Attempt {attempt + 1}/{max_retries}: {str(e)[:100]}")
                     # Try to resync time
                     await self.resync_time_if_needed(str(e))
                     # Add delay before retry
                     await asyncio.sleep(1)
-                    print(f"[RETRY] Retrying API call after time sync...")
+                    self.logger.info(f"[RETRY] Retrying API call after time sync...")
                     continue
                 else:
                     # Log non-timestamp errors or max retries reached
                     if not is_timestamp_error:
-                        # Handle Rate Limit (429) / 418 / 403 or Bybit 10006 specifically
                         # Handle Rate Limit (429) / 418 / 403 or Bybit 10006 specifically
                         if any(x in error_msg for x in ["429", "418", "403", "too many requests", "10006"]):
                             wait_s = (attempt + 1) * 5 # Backoff: 5s, 10s, 15s
@@ -156,8 +155,8 @@ class BaseExchangeClient:
                             "fetchpositionmode", "is not supported", "missing some parameters"
                         ]
                         if not any(s.lower() in error_msg for s in silence_errors):
-                            print(f"[API ERROR] {type(e).__name__} in {api_call.__name__} for {args}: {str(e)[:250]}")
+                            self.logger.error(f"[API ERROR] {type(e).__name__} in {api_call.__name__} for {args}: {str(e)[:250]}")
                     else:
-                        print(f"[TIMESTAMP ERROR] {api_call.__name__} for {args} Max retries reached: {str(e)[:250]}")
+                        self.logger.error(f"[TIMESTAMP ERROR] {api_call.__name__} for {args} Max retries reached: {str(e)[:250]}")
                     # Re-raise the error
                     raise e

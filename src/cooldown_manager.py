@@ -51,23 +51,24 @@ class CooldownManager:
         except Exception as e:
             self.logger.warning(f"[COOLDOWN] Failed to save cooldowns to DB: {e}")
 
-    def is_in_cooldown(self, exchange_name: str, symbol: str) -> bool:
+    def is_in_cooldown(self, exchange_name: str, symbol: str, profile_id: int) -> bool:
         """
-        Checks if a symbol is currently blocked post-SL.
+        Checks if a symbol is currently blocked post-SL for a specific profile.
         Returns True if blocked, False otherwise.
         """
-        key = f"{exchange_name}:{symbol}"
+        key = f"{exchange_name}:{profile_id}:{symbol}"
         if key not in self._sl_cooldowns:
             return False
             
         if time.time() >= self._sl_cooldowns[key]:
-            del self._sl_cooldowns[key]
+            # Safe deletion
+            self._sl_cooldowns.pop(key, None)
             return False
         return True
 
-    def get_remaining_minutes(self, exchange_name: str, symbol: str) -> float:
+    def get_remaining_minutes(self, exchange_name: str, symbol: str, profile_id: int) -> float:
         """Get remaining cooldown time in minutes."""
-        key = f"{exchange_name}:{symbol}"
+        key = f"{exchange_name}:{profile_id}:{symbol}"
         if key not in self._sl_cooldowns:
             return 0.0
         remaining = self._sl_cooldowns[key] - time.time()
@@ -75,11 +76,11 @@ class CooldownManager:
 
     async def set_sl_cooldown(self, exchange_name: str, symbol: str, profile_id: int, custom_duration: Optional[int] = None):
         """
-        Triggers a new SL cooldown for a symbol.
+        Triggers a new SL cooldown for a symbol, scoped by profile.
         """
         duration = custom_duration if custom_duration is not None else self.sl_cooldown_duration
         expiry = time.time() + duration
-        key = f"{exchange_name}:{symbol}"
+        key = f"{exchange_name}:{profile_id}:{symbol}"
         self._sl_cooldowns[key] = expiry
         await self.save_to_db(profile_id)
         

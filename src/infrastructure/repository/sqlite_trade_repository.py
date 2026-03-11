@@ -15,26 +15,38 @@ class SQLiteTradeRepository(ITradeRepository):
     async def save_trade(self, trade: Trade) -> int:
         # Convert Pydantic model back to dict for legacy DataManager compat
         trade_dict = trade.model_dump()
-        # DataManager expects some fields renamed or formatted
-        if 'meta' in trade_dict:
-            # DataManager calls save_position which handles meta_json
-            pass
-        
-        # Mapping model fields to DataManager/DB expected fields
-        # Note: Position and Trade are slightly different in DataManager.save_position
+        # Explicit mapping: Pydantic exports 'meta' (dict), DataManager expects 'meta' (dict) which it serializes to 'meta_json'
+        # Ensure status is carried through correctly (not overridden by DataManager default 'OPENED')
+        if 'meta' not in trade_dict or trade_dict.get('meta') is None:
+            trade_dict['meta'] = {}
+        # DataManager calls save_position which handles meta -> meta_json serialization
         return await self.dm.save_position(trade_dict)
+
+    def _map_row_to_trade(self, row: dict) -> Trade:
+        """Helper to properly hydrate Pydantic Trade model from SQLite row dictionary."""
+        # SQLite stores meta as JSON string in 'meta_json' column
+        meta_json = row.pop('meta_json', None)
+        if meta_json:
+            try:
+                row['meta'] = json.loads(meta_json)
+            except Exception:
+                row['meta'] = {}
+        elif 'meta' not in row:
+            row['meta'] = {}
+            
+        return Trade(**row)
 
     async def get_active_positions(self, profile_id: int) -> List[Trade]:
         rows = await self.dm.get_active_positions(profile_id)
-        return [Trade(**r) for r in rows]
+        return [self._map_row_to_trade(r) for r in rows]
 
     async def get_active_positions_on_exchange(self, exchange_name: str) -> List[Trade]:
         rows = await self.dm.get_active_positions_on_exchange(exchange_name)
-        return [Trade(**r) for r in rows]
+        return [self._map_row_to_trade(r) for r in rows]
 
     async def get_trade_history(self, profile_id: int, limit: int = 100) -> List[Trade]:
         rows = await self.dm.get_trade_history(profile_id, limit)
-        return [Trade(**r) for r in rows]
+        return [self._map_row_to_trade(r) for r in rows]
 
     async def update_status(self, trade_id: int, status: str, **kwargs) -> None:
         exit_price = kwargs.get('exit_price')

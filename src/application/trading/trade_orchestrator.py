@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+import os
 from typing import List, Dict, Any, Optional
 from src.infrastructure.container import Container
 from src import config
@@ -29,7 +30,18 @@ class TradeOrchestrator:
         try:
             while self.running:
                 # 1. Global State Sync
-                await self.container.sync_service.sync_all()
+                try:
+                    await asyncio.wait_for(self.container.sync_service.sync_all(), timeout=60)
+                except asyncio.TimeoutError:
+                    self.logger.warning("🕒 Sync Timeout: Account sync took >60s. Skipping this cycle.")
+                    await asyncio.sleep(5)
+                    continue
+
+                # Check for stop signal file (Graceful shutdown on Windows)
+                if os.path.exists("stop_bot.txt"):
+                    self.logger.info("🛑 Stop signal file detected. Shutting down gracefully...")
+                    self.running = False
+                    break
                 
                 # [PHASE 9] Daily Loss Circuit Breaker
                 if await self._check_daily_circuit_breaker():
@@ -41,8 +53,14 @@ class TradeOrchestrator:
 
                 # 2. Update Market Data
                 if self.container.data_manager:
-                    await self.container.data_manager.update_tickers(config.DATA_SYMBOLS)
-                    await self.container.data_manager.update_data(config.DATA_SYMBOLS, config.TRADING_TIMEFRAMES)
+                    try:
+                        await asyncio.wait_for(self.container.data_manager.update_tickers(config.DATA_SYMBOLS), timeout=30)
+                        await asyncio.wait_for(self.container.data_manager.update_data(config.DATA_SYMBOLS, config.TRADING_TIMEFRAMES), timeout=120)
+                        # Periodic prune (every ~10 mins)
+                        if int(time.time()) % 600 < config.HEARTBEAT_INTERVAL:
+                            self.container.data_manager.prune_caches(config.DATA_SYMBOLS)
+                    except asyncio.TimeoutError:
+                        self.logger.warning("🕒 Data Timeout: Market data refresh timed out. Skipping.")
                 
                 # 3. Monitor Positions (Reconcile & Sync)
                 await self.container.monitor_positions_use_case.execute()
@@ -129,24 +147,18 @@ class TradeOrchestrator:
             async with lock:
                 try:
                     await self.container.execute_trade_use_case.execute(profile, signal)
-                except InsufficientFundsError:
-                    self.logger.info(f"Insufficient funds for {symbol} on {profile['exchange']}. Skipping signal.")
-                    # In holistic mode, we skip instead of complex rebalancing within one cycle
                 except Exception as e:
                     self.logger.error(f"Error executing signal for {symbol}: {e}")
 
     async def _get_best_signal_guarded(self, profile: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
-        """Evaluate all timeframes for a symbol with locking for safety."""
-        # Using a lock here ensures that if multiple heartbeats/tasks run, we don't evaluate the same symbol twice simultaneously
-        lock = self.container.get_symbol_lock(symbol)
-        async with lock:
-            return await self._get_best_signal(profile, symbol)
+        """Evaluate all timeframes for a symbol. No locking needed here - evaluation is read-only."""
+        return await self._get_best_signal(profile, symbol)
 
     async def _get_best_signal(self, profile: Dict[str, Any], symbol: str) -> Optional[Dict[str, Any]]:
         """Evaluate all timeframes for a symbol and return the best one."""
         signals = []
         for tf in config.TRADING_TIMEFRAMES:
-            sig = await self.container.evaluate_strategy_use_case.execute(symbol, tf, profile['exchange'])
+            sig = await self.container.evaluate_strategy_use_case.execute(symbol, tf, profile['exchange'], profile['id'])
             if sig and sig.get('side') != 'SKIP':
                 if 'confidence' not in sig: sig['confidence'] = 0.5
                 sig['symbol'] = symbol # Ensure symbol is present
@@ -165,8 +177,6 @@ class TradeOrchestrator:
         if not pending_trades:
             return False
 
-        # Sort pending by a combined metric: Confidence + (R/R / 10)
-        # This helps pick the objectively 'weakest' pending order
         def _get_score(t):
             c = t.meta.get('signal_confidence') or 0.5
             r = t.meta.get('rr_ratio') or 1.5
@@ -183,15 +193,13 @@ class TradeOrchestrator:
         new_tp = new_signal.get('tp_pct') or 0.04
         new_rr = new_tp / new_sl if new_sl > 0 else 1.0
         
-        # Threshold: New signal must be notably better either in confidence or risk profile
         is_better = (new_conf > weak_conf + 0.15) or (new_conf >= weak_conf and new_rr > weak_rr + 1.0)
         
         if is_better:
             self.logger.info(f"⚖️ REBALANCING: Cancelling {weakest.symbol} (Conf {weak_conf:.2f}, R/R {weak_rr:.1f}) to enter {new_signal['symbol']} (Conf {new_conf:.2f}, R/R {new_rr:.1f})")
             
-            # 1. Cancel weakest on exchange
             ex_name = profile['exchange'].upper()
-            adapter = self.container.get_adapter(ex_name)
+            adapter = self.container.adapters.get(ex_name)
             if weakest.exchange_order_id and adapter:
                 try:
                     await adapter.cancel_order(weakest.exchange_order_id, weakest.symbol)
@@ -199,10 +207,8 @@ class TradeOrchestrator:
                     self.logger.error(f"Failed to cancel {weakest.symbol} during rebalance: {e}")
                     return False
             
-            # 2. Mark as CANCELLED in DB
             await self.container.trade_repo.update_status(weakest.id, 'CANCELLED', exit_reason='REBALANCED')
             
-            # 3. Notify
             await self.container.notification_service.notify_order_cancelled(
                 weakest.symbol, weakest.timeframe, weakest.side, weakest.entry_price, 
                 "Rebalanced for better signal", dry_run=not adapter.can_trade, exchange=ex_name
@@ -216,21 +222,20 @@ class TradeOrchestrator:
         total_loss = 0.0
         for profile in self.container.sync_service.profiles:
             try:
-                # Get closed trades from today
-                history = await self.container.trade_repo.get_trade_history(profile['id'], limit=50)
+                history = await self.container.trade_repo.get_trade_history(profile['id'], limit=200)
                 today_start = int(time.time() // 86400 * 86400 * 1000)
                 today_trades = [t for t in history if (getattr(t, 'exit_time', None) or 0) >= today_start]
                 
                 for t in today_trades:
-                    total_loss += getattr(t, 'pnl', None) or 0.0
+                    pnl = t.pnl if hasattr(t, 'pnl') else 0.0
+                    total_loss += pnl if pnl is not None else 0.0
             except Exception as e:
                 self.logger.error(f"Error calculating PnL for circuit breaker: {e}")
 
         if total_loss < 0:
-            # Estimate balance (use first profile's exchange)
             try:
                 ex_name = self.container.sync_service.profiles[0]['exchange'].upper()
-                adapter = self.container.get_adapter(ex_name)
+                adapter = self.container.adapters.get(ex_name)
                 balance_data = await adapter.fetch_balance()
                 balance = float(balance_data.get('total', {}).get('USDT', 100.0))
             except:

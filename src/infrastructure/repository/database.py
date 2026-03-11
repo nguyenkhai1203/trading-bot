@@ -55,6 +55,7 @@ class DataManager:
         schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
         
         self._db = await aiosqlite.connect(self.db_path, timeout=30)
+        await self._db.execute("PRAGMA busy_timeout = 5000")
         self._db.row_factory = aiosqlite.Row
         # Enable Write-Ahead Logging for better concurrency
         await self._db.execute("PRAGMA journal_mode=WAL")
@@ -66,9 +67,7 @@ class DataManager:
             with open(schema_path, 'r', encoding='utf-8') as f:
                 schema_sql = f.read()
  
-            # [PRE-MIGRATION] Add missing columns to existing tables BEFORE running schema.
-            # This prevents "no such column" errors when schema.sql creates indexes that
-            # reference columns not yet present in an older DB (e.g. pos_key, leverage).
+            # [PRE-MIGRATION] Add missing columns and fix stale CHECK constraints.
             try:
                 async with self._db.execute("PRAGMA table_info(trades)") as cursor:
                     columns = [row[1] for row in await cursor.fetchall()]
@@ -81,12 +80,60 @@ class DataManager:
                         self.logger.info("Pre-migration: Adding leverage to trades table")
                         await self._db.execute("ALTER TABLE trades ADD COLUMN leverage REAL")
                     await self._db.commit()
+
+                    # [BUG-A FIX] Detect stale CHECK constraint missing 'PENDING' status.
+                    # SQLite cannot ALTER a CHECK constraint, so we must rename → recreate → copy.
+                    async with self._db.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='table' AND name='trades'"
+                    ) as cur:
+                        row = await cur.fetchone()
+                        schema_sql_existing = (row[0] or "") if row else ""
+
+                    if "'PENDING'" not in schema_sql_existing and "PENDING" not in schema_sql_existing:
+                        self.logger.info(
+                            "Pre-migration: trades CHECK constraint is missing 'PENDING'. "
+                            "Performing table migration (rename → recreate → copy)..."
+                        )
+                        await self._db.execute("ALTER TABLE trades RENAME TO trades_old")
+                        # New table definition (matches schema.sql) is applied below via executescript.
+                        # So just commit the rename now; executescript handles the CREATE.
+                        await self._db.commit()
+
+                        # Build column list from the old table for the INSERT … SELECT
+                        async with self._db.execute("PRAGMA table_info(trades_old)") as cur:
+                            old_cols = [row[1] for row in await cur.fetchall()]
+                        cols_csv = ", ".join(old_cols)
+
+                        # executescript will create the new trades table from schema.sql below.
+                        # After that we copy data across and drop the backup.
+                        self._migrate_trades_old_cols = old_cols  # Pass to post-schema step
             except Exception as e:
                 self.logger.error(f"Pre-migration error: {e}")
 
             # Run schema script (CREATE TABLE IF NOT EXISTS + indexes)
             # Now safe to run because all required columns already exist.
             await self._db.executescript(schema_sql)
+
+            # [POST-MIGRATION] If we renamed trades → trades_old above, now copy data across.
+            migrate_cols = getattr(self, '_migrate_trades_old_cols', None)
+            if migrate_cols is not None:
+                try:
+                    # Determine columns that exist in BOTH old and new table
+                    async with self._db.execute("PRAGMA table_info(trades)") as cur:
+                        new_cols = {row[1] for row in await cur.fetchall()}
+                    shared_cols = [c for c in migrate_cols if c in new_cols]
+                    cols_csv = ", ".join(shared_cols)
+                    self.logger.info(f"Post-migration: Copying {len(shared_cols)} columns from trades_old → trades")
+                    await self._db.execute(f"INSERT INTO trades ({cols_csv}) SELECT {cols_csv} FROM trades_old")
+                    await self._db.execute("DROP TABLE trades_old")
+                    await self._db.commit()
+                    self.logger.info("Post-migration: trades table migration complete. trades_old dropped.")
+                except Exception as e:
+                    self.logger.error(f"Post-migration copy error: {e}")
+                finally:
+                    self._migrate_trades_old_cols = None  # Clear flag
+
+
             
             # [CRITICAL] Ensure SYSTEM profile (ID 0) exists for global metrics
             # This satisfies FOREIGN KEY constraints in risk_metrics table
@@ -216,7 +263,7 @@ class DataManager:
         # Primary lookup by pos_key + profile_id (most reliable for active slots)
         if not trade_id and pos_key:
             profile_id = pos_data.get('profile_id')
-            async with db.execute("SELECT id FROM trades WHERE pos_key = ? AND profile_id = ? AND status IN ('ACTIVE', 'OPENED')", 
+            async with db.execute("SELECT id FROM trades WHERE pos_key = ? AND profile_id = ? AND status IN ('ACTIVE', 'OPENED', 'PENDING')", 
                                  (pos_key, profile_id)) as cursor:
                 row = await cursor.fetchone()
                 if row:

@@ -34,19 +34,18 @@ class MonitorPositionsUseCase:
         Runs the monitoring logic for all profiles.
         """
         for profile in self.sync_service.profiles:
-            await self._monitor_profile(profile)
-            await self._manage_pending_trades(profile)
+            # OPTIMIZATION: Fetch active trades once per profile
+            db_trades = await self.trade_repo.get_active_positions(profile['id'])
+            await self._monitor_profile(profile, db_trades)
+            await self._manage_pending_trades(profile, db_trades)
 
-    async def _monitor_profile(self, profile: Dict[str, Any]):
+    async def _monitor_profile(self, profile: Dict[str, Any], db_trades: List[Any]):
         # 1. Get cached state for this profile's account
         state = self.sync_service.get_account_state(profile)
         if not state:
             return
 
         exchange_positions = state.get('positions', [])
-        
-        # 2. Get active trades from DB for this profile
-        db_trades = await self.trade_repo.get_active_positions(profile['id'])
         
         # 3. Reconcile
         for trade in db_trades:
@@ -55,9 +54,16 @@ class MonitorPositionsUseCase:
                 await self._monitor_virtual_trade(profile, trade)
                 continue
 
-            # B. Real Trades: Find matching position on exchange
+            # Skip PENDING trades for position ghost detection since they live in orders
+            if trade.status == 'PENDING':
+                continue
+
+            # FIX D3: Match by (symbol, side) for Hedge Mode support.
+            # Previously matched by symbol only — would resolve LONG ghost when SELL was on exchange,
+            # or skip an orphan that was a different leg of the same coin.
             matched = next(
-                (p for p in exchange_positions if p.get('symbol') == trade.symbol), 
+                (p for p in exchange_positions 
+                 if p.get('symbol') == trade.symbol and p.get('side', '').upper() == trade.side.upper()), 
                 None
             )
             
@@ -80,20 +86,44 @@ class MonitorPositionsUseCase:
                 # Trade still active.
                 pass
                 
-        # 4. Check for Orphans (Exchange positions NOT in DB)
+        # 4. Check for Orphans and Status Transitions (Exchange positions vs DB)
         for ep in exchange_positions:
             sym = ep.get('symbol')
             # Check if this exchange position is already tracked in DB
-            db_match = next((t for t in db_trades if t.symbol == sym), None)
+            db_match = next(
+                (t for t in db_trades 
+                 if t.symbol == sym and t.side.upper() == ep.get('side', '').upper()),
+                None
+            )
             
-            if not db_match:
-                # Orphan detected!
+            if db_match:
+                # BUG 18 FIX: If DB thinks it's PENDING but it's now an ACTIVE position, update status!
+                if db_match.status == 'PENDING':
+                    self.logger.info(f"📈 [FILL] Trade {db_match.id} ({sym}) filled! Updating PENDING -> ACTIVE.")
+                    db_match.status = 'ACTIVE'
+                    # Sync info from exchange
+                    db_match.entry_price = float(ep.get('entryPrice') or db_match.entry_price)
+                    db_match.qty = float(ep.get('contracts') or db_match.qty)
+                    # We also must ensure it has an entry time for ghost checks
+                    if not db_match.entry_time:
+                        import time
+                        db_match.entry_time = int(time.time() * 1000)
+                    await self.trade_repo.save_trade(db_match)
+                    
+                    # Notify order filled
+                    conf = db_match.meta.get('signal_confidence', 0.5) if db_match.meta else 0.5
+                    is_live = str(profile.get('environment', 'LIVE')).upper() == 'LIVE'
+                    await self.notification_service.notify_order_filled(db_match, conf, dry_run=not is_live)
+                # Already tracked - no action needed
+            else:
+                # Orphan detected! Found on exchange but not in DB.
                 self.logger.info(f"🕵️ [ORPHAN] Found untracked {sym} on exchange. Adopting...")
                 try:
                     from src.domain.models import Trade
                     import time
                     
                     # Create a new Trade model for the orphan
+                    orphan_id = f"adopted_{int(time.time())}"
                     orphan = Trade(
                         profile_id=profile['id'],
                         exchange=profile['exchange'].upper(),
@@ -104,11 +134,11 @@ class MonitorPositionsUseCase:
                         leverage=float(ep['leverage'] or 10),
                         status='ACTIVE',
                         timeframe='1h', # Placeholder since exchange doesn't store TF
-                        pos_key=f"{profile['exchange'].upper()}_{sym.replace('/', '_')}_adopted",
+                        pos_key=f"{profile['exchange'].upper()}_{sym.replace('/', '_')}_{orphan_id}",
                         sl_price=float(ep.get('stopLoss') or 0) or None,
                         tp_price=float(ep.get('takeProfit') or 0) or None,
-                        exchange_order_id=f"adopted_{int(time.time())}",
-                        entry_time=int(time.time() * 1000), # FIX: Include entry_time for adopted orphans
+                        exchange_order_id=orphan_id,
+                        entry_time=int(time.time() * 1000),
                         meta={'is_orphan': True, 'adopted_at': int(time.time() * 1000)}
                     )
                     
@@ -261,7 +291,7 @@ class MonitorPositionsUseCase:
         except Exception as e:
             self.logger.error(f"Error monitoring virtual trade {trade.symbol}: {e}")
 
-    async def _manage_pending_trades(self, profile: Dict[str, Any]):
+    async def _manage_pending_trades(self, profile: Dict[str, Any], db_trades: List[Any]):
         """
         Manages trades with 'PENDING' status in DB:
         1. Expiration: Cancel if older than 2 hours.
@@ -270,7 +300,6 @@ class MonitorPositionsUseCase:
         import time
         from src import config
         
-        db_trades = await self.trade_repo.get_active_positions(profile['id'])
         pending_trades = [t for t in db_trades if t.status == 'PENDING']
         
         if not pending_trades:
@@ -285,8 +314,17 @@ class MonitorPositionsUseCase:
         exchange_orders = state.get('orders', []) if state else []
 
         for trade in pending_trades:
-            # 1. Existence check
-            match = next((o for o in exchange_orders if str(o.get('id')) == str(trade.exchange_order_id)), None)
+            # 1. Existence check (robust ID + Symbol matching)
+            def _order_matches(o, trade):
+                sym = o.get('symbol', '')
+                if sym and '/' not in sym:  # Normalize just in case
+                    sym = f"{sym[:-4]}/USDT:USDT" if sym.endswith('USDT') else sym
+                id_match = str(o.get('id')) == str(trade.exchange_order_id)
+                # Fallback: Same symbol + same side = same pending order (for Bybit ID quirks)
+                sym_match = sym == trade.symbol and o.get('side', '').upper() == trade.side.upper()
+                return id_match or sym_match
+                
+            match = next((o for o in exchange_orders if _order_matches(o, trade)), None)
             
             # If filled or cancelled on exchange, we'll let ghost check handle status updates
             # But if it's still there, we check for expiration or reversal
@@ -303,11 +341,28 @@ class MonitorPositionsUseCase:
                 # B. Reversal Check
                 if self.evaluate_strategy_use_case:
                     # Evaluate current signal
-                    sig = await self.evaluate_strategy_use_case.execute(trade.symbol, trade.timeframe, ex_name)
+                    sig = await self.evaluate_strategy_use_case.execute(trade.symbol, trade.timeframe, ex_name, profile['id'])
                     if sig and sig.get('side') != 'SKIP' and sig.get('side').upper() != trade.side:
                         self.logger.info(f"[{trade.symbol}] Signal reversal detected ({trade.side} -> {sig.get('side')}). Cancelling pending...")
                         await self._cancel_pending_trade(profile, adapter, trade, "REVERSED")
+                        # Apply cooldown to prevent immediate re-entry in same/next heartbeat
+                        await self.cooldown_manager.set_sl_cooldown(ex_name, trade.symbol, profile['id'], custom_duration=60)
                         continue
+            else:
+                # GHOST PENDING: Missing from open orders. 
+                # Check if it was filled (which should have been updated by _monitor_profile)
+                # We re-fetch state to be absolutely sure we don't cancel a trade that just filled/transitioned
+                # But since _monitor_profile runs first, if it's still PENDING in our snapshot, we check if it's in positions
+                is_in_positions = any(p.get('symbol') == trade.symbol for p in (state or {}).get('positions', []))
+                
+                if not is_in_positions:
+                    import time
+                    # Small grace period for newly created pending orders (e.g. 15s) 
+                    # so we don't murder them if sync is slightly out of phase
+                    if (int(time.time() * 1000) - (trade.entry_time or 0)) > 15000:
+                        self.logger.warning(f"👻 [GHOST-PENDING] {trade.symbol} missing from exchange orders/positions. Cancelling in DB.")
+                        await self.trade_repo.update_status(trade.id, 'CANCELLED', exit_reason='GHOST_PENDING')
+                        await self.notification_service.notify_generic(f"👻 **GHOST PENDING CLEANUP** | {trade.symbol} | Moved to CANCELLED")
 
     async def _cancel_pending_trade(self, profile: Dict[str, Any], adapter: BaseAdapter, trade: Any, reason: str):
         """Helper to cancel a pending order on exchange and DB."""

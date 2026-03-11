@@ -55,13 +55,27 @@ class AccountSyncService:
                 adapter.fetch_open_orders()
             )
             
+            fresh_orders = results[2]
+            fresh_order_ids = {str(o.get('id')) for o in fresh_orders if o.get('id')}
+
+            # CRITICAL: Merge optimistic orders that haven't been confirmed by exchange yet.
+            # Bybit may take 1-5 seconds to reflect a newly placed order in API.
+            # Without this merge, sync_all() would destroy register_pending_order() protection.
+            # FIX D2: Compare by order_id (not symbol) to avoid evicting optimistic entries
+            # when the account holds other orders on the same coin.
+            prev_state = self._state_cache.get(account_key, {})
+            surviving_optimistic = [
+                o for o in prev_state.get('orders', [])
+                if o.get('__optimistic') and str(o.get('id', '')) not in fresh_order_ids
+            ]
+            
             self._state_cache[account_key] = {
                 'balance': results[0],
                 'positions': results[1],
-                'orders': results[2],
+                'orders': fresh_orders + surviving_optimistic,
                 'timestamp': asyncio.get_event_loop().time()
             }
-            self.logger.debug(f"Synced account {account_key}")
+            self.logger.debug(f"Synced account {account_key} (+{len(surviving_optimistic)} optimistic retained)")
         except Exception as e:
             self.logger.error(f"Failed to sync account {account_key}: {e}")
 
@@ -83,3 +97,23 @@ class AccountSyncService:
                 sym = o.get('symbol')
                 if sym: symbols.add(sym)
         return list(symbols)
+
+    def register_pending_order(self, profile: Dict[str, Any], symbol: str, side: str, order_id: str):
+        """
+        Optimistically injects a newly placed pending order into the local state cache.
+        This prevents the guard in execute_trade from being bypassed in the same heartbeat
+        cycle where sync_all() hasn't been called yet.
+        """
+        key = self._get_account_key(profile)
+        if key not in self._state_cache:
+            self._state_cache[key] = {'balance': {}, 'positions': [], 'orders': [], 'timestamp': 0}
+        
+        # Inject the order into cache immediately so the next execute_trade guard sees it
+        self._state_cache[key]['orders'].append({
+            'id': order_id,
+            'symbol': symbol,
+            'side': side,
+            'status': 'OPEN',
+            '__optimistic': True  # Mark so we know this was locally added
+        })
+        self.logger.debug(f"Registered pending order optimistically: {symbol} {side} [{order_id}]")

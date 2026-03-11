@@ -36,6 +36,7 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
         
         BaseExchangeClient.__init__(self, client)
         self._position_mode = None
+        self._mode_lock = asyncio.Lock() # Guard for position mode flipping
 
     def __getattr__(self, name):
         return getattr(self.exchange, name)
@@ -73,6 +74,10 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             all_orders = std + cond
             for o in all_orders:
                 o['status'] = self.normalize_status(o.get('status'))
+                # Normalize symbol to unified format 
+                raw_sym = o.get('symbol', '')
+                if raw_sym and '/' not in raw_sym:
+                    o['symbol'] = f"{raw_sym[:-4]}/USDT:USDT" if raw_sym.endswith('USDT') else raw_sym
             return all_orders
         except Exception as e:
             self.logger.error(f"Fetch open orders failed: {e}")
@@ -144,27 +149,34 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             extra['tpslMode'] = 'Full'
             extra['tpTriggerBy'] = 'MarkPrice'
 
+        # Precision check for Qty (Amount)
+        amount = self.round_qty(symbol, amount)
+        
         combined = {**extra, **params}
         try:
             return await self._execute_with_timestamp_retry(self.exchange.create_order, symbol, type, side, amount, price, combined)
         except Exception as e:
             err = str(e).lower()
             if "10001" in err and ("side invalid" in err or "position mode" in err):
-                self.logger.info(f"Bybit 10001 detected. Flipping position mode to retry...")
-                # Flip mode and retry exactly once
-                self._position_mode = 'BothSide' if mode == 'MergedSingle' else 'MergedSingle'
-                # Re-calculate extra params for the new mode
-                extra = {'category': 'linear'}
-                if self._position_mode == 'BothSide':
-                    reduce_only = params.get('reduceOnly', False)
-                    if not reduce_only:
-                        extra['positionIdx'] = 1 if side.upper() == 'BUY' else 2
+                async with self._mode_lock:
+                    # Re-fetch mode inside lock to see if another task already flipped it
+                    current_mode = self._position_mode
+                    self.logger.info(f"Bybit 10001 detected. Flipping position mode to retry...")
+                    # Flip mode and retry exactly once
+                    self._position_mode = 'BothSide' if current_mode == 'MergedSingle' else 'MergedSingle'
+                    
+                    # Re-calculate extra params for the new mode
+                    extra = {'category': 'linear'}
+                    if self._position_mode == 'BothSide':
+                        reduce_only = params.get('reduceOnly', False)
+                        if not reduce_only:
+                            extra['positionIdx'] = 1 if side.upper() == 'BUY' else 2
+                        else:
+                            extra['positionIdx'] = 1 if side.upper() == 'SELL' else 2
                     else:
-                        extra['positionIdx'] = 1 if side.upper() == 'SELL' else 2
-                else:
-                    extra['positionIdx'] = 0
-                combined = {**extra, **params}
-                return await self._execute_with_timestamp_retry(self.exchange.create_order, symbol, type, side, amount, price, combined)
+                        extra['positionIdx'] = 0
+                    combined = {**params, **extra}  # FIX: extra (fix) overrides params (potentially stale)
+                    return await self._execute_with_timestamp_retry(self.exchange.create_order, symbol, type, side, amount, price, combined)
             raise e
 
     async def cancel_order(self, order_id: str, symbol: str, params: Dict = {}) -> Dict:

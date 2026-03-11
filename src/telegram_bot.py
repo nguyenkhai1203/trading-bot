@@ -459,7 +459,7 @@ async def sync_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def reset_peak_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manually reset peak balance to current balance for all traders."""
     try:
-        from risk_manager import RiskManager
+        from src.risk_manager import RiskManager
         results = []
         for p_id, t in traders.items():
             try:

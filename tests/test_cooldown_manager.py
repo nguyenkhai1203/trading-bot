@@ -26,16 +26,16 @@ class TestCooldownManager:
         profile_id = 1
         
         # 1. Initially no cooldown
-        assert manager.is_in_cooldown(exchange, symbol) is False
+        assert manager.is_in_cooldown(exchange, symbol, profile_id) is False
         
         # 2. Set cooldown for 1 hour
         await manager.set_sl_cooldown(exchange, symbol, profile_id, custom_duration=3600)
-        assert manager.is_in_cooldown(exchange, symbol) is True
-        assert manager.get_remaining_minutes(exchange, symbol) > 59
+        assert manager.is_in_cooldown(exchange, symbol, profile_id) is True
+        assert manager.get_remaining_minutes(exchange, symbol, profile_id) > 59
         
         # 3. Verify expiry
         with patch("src.cooldown_manager.time.time", return_value=time.time() + 4000):
-            assert manager.is_in_cooldown(exchange, symbol) is False
+            assert manager.is_in_cooldown(exchange, symbol, profile_id) is False
 
     @pytest.mark.asyncio
     async def test_margin_throttling_logic(self, manager):
@@ -78,13 +78,13 @@ class TestCooldownManager:
         """Verify cooldowns are hydrated from DB JSON."""
         profile_id = 1
         future_time = time.time() + 1000
-        mock_json = json.dumps({"BINANCE:BTC/USDT": future_time})
+        mock_json = json.dumps({f"BINANCE:{profile_id}:BTC/USDT": future_time})
         manager.db.get_risk_metric = AsyncMock(return_value=mock_json)
         
         await manager.sync_from_db(profile_id)
         
-        assert manager.is_in_cooldown("BINANCE", "BTC/USDT") is True
-        assert "BINANCE:BTC/USDT" in manager._sl_cooldowns
+        assert manager.is_in_cooldown("BINANCE", "BTC/USDT", profile_id) is True
+        assert f"BINANCE:{profile_id}:BTC/USDT" in manager._sl_cooldowns
 
     @pytest.mark.asyncio
     async def test_save_to_db_filters_expired(self, manager):

@@ -1,5 +1,6 @@
 import pytest
 import time
+import asyncio
 from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch
 from src.domain.services.notification_service import NotificationService

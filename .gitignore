@@ -46,3 +46,5 @@ test/__pycache__/
 */__pycache__/
 */__pycache__/*
 start.bat
+.mypy_cache/
+.pytest_cache/

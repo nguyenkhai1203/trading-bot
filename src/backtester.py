@@ -379,7 +379,7 @@ async def main():
         'BINANCE': config.BINANCE_SYMBOLS if config.BINANCE_SYMBOLS else config.TRADING_SYMBOLS,
         'BYBIT': config.BYBIT_SYMBOLS if config.BYBIT_SYMBOLS else config.TRADING_SYMBOLS,
     }
-    active_exchanges = [e for e in ['BINANCE', 'BYBIT'] if e in ACTIVE_EXCHANGES]
+    active_exchanges = [e for e in ['BINANCE', 'BYBIT'] if e in getattr(config, 'ACTIVE_EXCHANGES', ['BINANCE', 'BYBIT'])]
     
     for exchange in active_exchanges:
         symbols = exchange_symbols.get(exchange, config.TRADING_SYMBOLS)
