@@ -33,8 +33,8 @@ SIMULATION_BALANCE = 100.0  # Starting balance for Paper Trading
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 # Binance supports broad list
 BINANCE_SYMBOLS = [
-    'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT', 'BNB/USDT:USDT', 
-    'BCH/USDT:USDT', 'LINK/USDT:USDT'
+    'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 
+    'BCH/USDT', 'LINK/USDT'
 ]
 
 # Bybit supports unique gems like HYPE (Updated User Request: Top 20 Stable High-Vol)
@@ -97,18 +97,18 @@ OHLCV_REFRESH_INTERVAL = 60  # OHLCV data refresh interval in seconds (1 minute)
 CONFIDENCE_TIERS = {
     "high": {
         "min_confidence": 0.70,  # 70%+ confidence
-        "leverage": 3,          # Max leverage      
-        "cost_usdt": 2.0         # $8 per trade (Matches Global Max)
+        "leverage": 5,          # Max leverage      
+        "cost_usdt": 6.0         # $8 per trade (Matches Global Max)
     },
     "medium": {
         "min_confidence": 0.50,  # 50-70% confidence
-        "leverage": 3,           # Medium leverage
-        "cost_usdt": 1.0         # $6 per trade
+        "leverage": 4,           # Medium leverage
+        "cost_usdt": 4.0         # $6 per trade
     },
     "low": {
         "min_confidence": 0.30,  # 30-50% confidence
         "leverage": 2,           # Low leverage for safety
-        "cost_usdt": 1.0         # $4 per trade (Allows smaller entries)
+        "cost_usdt": 3.0         # $4 per trade (Allows smaller entries)
     }
 }
 MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade

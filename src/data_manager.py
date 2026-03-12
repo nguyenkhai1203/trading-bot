@@ -201,61 +201,47 @@ class MarketDataManager:
                         self.logger.debug(f"⏳ Skipping {symbol} (SL Cooldown)")
                         return
                     
-                    # 3. Smart Sync: Only fetch if a new candle period has started
-                    # Otherwise, update_tickers() handles live bridging.
-                    main_tf = timeframes[0]
-                    key_base = f"{name}_{symbol}_{main_tf}"
-                    
-                    if not self._should_fetch_new_candle(name, symbol, main_tf, adapter):
-                        return
-
-                    # 4. Timeframe Deduplication: Fetch only the lowest timeframe (e.g., 1h)
-                    ohlcv = await adapter.fetch_ohlcv(symbol, main_tf, limit=50)
-                    if not ohlcv: return
-                    
-                    seconds = self._get_timeframe_seconds(main_tf)
-                    now_ts = (adapter.exchange.milliseconds() / 1000.0) if hasattr(adapter.exchange, 'milliseconds') and adapter.exchange.milliseconds() else time.time()
-                    current_period_start = (int(now_ts) // seconds) * seconds
-                    self._ohlcv_sync_state[key_base] = current_period_start
-                        
-                    new_df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
-                    last_price = float(new_df.iloc[-1]['close'])
-                    
                     for tf in timeframes:
                         key = f"{name}_{symbol}_{tf}"
-                        # If it's the main TF, merge properly
-                        if tf == main_tf:
-                            old_df = self.data_store.get(key)
-                            if old_df is None: combined = new_df
-                            else:
-                                combined = pd.concat([old_df, new_df]).drop_duplicates(subset='timestamp', keep='last').reset_index(drop=True)
-                                combined = combined.sort_values('timestamp').reset_index(drop=True).tail(MAX_CANDLES)
-                        else:
-                            # If it's a higher TF (4h), just update the last candle close with the 1h close
-                            combined = self.data_store.get(key)
-                            if combined is not None and not combined.empty:
-                                combined.iloc[-1, combined.columns.get_loc('close')] = last_price
-                            else:
-                                # Fallback: if 4h is empty, we must fetch it once
-                                h_ohlcv = await adapter.fetch_ohlcv(symbol, tf, limit=50)
-                                if h_ohlcv:
-                                    combined = pd.DataFrame(h_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                                    combined['timestamp'] = pd.to_datetime(combined['timestamp'], unit='ms')
                         
-                        if combined is not None:
-                            is_valid, reason = self.validate_data(combined, symbol, tf)
-                            if is_valid:
-                                self.data_store[key] = combined
-                                if key in self.features_cache: del self.features_cache[key]
-                                
-                                # DB Persist (only for the fetched TF)
-                                if tf == main_tf:
-                                    candles_list = []
-                                    for _, row in new_df.iterrows():
-                                        ts = int(row['timestamp'].timestamp() * 1000)
-                                        candles_list.append([ts, row['open'], row['high'], row['low'], row['close'], row['volume']])
-                                    await self.db.upsert_candles(symbol, tf, candles_list)
+                        # 3. Smart Sync: Only fetch if a new candle period has started
+                        # Otherwise, update_tickers() handles live bridging for all timeframes.
+                        if not self._should_fetch_new_candle(name, symbol, tf, adapter):
+                            continue
+
+                        # 4. Fetch OHLCV for this specific timeframe
+                        ohlcv = await adapter.fetch_ohlcv(symbol, tf, limit=50)
+                        if not ohlcv: continue
+                        
+                        seconds = self._get_timeframe_seconds(tf)
+                        # We use exchange time if available for precision
+                        now_ts_raw = (adapter.exchange.milliseconds() / 1000.0) if hasattr(adapter.exchange, 'milliseconds') and adapter.exchange.milliseconds() else time.time()
+                        current_period_start = (int(now_ts_raw) // seconds) * seconds
+                        self._ohlcv_sync_state[key] = current_period_start
+                            
+                        new_df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                        new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
+                        
+                        old_df = self.data_store.get(key)
+                        if old_df is None: 
+                            combined = new_df
+                        else:
+                            # Merge new data and drop duplicates
+                            combined = pd.concat([old_df, new_df]).drop_duplicates(subset='timestamp', keep='last').reset_index(drop=True)
+                            combined = combined.sort_values('timestamp').reset_index(drop=True).tail(MAX_CANDLES)
+                        
+                        is_valid, reason = self.validate_data(combined, symbol, tf)
+                        if is_valid:
+                            self.data_store[key] = combined
+                            # Invalidate features cache so recalc happens on next access
+                            self.features_cache.pop(key, None)
+                            
+                            # DB Persist
+                            candles_list = []
+                            for _, row in new_df.iterrows():
+                                ts = int(row['timestamp'].timestamp() * 1000)
+                                candles_list.append([ts, row['open'], row['high'], row['low'], row['close'], row['volume']])
+                            await self.db.upsert_candles(symbol, tf, candles_list)
                 except Exception as e:
                     self.logger.error(f"[{name}] Error updating {symbol}: {e}")
 
