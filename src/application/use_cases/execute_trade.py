@@ -123,11 +123,61 @@ class ExecuteTradeUseCase:
             # Case A: Reversal (Current is BUY, signal is SELL or vice versa)
             if existing_on_account.side != side.upper():
                 if conf >= 0.6: # Moderate confidence required for reversal
-                    self.logger.info(f"🔄 **REVERSAL** | {symbol}: Cancelling {existing_on_account.side} for {side}")
+                    self.logger.info(f"🔄 **REVERSAL** | {symbol}: Closing {existing_on_account.side} for {side}")
+                    
                     # Use adapter to close
                     await adapter.close_position(symbol, existing_on_account.side, existing_on_account.qty)
-                    await self.trade_repo.update_status(existing_on_account.id, 'CANCELLED', exit_reason='REVERSAL')
-                    await self.notification_service.notify_generic(f"🔄 **REVERSAL** | {symbol} | Cancelling {existing_on_account.side} for {side}")
+                    
+                    # If the trade was ACTIVE, it's a REAL loss/profit. Record it as CLOSED with PnL.
+                    if existing_on_account.status == 'ACTIVE':
+                        # Fetch current price for accurate PnL recording
+                        try:
+                            ticker = await adapter.fetch_ticker(symbol)
+                            exit_price = float(ticker['last'])
+                        except:
+                            exit_price = existing_on_account.entry_price # Fallback
+                        
+                        # Calculate PnL
+                        qty = float(existing_on_account.qty)
+                        if existing_on_account.side == 'BUY':
+                            pnl = (exit_price - existing_on_account.entry_price) * qty
+                        else:
+                            pnl = (existing_on_account.entry_price - exit_price) * qty
+                        
+                        # Update as CLOSED
+                        await self.trade_repo.update_status(
+                            existing_on_account.id, 
+                            'CLOSED', 
+                            exit_reason='REVERSAL', 
+                            exit_price=exit_price, 
+                            pnl=pnl
+                        )
+                        
+                        # Notify proper closure
+                        # Leverage might be missing in some models, default to 10
+                        leverage = getattr(existing_on_account, 'leverage', 10)
+                        margin = (existing_on_account.entry_price * qty) / leverage if (existing_on_account.entry_price and qty and leverage) else 1.0
+                        pnl_pct = (pnl / margin * 100) if margin > 0 else 0.0
+                        
+                        is_live = str(profile.get('environment', 'LIVE')).upper() == 'LIVE'
+                        await self.notification_service.notify_position_closed(
+                            trade=existing_on_account,
+                            exit_price=exit_price,
+                            pnl=pnl,
+                            pnl_pct=pnl_pct,
+                            reason='REVERSAL',
+                            dry_run=not is_live
+                        )
+                        
+                        # If it was a loss, apply SL Cooldown
+                        if pnl < 0:
+                            self.logger.info(f"[{symbol}] Reversal resulted in loss. Applying SL Cooldown.")
+                            await self.cooldown_manager.set_sl_cooldown(ex_name, symbol, profile['id'])
+                    else:
+                        # For PENDING orders, it's just a cancellation
+                        await self.trade_repo.update_status(existing_on_account.id, 'CANCELLED', exit_reason='REVERSAL')
+                        await self.notification_service.notify_generic(f"🔄 **REVERSAL** | {symbol} | Cancelling PENDING {existing_on_account.side} for {side}")
+                    
                     # Continue to open new position
                 else:
                     return False

@@ -442,6 +442,7 @@ class TestExecuteTradeUseCase:
         notify = MagicMock()
         notify.notify_order_filled = AsyncMock()
         notify.notify_generic = AsyncMock()
+        notify.notify_position_closed = AsyncMock()
         return notify
 
     @pytest.fixture
@@ -450,6 +451,7 @@ class TestExecuteTradeUseCase:
         cd.is_in_cooldown = MagicMock(return_value=False)
         cd.is_margin_throttled = MagicMock(return_value=False)
         cd.handle_margin_error = AsyncMock()
+        cd.set_sl_cooldown = AsyncMock()
         return cd
 
     @pytest.mark.asyncio
@@ -528,23 +530,59 @@ class TestExecuteTradeUseCase:
         assert call_kwargs.get('is_virtual') is True
 
     @pytest.mark.asyncio
-    async def test_execute_trade_reversal_cancels_trade(self, mock_repo, mock_adapter, mock_risk, mock_notify, mock_cooldown):
-        """Verify that reversal signals cancel the current trade status instead of closing it"""
+    async def test_execute_trade_reversal_closes_active_trade(self, mock_repo, mock_adapter, mock_risk, mock_notify, mock_cooldown):
+        """Verify that reversal signals CLOSE an active trade and record PnL"""
         use_case = ExecuteTradeUseCase(mock_repo, {"BYBIT": mock_adapter}, mock_risk, mock_notify, mock_cooldown)
         profile = {"id": 1, "exchange": "BYBIT"}
         signal = {"symbol": "BTC/USDT", "side": "SELL", "confidence": 0.8} # Reversal to SELL
         
-        # Mock active position being BUY
+        # Mock active position being BUY, status ACTIVE
         mock_trade = MagicMock()
         mock_trade.symbol = "BTC/USDT"
         mock_trade.side = "BUY"
         mock_trade.qty = 1.0
         mock_trade.id = 123
+        mock_trade.status = 'ACTIVE'
+        mock_trade.entry_price = 50000.0
+        mock_trade.leverage = 10
+        mock_trade.entry_time = 123456789
+        mock_repo.get_active_positions_on_exchange.return_value = [mock_trade]
+        
+        # Mock ticker for exit price
+        mock_adapter.fetch_ticker.return_value = {'last': 49000.0} # $1000 loss
+        
+        await use_case.execute(profile, signal)
+        
+        # Should be CLOSED with PnL recorded
+        mock_repo.update_status.assert_called_once()
+        args, kwargs = mock_repo.update_status.call_args
+        assert args[0] == 123
+        assert args[1] == 'CLOSED'
+        assert kwargs['exit_reason'] == 'REVERSAL'
+        assert kwargs['pnl'] == -1000.0
+        
+        # Should notify closure
+        mock_notify.notify_position_closed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_trade_reversal_cancels_pending_trade(self, mock_repo, mock_adapter, mock_risk, mock_notify, mock_cooldown):
+        """Verify that reversal signals CANCEL a pending trade"""
+        use_case = ExecuteTradeUseCase(mock_repo, {"BYBIT": mock_adapter}, mock_risk, mock_notify, mock_cooldown)
+        profile = {"id": 1, "exchange": "BYBIT"}
+        signal = {"symbol": "BTC/USDT", "side": "SELL", "confidence": 0.8}
+        
+        # Mock pending position, status PENDING
+        mock_trade = MagicMock()
+        mock_trade.symbol = "BTC/USDT"
+        mock_trade.side = "BUY"
+        mock_trade.id = 456
+        mock_trade.status = 'PENDING'
         mock_repo.get_active_positions_on_exchange.return_value = [mock_trade]
         
         await use_case.execute(profile, signal)
         
-        mock_repo.update_status.assert_called_once_with(123, 'CANCELLED', exit_reason='REVERSAL')
+        # Should be CANCELLED
+        mock_repo.update_status.assert_called_once_with(456, 'CANCELLED', exit_reason='REVERSAL')
 
 
 from src.application.use_cases.monitor_positions import MonitorPositionsUseCase

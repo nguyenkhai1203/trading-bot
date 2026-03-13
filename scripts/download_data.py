@@ -17,196 +17,182 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from config import (
     BINANCE_API_KEY, BINANCE_API_SECRET, 
     BYBIT_API_KEY, BYBIT_API_SECRET,
-    ACTIVE_EXCHANGES, BINANCE_SYMBOLS, BYBIT_SYMBOLS
+    ACTIVE_EXCHANGES, BINANCE_SYMBOLS, BYBIT_SYMBOLS,
+    MACRO_SYMBOLS
 )
 
-async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', limit=5000):
-    """Download OHLCV data for a symbol/timeframe pair with 1h freshness check."""
-    # Strip :USDT suffix -> BTC/USDT:USDT -> BTCUSDT
+async def download_historical_data(symbol, timeframe, exchange_name='BINANCE', limit=5000, semaphore=None):
+    """Download OHLCV data for a symbol/timeframe pair with 5k candle limit and rate-limit safety."""
+    if semaphore:
+        async with semaphore:
+            return await _download_inner(symbol, timeframe, exchange_name, limit)
+    else:
+        return await _download_inner(symbol, timeframe, exchange_name, limit)
+
+def get_timeframe_seconds(timeframe: str) -> int:
+    unit = timeframe[-1]
+    val = int(timeframe[:-1])
+    if unit == 'm': return val * 60
+    if unit == 'h': return val * 3600
+    if unit == 'd': return val * 86400
+    return 60
+
+async def _download_inner(symbol, timeframe, exchange_name, limit):
     safe_symbol = symbol.split(':')[0].replace('/', '').upper()
     filename = f"data/{exchange_name}_{safe_symbol}_{timeframe}.csv"
     
+    # Bybit-specific timeframe mapping for API compatibility
+    api_timeframe = timeframe
+    if exchange_name.upper() == 'BYBIT':
+        mapping = {'8h': '4h'} # Bybit doesn't support 8h, but we can aggregate 4h later or just use 4h
+        api_timeframe = mapping.get(timeframe, timeframe)
+
     existing_df = None
     since_ts = None
     
-    # [v2.5] Incremental Fetch Logic & Freshness check
+    # 1. Calculate Target Window
+    now_ms = int(time.time() * 1000)
+    tf_seconds = get_timeframe_seconds(timeframe)
+    window_ms = limit * tf_seconds * 1000
+    target_since = now_ms - window_ms
+
     if os.path.exists(filename):
-        mtime = os.path.getmtime(filename)
-        age_seconds = time.time() - mtime
-        if age_seconds < 3600:  # 1 hour
-            print(f"  [SKIP] {exchange_name} {symbol} {timeframe} is fresh ({age_seconds/60:.1f}m old)")
-            return 1  # Skipped (fresh)
-            
         try:
             existing_df = pd.read_csv(filename)
             if not existing_df.empty:
                 existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
-                # Get the last timestamp in ms to fetch from
-                last_ts = existing_df['timestamp'].iloc[-1].timestamp() * 1000
-                since_ts = int(last_ts)
-                print(f"  [INCREMENTAL] {exchange_name} {symbol} {timeframe} has {len(existing_df)} candles. Fetching from {existing_df['timestamp'].iloc[-1]}")
-        except Exception as e:
-            print(f"  [WARN] Could not read existing {filename}: {e}. Will re-download full history.")
+                last_ts = int(existing_df['timestamp'].iloc[-1].timestamp() * 1000)
+                
+                # If the gap is too large (> 5000 candles), we just restart from target_since
+                if last_ts < target_since:
+                    print(f"  [RESET] {exchange_name} {symbol} {timeframe} data is too old. Restarting from 5k window.")
+                    since_ts = target_since
+                else:
+                    # Incremental catch-up
+                    since_ts = last_ts + 1
+                    print(f"  [CATCHUP] {exchange_name} {symbol} {timeframe} from {existing_df['timestamp'].iloc[-1]}")
+        except Exception:
             existing_df = None
 
-    try:
-        # Bybit-specific timeframe mapping
-        if exchange_name.upper() == 'BYBIT':
-            mapping = {'8h': '4h'}
-            timeframe = mapping.get(timeframe, timeframe)
+    if since_ts is None:
+        since_ts = target_since
 
+    exchange = None
+    try:
         ex_class = getattr(ccxt, exchange_name.lower())
-        config = {
+        ex_config = {
             'enableRateLimit': True,
-            'options': {
-                'defaultType': 'future',
-                'adjustForTimeDifference': True,
-            }
+            'options': { 'defaultType': 'future', 'adjustForTimeDifference': True }
         }
-        if exchange_name.upper() == 'BINANCE':
-            if BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY:
-                config['apiKey'] = BINANCE_API_KEY
-                config['secret'] = BINANCE_API_SECRET
-        elif exchange_name.upper() == 'BYBIT':
-            if BYBIT_API_KEY and 'your_' not in BYBIT_API_KEY:
-                config['apiKey'] = BYBIT_API_KEY
-                config['secret'] = BYBIT_API_SECRET
+        if exchange_name.upper() == 'BINANCE' and BINANCE_API_KEY and 'your_' not in BINANCE_API_KEY:
+            ex_config.update({'apiKey': BINANCE_API_KEY, 'secret': BINANCE_API_SECRET})
+        elif exchange_name.upper() == 'BYBIT' and BYBIT_API_KEY and 'your_' not in BYBIT_API_KEY:
+            ex_config.update({'apiKey': BYBIT_API_KEY, 'secret': BYBIT_API_SECRET})
             
-        exchange = ex_class(config)
+        exchange = ex_class(ex_config)
+        await exchange.load_time_difference()
         
-        # [v2.4] Robust Time Sync for Binance/Bybit
-        # Fetch server time and calculate offset to prevent -1021 error
-        if exchange_name.upper() in ['BINANCE', 'BYBIT']:
-            exchange.options['recvWindow'] = 60000 # Max safety window
-            await exchange.load_time_difference()
-            print(f"  [TIME] {exchange_name} offset: {exchange.options.get('timeDifference', 0)}ms")
-        
-        print(f"[*] Downloading {symbol} {timeframe} ({limit} candles)...")
-        
-        # Fetch historical data in batches (1000 per request max)
         all_ohlcv = []
-        # If incremental, fetch from `since_ts`. Else fetch 300 days back.
-        since = since_ts if since_ts else (exchange.milliseconds() - (300 * 24 * 60 * 60 * 1000))
+        retry_count = 0
+        current_since = since_ts
         
-        # For incremental updates, we just need to catch up, not necessarily fetch 5000 candles from `since_ts`.
-        target_limit = limit if not since_ts else 5000 
-        
-        while len(all_ohlcv) < target_limit:
+        while True:
             try:
-                ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
+                ohlcv = await exchange.fetch_ohlcv(symbol, api_timeframe, since=current_since, limit=1000)
                 if not ohlcv:
                     break
+                
                 all_ohlcv.extend(ohlcv)
-                # Next batch from the last candle's timestamp + 1ms to avoid dupes
-                since = ohlcv[-1][0] + 1
-                if since_ts:
-                    print(f"    {len(all_ohlcv)} new candles fetched...", end='\r')
-                else:
-                    print(f"    {len(all_ohlcv)} candles fetched...", end='\r')
-                    
-                # Break early if we only got a partial page (meaning we've hit the present)
-                if len(ohlcv) < 1000:
+                last_candle_ts = ohlcv[-1][0]
+                
+                # Break if we reached current time (within 1 period)
+                if last_candle_ts >= (now_ms - tf_seconds * 1000):
+                    break
+                
+                current_since = last_candle_ts + 1
+                
+                # Moderate delay
+                await asyncio.sleep(1.0 if exchange_name.upper() == 'BYBIT' else 0.5)
+                retry_count = 0 # Reset retries on success
+                
+                # Safety break for massive downloads
+                if len(all_ohlcv) > 20000:
                     break
                     
-                delay = 1.0 if exchange_name.upper() == 'BYBIT' else 0.2
-                await asyncio.sleep(delay)
+            except ccxt.RateLimitExceeded:
+                retry_count += 1
+                wait = min(retry_count * 10, 60)
+                print(f"  [LIMIT] {exchange_name} rate limit. Waiting {wait}s...")
+                await asyncio.sleep(wait)
+                if retry_count > 3: break
             except Exception as e:
-                print(f"    Error: {e}")
+                print(f"  [ERROR] {exchange_name} {symbol}: {e}")
                 break
         
-        if not all_ohlcv:
-            if existing_df is not None:
-                print(f"  [INFO] {exchange_name} {symbol:12s} {timeframe:3s} -> No new data, keeping existing.")
-                return 1 # Skipped/Fresh
-            else:
-                print(f"  [WARN] {exchange_name} {symbol:12s} {timeframe:3s} -> NO DATA fetched")
-                return False
-
-        new_df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
-        
-        if existing_df is not None:
-            # Merge and deduplicate based on timestamp
-            df = pd.concat([existing_df, new_df])
-            df = df.drop_duplicates(subset=['timestamp'], keep='last')
-            df = df.sort_values('timestamp')
-        else:
-            df = new_df
+        if not all_ohlcv and existing_df is None:
+            return 0
             
-        # Enforce maximum historical limit
+        if all_ohlcv:
+            new_df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            new_df['timestamp'] = pd.to_datetime(new_df['timestamp'], unit='ms')
+            
+            if existing_df is not None:
+                df = pd.concat([existing_df, new_df]).drop_duplicates(subset=['timestamp'], keep='last').sort_values('timestamp')
+            else:
+                df = new_df
+        else:
+            df = existing_df
+            
+        # 5. Strict 5k limit
         df = df.tail(limit)
         
-        # Save to CSV
         os.makedirs('data', exist_ok=True)
         df.to_csv(filename, index=False)
-        
-        print(f"[OK] {exchange_name} {symbol:12s} {timeframe:3s} -> {len(df):5d} candles saved to {filename}")
-        return 2  # Actually downloaded
-        
+        print(f"  [OK] {exchange_name} {symbol:12s} {timeframe:3s} -> {len(df):5d} candles (Last: {df['timestamp'].iloc[-1]})")
+        return 2 if all_ohlcv else 1
+
     except Exception as e:
-        print(f"[ERROR] {symbol} {timeframe}: {e}")
-        return 0  # Failed
+        print(f"  [FAILURE] {symbol} {timeframe}: {e}")
+        return 0
     finally:
-        if 'exchange' in locals() and exchange:
+        if exchange:
             await exchange.close()
 
 async def main():
-    """Main download routine."""
-    import time
+    """Main download routine with Global Semaphore(4)."""
     timeframes = ['15m', '30m', '1h', '2h', '4h', '8h', '1d']
-    
-    exchange_symbols = {
-        'BINANCE': BINANCE_SYMBOLS,
-        'BYBIT': BYBIT_SYMBOLS
+    exchange_symbols = { 
+        'BINANCE': list(set(BINANCE_SYMBOLS + MACRO_SYMBOLS)), 
+        'BYBIT': BYBIT_SYMBOLS 
     }
     
-    exchange_tasks = {}
+    all_tasks_args = []
     for ex_name in ACTIVE_EXCHANGES:
         ex_name = ex_name.strip().upper()
         symbols = exchange_symbols.get(ex_name, [])
-        tasks = []
         for symbol in symbols:
-            for timeframe in timeframes:
-                tasks.append((symbol, timeframe, ex_name))
-        exchange_tasks[ex_name] = tasks
-
-    # Reorganize to interleave exchanges (e.g., [Bin1, Byb1, Bin2, Byb2...])
-    all_tasks = []
-    max_len = max([len(t) for t in exchange_tasks.values()]) if exchange_tasks else 0
-    for i in range(max_len):
-        for ex_name in ACTIVE_EXCHANGES:
-            ex_name = ex_name.strip().upper()
-            if i < len(exchange_tasks[ex_name]):
-                all_tasks.append(exchange_tasks[ex_name][i])
+            for tf in timeframes:
+                all_tasks_args.append((symbol, tf, ex_name))
     
-    total = len(all_tasks)
-    success_count = 0
+    # Randomize to spread load across exchanges
+    import random
+    random.shuffle(all_tasks_args)
     
-    # [v2.6] Parallelized batching by interleaved exchange pairs
-    batch_size = 8  # Tăng lên 8 symbols (4 Binance + 4 Bybit) để tối ưu tốc độ tối đa
-    wait_time = 2   # Nghỉ 2s giữa các gói
+    total = len(all_tasks_args)
+    print(f"[*] Starting download with GLOBAL SEMAPHORE(4). Total tasks: {total}")
     
-    print(f"[*] Starting download with INTERLEAVED exchanges. Batch size: {batch_size}")
+    semaphore = asyncio.Semaphore(4)
+    tasks = [download_historical_data(*args, limit=5000, semaphore=semaphore) for args in all_tasks_args]
     
-    for i in range(0, total, batch_size):
-        batch = all_tasks[i:i+batch_size]
-        print(f"\n[Batch {i//batch_size + 1}/{(total + batch_size - 1)//batch_size}] Processing {len(batch)} downloads...")
-        
-        # Create tasks
-        tasks = []
-        for symbol, timeframe, ex_name in batch:
-            limit = 5000
-            tasks.append(download_historical_data(symbol, timeframe, ex_name, limit))
-            
-        results = await asyncio.gather(*tasks)
-        # 2=downloaded, 1=skipped(fresh), 0=error
-        actual_downloads = sum(1 for r in results if r == 2)
-        success_count += sum(1 for r in results if r > 0)
-        
-        # Only sleep if we actually hit the API and there are more tasks
-        if i + batch_size < total and actual_downloads > 0:
-            print(f"    Sleeping {wait_time}s to respect rate limits...")
-            await asyncio.sleep(wait_time)
+    results = await asyncio.gather(*tasks)
+    
+    success_count = sum(1 for r in results if r > 0)
+    actually_updated = sum(1 for r in results if r == 2)
+    
+    print("\n" + "=" * 80)
+    print(f"[OK] Complete: {success_count}/{total} successful, {actually_updated} files updated.")
+    print(f"End: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 80)
     
     print()
     print("=" * 80)
