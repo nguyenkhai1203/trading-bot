@@ -714,7 +714,7 @@ async def _compute_and_cache_bms(analyzer, env_str: str):
     return sentiment
 
 
-async def run_global_optimization(download=False):
+async def run_global_optimization(download=True):
     from src.infrastructure.notifications.notification import send_telegram_chunked
     import subprocess
     
@@ -1038,7 +1038,8 @@ async def run_global_optimization(download=False):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Strategy Analyzer & Optimizer")
-    parser.add_argument("--download", action="store_true", help="Download fresh data before optimization")
+    parser.add_argument("--download", action="store_true", default=True, help="Download fresh data before optimization (default: True)")
+    parser.add_argument("--no-download", action="store_false", dest="download", help="Skip data download")
     parser.add_argument("--live", action="store_true", help="Run in LIVE mode")
     parser.add_argument("--dry-run", action="store_true", help="Run in DRY-RUN mode")
     

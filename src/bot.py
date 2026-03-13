@@ -414,7 +414,7 @@ async def main():
                 print("="*60)
                 try:
                     from analyzer import run_global_optimization
-                    await run_global_optimization()
+                    await run_global_optimization(download=True)
                     last_optimization_time = curr_time
                     print("✅ Periodic optimization complete.")
                     # [CRITICAL FIX] Refresh strategy config cache from DB after optimization.
