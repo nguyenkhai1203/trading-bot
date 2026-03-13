@@ -58,12 +58,20 @@ class MonitorPositionsUseCase:
             if trade.status == 'PENDING':
                 continue
 
-            # FIX D3: Match by (symbol, side) for Hedge Mode support.
-            # Previously matched by symbol only — would resolve LONG ghost when SELL was on exchange,
-            # or skip an orphan that was a different leg of the same coin.
+            # FIX D3: Match by (symbol, side, and price) for precision.
+            # Stale trades in DB (e.g. ATOM at 1.8$) should NOT match a current position (ATOM at 6.5$).
+            def _is_price_match(db_price, pos_dict):
+                ex_price = float(pos_dict.get('entryPrice') or pos_dict.get('avgPrice') or 0)
+                if not db_price or not ex_price: 
+                    # If we can't compare prices, we only match if it's the ONLY trade for this symbol
+                    return True 
+                return abs(db_price - ex_price) / ex_price < 0.15 # 15% tolerance
+                
             matched = next(
                 (p for p in exchange_positions 
-                 if p.get('symbol') == trade.symbol and p.get('side', '').upper() == trade.side.upper()), 
+                 if p.get('symbol') == trade.symbol 
+                 and p.get('side', '').upper() == trade.side.upper()
+                 and _is_price_match(trade.entry_price, p)), 
                 None
             )
             
@@ -83,16 +91,22 @@ class MonitorPositionsUseCase:
                 # Try to fetch real exit data
                 await self._resolve_ghost_trade(profile, trade)
             else:
-                # Trade still active.
-                pass
+                # 4. SELF-HEALING: Check if SL/TP are missing on exchange
+                await self._heal_missing_sltp(profile, trade, matched, state)
                 
         # 4. Check for Orphans and Status Transitions (Exchange positions vs DB)
         for ep in exchange_positions:
             sym = ep.get('symbol')
             # Check if this exchange position is already tracked in DB
+            def _is_price_match(db_price, ex_price):
+                if not db_price or not ex_price: return True
+                return abs(db_price - ex_price) / ex_price < 0.10
+
             db_match = next(
                 (t for t in db_trades 
-                 if t.symbol == sym and t.side.upper() == ep.get('side', '').upper()),
+                 if t.symbol == sym 
+                 and t.side.upper() == ep.get('side', '').upper()
+                 and _is_price_match(t.entry_price, float(ep.get('entryPrice', 0)))),
                 None
             )
             
@@ -148,6 +162,119 @@ class MonitorPositionsUseCase:
                     )
                 except Exception as e:
                     self.logger.error(f"Failed to adopt orphan {sym}: {e}")
+
+    async def _heal_missing_sltp(self, profile: Dict[str, Any], trade: Any, matched: Dict[str, Any], state: Dict[str, Any]):
+        """
+        Reconciles expected SL/TP with actual exchange state. 
+        Adopts exchange targets if DB is invalid or missing.
+        """
+        ex_name = profile['exchange'].upper()
+        adapter = self.sync_service.adapters.get(ex_name)
+        if not adapter: return
+
+        # Helper to validate if SL/TP are logical (Not Inverted)
+        def _is_logical(side, sl, tp):
+            if not sl or not tp: return True # One-sided is always OK
+            if side.upper() == 'BUY':
+                return sl < tp  # Inverted if SL >= TP
+            else: # SELL
+                return sl > tp  # Inverted if SL <= TP
+
+        # 1. ATTACHED MODE (Bybit)
+        if adapter.is_tpsl_attached_supported():
+            actual_sl = matched.get('stopLoss', 0)
+            actual_tp = matched.get('takeProfit', 0)
+            
+            # Check for inversion in DB
+            db_invalid = not _is_logical(trade.side, trade.sl_price, trade.tp_price)
+            
+            # Scenario A: DB is invalid, but exchange HAS it -> Adopt exchange as truth
+            if db_invalid and (actual_sl or actual_tp):
+                self.logger.warning(f"⚠️ [HEAL] DB SL/TP for {trade.symbol} is INVERTED but exchange has values. Adopting exchange truth.")
+                trade.sl_price = actual_sl if actual_sl > 0 else None
+                trade.tp_price = actual_tp if actual_tp > 0 else None
+                trade.sl_order_id = 'attached'
+                trade.tp_order_id = 'attached'
+                await self.trade_repo.save_trade(trade)
+                return
+            
+            # Scenario B: DB is invalid and exchange is EMPTY -> Proactively clear DB to allow recalculation
+            if db_invalid:
+                self.logger.error(f"❌ [HEAL] DB targets for {trade.symbol} are INVERTED and exchange is empty. Clearing DB targets to rescue.")
+                trade.sl_price = None
+                trade.tp_price = None
+                await self.trade_repo.save_trade(trade)
+                return
+
+            # Normal Repair Logic
+            expected_sl = trade.sl_price
+            expected_tp = trade.tp_price
+            if not expected_sl and not expected_tp: return
+
+            needs_repair = False
+            if expected_sl and (not actual_sl or abs(actual_sl - expected_sl) / expected_sl > 0.001):
+                needs_repair = True
+            if expected_tp and (not actual_tp or abs(actual_tp - expected_tp) / expected_tp > 0.001):
+                needs_repair = True
+                
+            if needs_repair:
+                # FINAL SAFETY: Ensure we don't send something that will definitely be rejected
+                # (ManagePosition handles "passed" prices, here we just check for basic logic)
+                self.logger.info(f"🔧 [SELF-HEALING] {trade.symbol} repairing missing/mismatched SL/TP on {ex_name} (Expected SL:{expected_sl}, TP:{expected_tp})")
+                try:
+                    res = await adapter.set_position_sl_tp(trade.symbol, trade.side, sl=expected_sl, tp=expected_tp)
+                    
+                    if isinstance(res, dict) and res.get('info') == 'already_passed':
+                        # This means Bybit rejected the SL because price already passed it.
+                        # We leave sl_order_id as None so ManagePosition can trigger Rescue Close.
+                        self.logger.warning(f"⚠️ [HEAL] {trade.symbol} SL/TP already passed current price. Leaving for Rescue Logic.")
+                        trade.sl_order_id = None
+                        trade.tp_order_id = None
+                    else:
+                        trade.sl_order_id = 'attached'
+                        trade.tp_order_id = 'attached'
+                        
+                    await self.trade_repo.save_trade(trade)
+                except Exception as e:
+                    self.logger.error(f"Failed to repair attached SL/TP for {trade.symbol}: {e}")
+        
+        # 2. SEPARATE ORDERS MODE (Binance)
+        else:
+            orders = state.get('orders', [])
+            # For Binance, if we have orphaned stop orders that match our side/qty, we should adopt them
+            actual_sl_id = next((str(o['id']) for o in orders if o.get('stopPrice') and o.get('side').upper() != trade.side.upper() and 'LOSS' in str(o.get('type','')).upper()), None)
+            actual_tp_id = next((str(o['id']) for o in orders if o.get('stopPrice') and o.get('side').upper() != trade.side.upper() and 'PROFIT' in str(o.get('type','')).upper()), None)
+            
+            if (not trade.sl_order_id and actual_sl_id) or (not trade.tp_order_id and actual_tp_id):
+                self.logger.info(f"🕵️ [HEAL] Adopting orphaned stop orders for {trade.symbol} from exchange.")
+                if actual_sl_id: trade.sl_order_id = actual_sl_id
+                if actual_tp_id: trade.tp_order_id = actual_tp_id
+                await self.trade_repo.save_trade(trade)
+
+            # Normal Repair
+            expected_sl = trade.sl_price
+            expected_tp = trade.tp_price
+            if not expected_sl and not expected_tp: return
+
+            sl_found = any(str(o.get('id')) == str(trade.sl_order_id) for o in orders) if trade.sl_order_id else False
+            tp_found = any(str(o.get('id')) == str(trade.tp_order_id) for o in orders) if trade.tp_order_id else False
+            
+            if not sl_found or not tp_found:
+                # FINAL SAFETY
+                if not _is_logical(trade.side, trade.entry_price, expected_sl, expected_tp):
+                    self.logger.error(f"❌ [HEAL] Cannot repair {trade.symbol}: DB Targets are invalid (Inverted).")
+                    return
+
+                self.logger.info(f"🔧 [SELF-HEALING] {trade.symbol} missing stop orders on {ex_name}. Re-placing...")
+                try:
+                    repair_sl = expected_sl if not sl_found else None
+                    repair_tp = expected_tp if not tp_found else None
+                    ids = await adapter.place_stop_orders(trade.symbol, trade.side, trade.qty, sl=repair_sl, tp=repair_tp)
+                    if ids.get('sl_id'): trade.sl_order_id = ids['sl_id']
+                    if ids.get('tp_id'): trade.tp_order_id = ids['tp_id']
+                    await self.trade_repo.save_trade(trade)
+                except Exception as e:
+                    self.logger.error(f"Failed to repair separate SL/TP for {trade.symbol}: {e}")
 
     async def _resolve_ghost_trade(self, profile: Dict[str, Any], trade: Any):
         """
@@ -376,6 +503,11 @@ class MonitorPositionsUseCase:
         orders_by_key = defaultdict(list)
         
         for o in exchange_orders:
+            # Skip orders that are clearly Stop Loss or Take Profit
+            o_type = str(o.get('type', '')).upper()
+            if 'STOP' in o_type or 'TAKE_PROFIT' in o_type or o.get('stopPrice'):
+                continue
+                
             sym = o.get('symbol')
             side = o.get('side', '').upper()
             if not sym or not side: continue

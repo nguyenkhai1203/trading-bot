@@ -62,7 +62,12 @@ class OrderExecutor:
         pos_key = self.trader._get_pos_key(symbol, timeframe)
         
         # LIVE LOGIC START
-        tpsl_attached = self.trader.exchange.is_tpsl_attached_supported() and (sl or tp)
+        tpsl_attached = False
+        try:
+            tpsl_attached = self.trader.exchange.is_tpsl_attached_supported() and (sl or tp)
+            self.logger.debug(f"[TPSL_CHECK] Exchange: {self.exchange_name}, Supported: {self.trader.exchange.is_tpsl_attached_supported()}, SL: {sl}, TP: {tp}, Result: {tpsl_attached}")
+        except Exception as te:
+            self.logger.warning(f"Failed to check tpsl_attached: {te}")
 
         if sl: params['stopLoss'] = sl
         if tp: params['takeProfit'] = tp

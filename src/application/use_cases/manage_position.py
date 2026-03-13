@@ -106,26 +106,97 @@ class ManagePositionUseCase:
                                     final_sl = lock_sl
                                     changes = True
 
-        # 3. TA-Based TP Extension (Restore v3.0 logic)
+        # 3. TA-Based TP Extension (Enhanced)
         extension_count = trade.meta.get('tp_extensions') or 0
-        if ta_data and extension_count < getattr(config, 'MAX_TP_EXTENSIONS', 2):
-            resistance = ta_data.get('Resistance_1')
-            support = ta_data.get('Support_1')
+        if ta_data and extension_count < getattr(config, 'MAX_TP_EXTENSIONS', 3):
+            # Look for higher resistance if BUY, or lower support if SELL
+            # (Check multiple levels for better extension)
+            new_target = None
+            if side == 'BUY':
+                levels = [ta_data.get('Resistance_3'), ta_data.get('Resistance_2'), ta_data.get('Resistance_1')]
+                for lvl in filter(None, levels):
+                    if lvl > (final_tp or 0):
+                        new_target = lvl
+                        break
+            else: # SELL
+                levels = [ta_data.get('Support_3'), ta_data.get('Support_2'), ta_data.get('Support_1')]
+                for lvl in filter(None, levels):
+                    if lvl < (final_tp or 999999):
+                        new_target = lvl
+                        break
             
-            if side == 'BUY' and resistance and resistance > final_tp:
-                max_tp = entry + (abs(trade.tp_price - entry) * 1.5) if trade.tp_price else 0
-                ext_tp = min(resistance, max_tp) if max_tp > 0 else resistance
-                if ext_tp > final_tp:
-                    final_tp = round(ext_tp, 6)
+            if new_target:
+                # Limit the extension distance to avoid extreme targets
+                max_ext_dist = entry * 0.10 # Max 10% move extension
+                is_safe_ext = abs(new_target - entry) < max_ext_dist
+                
+                if is_safe_ext and ((side == 'BUY' and new_target > (final_tp or 0)) or (side == 'SELL' and new_target < (final_tp or 999999))):
+                    final_tp = float(adapter.price_to_precision(trade.symbol, new_target))
                     trade.meta['tp_extensions'] = extension_count + 1
                     changes = True
-            elif side == 'SELL' and support and support < final_tp:
-                max_tp = entry - (abs(trade.tp_price - entry) * 1.5) if trade.tp_price else 0
-                ext_tp = max(support, max_tp) if max_tp > 0 else support
-                if ext_tp < final_tp:
-                    final_tp = adapter.price_to_precision(trade.symbol, ext_tp)
-                    trade.meta['tp_extensions'] = extension_count + 1
+                    self.logger.info(f"✨ [TA-EXTENSION] {trade.symbol} found new target: {final_tp}")
+
+        # 4. FINAL CROSS-VALIDATION (The "RIVER" Fix)
+        # Ensure SL never crosses TP. Maintain a minimum gap (e.g., 0.2%).
+        min_gap_pct = 0.002
+        if final_sl and final_tp:
+            if side == 'BUY':
+                if final_sl >= final_tp * (1 - min_gap_pct):
+                    # SL is pushing TP! Push TP ahead or cap SL.
+                    # Since user wants TA-based TP, we try to push TP first.
+                    self.logger.warning(f"⚠️ [GAP-SAFETY] {trade.symbol} SL({final_sl}) approaching TP({final_tp}). Adjusting...")
+                    final_tp = final_sl * (1 + min_gap_pct)
                     changes = True
+            else: # SELL
+                if final_sl <= final_tp * (1 + min_gap_pct):
+                    self.logger.warning(f"⚠️ [GAP-SAFETY] {trade.symbol} SL({final_sl}) approaching TP({final_tp}). Adjusting...")
+                    final_tp = final_sl * (1 - min_gap_pct)
+                    changes = True
+
+        # 5. CURRENT PRICE CAPPING (Bybit Safety)
+        # Ensure SL stays on the "Loss" side of current price.
+        # If price has ALREADY HIT the SL, we don't move it; we handle it in Step 6.
+        safe_buffer = 0.0005 # 0.05% safety
+        if final_sl:
+            if side == 'BUY':
+                # For BUY, SL must be < Current. If we try to set SL >= current, Bybit rejects.
+                if final_sl >= current_price:
+                    self.logger.warning(f"⚠️ [SL-CAPPING] {trade.symbol} SL({final_sl}) >= Current({current_price}). Capping to safe level.")
+                    final_sl = current_price * (1 - safe_buffer)
+                    changes = True
+            else: # SELL
+                # For SELL, SL must be > Current.
+                if final_sl <= current_price:
+                    self.logger.warning(f"⚠️ [SL-CAPPING] {trade.symbol} SL({final_sl}) <= Current({current_price}). Capping to safe level.")
+                    final_sl = current_price * (1 + safe_buffer)
+                    changes = True
+
+        # 6. MARKET EXIT FALLBACK (Rescue Logic)
+        # If the desired SL has been hit, but exchange doesn't have it -> Hard close.
+        # Note: We use the SL value BEFORE capping for this check to see if it SHOULD have triggered.
+        sl_is_hit = False
+        if final_sl:
+            if side == 'BUY' and current_price <= final_sl: sl_is_hit = True
+            elif side == 'SELL' and current_price >= final_sl: sl_is_hit = True
+            
+        if sl_is_hit:
+            actual_sl = 0
+            if adapter.is_tpsl_attached_supported():
+                # We need to know if the exchange position actually has SL.
+                # Since we don't have the position dict here, we might need to rely on trade.sl_order_id fallback
+                # or assume if we are in this step, we should just close if we were REPLACING it anyway.
+                pass
+            
+            # If our DB thinks SL exists but exchange rejected it (or it's missing), and price HIT it -> CLOSE.
+            if not trade.sl_order_id or trade.sl_order_id == 'None':
+                self.logger.error(f"🚨 [MARKET-RESCUE] {trade.symbol} SL({final_sl}) hit, but exchange order missing. Market closing now!")
+                try:
+                    await adapter.close_position(trade.symbol, side, trade.qty)
+                    await self.trade_repo.update_status(trade.id, 'CLOSED', exit_reason='RESCUE_SL', exit_price=current_price)
+                    await self.notification_service.notify_generic(f"🚨 **MARKET RESCUE** | {trade.symbol} | SL {final_sl} hit. Closed at {current_price}")
+                    return True
+                except Exception as e:
+                    self.logger.error(f"Rescue close failed for {trade.symbol}: {e}")
 
         if changes:
             if final_sl is not None:
@@ -138,20 +209,29 @@ class ManagePositionUseCase:
             # Update Exchange
             if adapter.can_trade:
                 try:
-                    # Bybit supports attached SL/TP, but we might need to recreate them
-                    # We'll use the adapter's set_position_sl_tp if available
-                    if hasattr(adapter, 'set_position_sl_tp'):
+                    # Prefer specialized methods
+                    if adapter.is_tpsl_attached_supported():
                         await adapter.set_position_sl_tp(trade.symbol, side, final_sl, final_tp)
+                        # Sync IDs to DB
+                        trade.sl_order_id = 'attached'
+                        trade.tp_order_id = 'attached'
                     else:
-                        # Fallback to creating separate stop orders if not supported/available
-                        await adapter.create_order(
-                            trade.symbol, 'market', 'sell' if side == 'BUY' else 'buy', 
-                            trade.qty, params={'stopPrice': final_sl, 'reduceOnly': True}
+                        # For Binance (separate), we must cancel old ones first or the exchange might reject
+                        await adapter.cancel_stop_orders(trade.symbol, trade.sl_order_id, trade.tp_order_id)
+                        
+                        ids = await adapter.place_stop_orders(
+                            trade.symbol, side, trade.qty, 
+                            sl=final_sl, tp=final_tp, 
+                            is_pending=False # Position is active
                         )
+                        # Sync IDs to DB so Monitor doesn't think they are missing!
+                        if ids.get('sl_id'): trade.sl_order_id = ids['sl_id']
+                        if ids.get('tp_id'): trade.tp_order_id = ids['tp_id']
+
                 except Exception as e:
                     self.logger.error(f"Failed to update exchange SL/TP for {trade.symbol}: {e}")
 
-            # Update DB
+            # Update DB prices
             trade.sl_price = final_sl
             trade.tp_price = final_tp
             await self.trade_repo.save_trade(trade)

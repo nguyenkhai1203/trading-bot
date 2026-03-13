@@ -203,14 +203,24 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
     async def fetch_balance(self) -> Dict:
         return await self._execute_with_timestamp_retry(self.exchange.fetch_balance, {'accountType': 'UNIFIED'})
 
-    async def place_stop_orders(self, symbol: str, side: str, qty: float, sl: Optional[float] = None, tp: Optional[float] = None) -> Dict:
+    async def place_stop_orders(self, symbol: str, side: str, qty: float, sl: Optional[float] = None, tp: Optional[float] = None, is_pending: bool = False, **kwargs) -> Dict:
         close_side = 'sell' if side.upper() == 'BUY' else 'buy'
         ids = {'sl_id': None, 'tp_id': None}
+        
+        # If is_pending is True, these are often conditional orders on standard Bybit
+        # but for V5 they can also be attached. Base logic here for separate orders:
+        params = kwargs.copy()
+        params.update({'reduceOnly': True})
+        
         if sl:
-            o = await self.create_order(symbol, 'market', close_side, qty, params={'stopPrice': sl, 'reduceOnly': True, 'triggerDirection': 'descending' if side.upper() == 'BUY' else 'ascending'})
+            sl_str = str(self.exchange.price_to_precision(symbol, sl))
+            extra = {**params, 'stopPrice': sl_str, 'triggerDirection': 'descending' if side.upper() == 'BUY' else 'ascending'}
+            o = await self.create_order(symbol, 'market', close_side, qty, params=extra)
             ids['sl_id'] = str(o.get('id'))
         if tp:
-            o = await self.create_order(symbol, 'market', close_side, qty, params={'stopPrice': tp, 'reduceOnly': True, 'triggerDirection': 'ascending' if side.upper() == 'BUY' else 'descending'})
+            tp_str = str(self.exchange.price_to_precision(symbol, tp))
+            extra = {**params, 'stopPrice': tp_str, 'triggerDirection': 'ascending' if side.upper() == 'BUY' else 'descending'}
+            o = await self.create_order(symbol, 'market', close_side, qty, params=extra)
             ids['tp_id'] = str(o.get('id'))
         return ids
 

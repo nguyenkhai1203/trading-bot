@@ -373,6 +373,24 @@ class ExecuteTradeUseCase:
                 
                 try:
                     order_res = await adapter.create_order(symbol, order_type, side.lower(), qty, price=order_price, params=params)
+                    
+                    # --- NEW: SL/TP Attachment Check & Fallback ---
+                    tpsl_attached = adapter.is_tpsl_attached_supported() and (sl_price or tp_price)
+                    sl_oid = 'attached' if tpsl_attached else None
+                    tp_oid = 'attached' if tpsl_attached else None
+                    
+                    if not tpsl_attached and (sl_price or tp_price):
+                        self.logger.info(f"[{symbol}] Attachment not supported. Placing separate SL/TP orders...")
+                        # For market orders, we can place them now. 
+                        # For limit orders, OrderExecutor (if used) would handle fill monitoring, 
+                        # but ExecuteTradeUseCase is more manual.
+                        try:
+                            # Note: place_stop_orders now supports is_pending which we set if order_type is limit
+                            ids = await adapter.place_stop_orders(symbol, side, qty, sl=sl_price, tp=tp_price, is_pending=(order_type == 'limit'))
+                            sl_oid = ids.get('sl_id')
+                            tp_oid = ids.get('tp_id')
+                        except Exception as pso_err:
+                            self.logger.error(f"Fallback SL/TP placement failed: {pso_err}")
                 except Exception as api_err:
                     err_str = str(api_err).lower()
                     if "already exists" in err_str or "10002" in err_str:
@@ -398,6 +416,8 @@ class ExecuteTradeUseCase:
                 pos_key=pos_key,
                 sl_price=sl_price,
                 tp_price=tp_price,
+                sl_order_id=sl_oid if 'sl_oid' in locals() else None,
+                tp_order_id=tp_oid if 'tp_oid' in locals() else None,
                 exchange_order_id=str(order_res.get('id', '')),
                 entry_time=int(time.time() * 1000), 
                 meta={

@@ -1,4 +1,5 @@
 import ccxt.async_support as ccxt
+import aiohttp
 from src import config
 from src.infrastructure.adapters.binance_adapter import BinanceAdapter
 from src.infrastructure.adapters.bybit_adapter import BybitAdapter
@@ -93,9 +94,14 @@ async def create_adapter_from_profile(profile_dict):
     valid_key = api_key and 'your_' not in api_key
     valid_secret = api_secret and 'your_' not in api_secret
     
+    # Create a session with ThreadedResolver to mitigate DNS timeouts
+    resolver = aiohttp.ThreadedResolver()
+    connector = aiohttp.TCPConnector(resolver=resolver)
+    
     if name == 'BYBIT':
         exchange_config = {
             'enableRateLimit': True,
+            'connector': connector,
             'options': {
                 'defaultType': 'swap',
                 'adjustForTimeDifference': True
@@ -117,6 +123,7 @@ async def create_adapter_from_profile(profile_dict):
             'warnOnFetchOpenOrdersWithoutSymbol': False,
         }
         exchange_config = {
+            'connector': connector,
             'options': options,
             'enableRateLimit': True,
         }

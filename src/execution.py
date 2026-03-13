@@ -879,7 +879,9 @@ class Trader:
                     "signals_used": signals,
                     "entry_confidence": confidence,
                     "snapshot": snapshot,
-                    "timestamp": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0
+                    "timestamp": self.exchange.milliseconds() if hasattr(self.exchange, 'milliseconds') else 0,
+                    "sl_order_id": 'attached' if tpsl_attached else None,
+                    "tp_order_id": 'attached' if tpsl_attached else None
                 }
                 await self._update_db_position(pos_key)
                 
