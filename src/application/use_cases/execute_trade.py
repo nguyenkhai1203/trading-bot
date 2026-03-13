@@ -96,20 +96,26 @@ class ExecuteTradeUseCase:
         # 4. GLOBAL ACCOUNT GUARD (Deduplication across ALL profiles on this exchange)
         # Check Database for any profile on this exchange
         all_active = await self.trade_repo.get_active_positions_on_exchange(ex_name)
-        existing_on_account = next((t for t in all_active if t.symbol == symbol), None)
+        
+        from src.utils.symbol_helper import to_raw_format
+        raw_symbol = to_raw_format(symbol)
+        
+        # Match by normalized (raw) symbol to be robust against "AVAXUSDT" vs "AVAX/USDT:USDT"
+        existing_on_account = next((t for t in all_active if to_raw_format(t.symbol) == raw_symbol), None)
         
         # Check Sync Cache for live exchange state (Safety net)
         if not existing_on_account and self.sync_service:
             state = self.sync_service.get_account_state(profile)
             if state:
-                # FIX D1: Match by (symbol, side) to allow opposite-direction signals (e.g. reversal).
-                # Previously matched by symbol alone, which blocked SELL when BUY was in cache.
+                # 1. Check Positions
                 for p in state.get('positions', []):
-                    if p.get('symbol') == symbol and p.get('side', '').upper() == side.upper():
+                    if to_raw_format(p.get('symbol')) == raw_symbol and p.get('side', '').upper() == side.upper():
                         self.logger.info(f"Signal for {symbol} skipped: {side} position already found in exchange cache.")
                         return False
+                
+                # 2. Check Open Orders
                 for o in state.get('orders', []):
-                    if o.get('symbol') == symbol and o.get('side', '').upper() == side.upper():
+                    if to_raw_format(o.get('symbol')) == raw_symbol and o.get('side', '').upper() == side.upper():
                         self.logger.info(f"Signal for {symbol} skipped: {side} open order already found in exchange cache.")
                         return False
 

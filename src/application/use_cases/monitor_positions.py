@@ -357,12 +357,77 @@ class MonitorPositionsUseCase:
                 
                 if not is_in_positions:
                     import time
-                    # Small grace period for newly created pending orders (e.g. 15s) 
+                    # Small grace period for newly created pending orders (60s) 
                     # so we don't murder them if sync is slightly out of phase
-                    if (int(time.time() * 1000) - (trade.entry_time or 0)) > 15000:
+                    if (int(time.time() * 1000) - (trade.entry_time or 0)) > 60000:
                         self.logger.warning(f"👻 [GHOST-PENDING] {trade.symbol} missing from exchange orders/positions. Cancelling in DB.")
                         await self.trade_repo.update_status(trade.id, 'CANCELLED', exit_reason='GHOST_PENDING')
                         await self.notification_service.notify_generic(f"👻 **GHOST PENDING CLEANUP** | {trade.symbol} | Moved to CANCELLED")
+
+        # 3. New: Aggressive Duplicate Cleanup ("Best Order Only")
+        await self._cleanup_duplicate_exchange_orders(profile, exchange_orders, db_trades)
+
+    async def _cleanup_duplicate_exchange_orders(self, profile: Dict[str, Any], exchange_orders: List[Dict], db_trades: List[Any]):
+        """
+        Scans exchange orders for duplicates (same symbol + side).
+        Keeps only the BEST one based on Confidence/RR, cancels others.
+        """
+        from collections import defaultdict
+        orders_by_key = defaultdict(list)
+        
+        for o in exchange_orders:
+            sym = o.get('symbol')
+            side = o.get('side', '').upper()
+            if not sym or not side: continue
+            
+            # Group by normalized symbol + side
+            from src.utils.symbol_helper import to_raw_format
+            key = (to_raw_format(sym), side)
+            orders_by_key[key].append(o)
+            
+        for key, dupes in orders_by_key.items():
+            if len(dupes) <= 1:
+                continue
+            
+            # Multiple orders found for same symbol/side.
+            # 1. Identify which ones correlate to DB trades and what their 'quality' is.
+            scored_orders = []
+            for o in dupes:
+                o_id = str(o.get('id'))
+                # Find matching trade in DB to get score
+                db_match = next((t for t in db_trades if str(t.exchange_order_id) == o_id), None)
+                
+                score = 0.0
+                if db_match and db_match.meta:
+                    conf = db_match.meta.get('signal_confidence') or 0.3
+                    rr = db_match.meta.get('rr_ratio') or 1.3
+                    score = conf + (rr / 10.0)
+                
+                scored_orders.append({'order': o, 'score': score, 'db_match': db_match})
+            
+            # 2. Sort: Highest score first. If scores equal, keep oldest (first ID).
+            scored_orders.sort(key=lambda x: (x['score'], -int(x['order'].get('id', 0)) if str(x['order'].get('id', '')).isdigit() else 0), reverse=True)
+            
+            winner = scored_orders[0]
+            loosers = scored_orders[1:]
+            
+            self.logger.warning(f"⚔️ [DUPE-CLEANUP] Found {len(dupes)} {key[1]} orders for {key[0]}. Winner: {winner['order']['id']} (Score: {winner['score']:.2f})")
+            
+            adapter = self.sync_service.adapters.get(profile['exchange'].upper())
+            if not adapter: continue
+            
+            for loose in loosers:
+                l_o = loose['order']
+                l_id = str(l_o.get('id'))
+                l_sym = l_o.get('symbol')
+                
+                self.logger.info(f"   ↳ Cancelling redundant order {l_id} for {l_sym}")
+                try:
+                    await adapter.cancel_order(l_id, l_sym)
+                    if loose['db_match']:
+                        await self.trade_repo.update_status(loose['db_match'].id, 'CANCELLED', exit_reason='DUPLICATE_CLEANUP')
+                except Exception as e:
+                    self.logger.error(f"Failed to cancel duplicate {l_id}: {e}")
 
     async def _cancel_pending_trade(self, profile: Dict[str, Any], adapter: BaseAdapter, trade: Any, reason: str):
         """Helper to cancel a pending order on exchange and DB."""

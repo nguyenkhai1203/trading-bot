@@ -48,3 +48,4 @@ test/__pycache__/
 start.bat
 .mypy_cache/
 .pytest_cache/
+tmp/

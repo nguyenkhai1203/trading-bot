@@ -69,8 +69,9 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
 
     async def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
         try:
-            std = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol, params={'category': 'linear', 'orderFilter': 'Order'})
-            cond = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol, params={'category': 'linear', 'orderFilter': 'StopOrder'})
+            params = {'category': 'linear', 'limit': 50}
+            std = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol, params={**params, 'orderFilter': 'Order'})
+            cond = await self._execute_with_timestamp_retry(self.exchange.fetch_open_orders, symbol, params={**params, 'orderFilter': 'StopOrder'})
             all_orders = std + cond
             for o in all_orders:
                 o['status'] = self.normalize_status(o.get('status'))
