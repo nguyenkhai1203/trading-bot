@@ -138,7 +138,8 @@
 - [x] **Verification**: Created 5/5 passing unit test suite in `tests/test_bms_v2_1_holistic.py`.
 - [x] **Documentation**: Updated architecture, knowledge, and walkthrough in `.brain`. <!-- id: 228 -->
 
-### Phase 30: Account Depletion Safeguards [COMPLETED]
-- [x] **Available Balance Guard**: Update `ExecuteTradeUseCase.execute` to check available USDT balance before order creation.
-- [x] **Verification**: Add unit tests for balance guard.
-- [x] **Active Position Spam Fix**: Fixed `BybitAdapter.fetch_positions` returning native `DOTUSDT` format instead of CCXT `DOT/USDT:USDT`. This mismatch caused the bot to perpetually place orders because it couldn't see its own active database trades.
+### Phase 31: Multi-Account Notification & Sync Recovery [COMPLETED] <!-- id: 229 -->
+- [x] **Time-Sync Robustness**: Enhanced `BaseExchangeClient` to handle severe (40s+) time drifts by forcing CCXT re-load and enlarging `recvWindow`.
+- [x] **Notification Refinement**: Generalized portfolio updates in `notification.py` for multi-account clarity.
+- [x] **Profile Recovery**: Successfully reconciled Bybit CT (Profile 3) state, adopting `MNT/USDT` orphan and resolving ghost trades.
+- [x] **Verification**: Full manual state recovery verified via `reconcile_bybit_ct.py` and `verify_recovery.py`.

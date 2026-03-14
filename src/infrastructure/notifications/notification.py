@@ -604,9 +604,9 @@ def format_portfolio_update_v2(
 ) -> str:
     """Format Portfolio Update in BOT STATUS v2 style."""
     now = datetime.now().strftime('%d/%m %H:%M')
-    all_profiles = ", ".join(exchanges_data.keys()) if exchanges_data else "GLOBAL"
+    # If multiple accounts on same exchange, keys might be exchange names or account keys
     lines = [
-        f"📊 *PORTFOLIO UPDATE ({all_profiles})* - {now}",
+        f"📊 *PORTFOLIO UPDATE* - {now}",
         f"💰 Total Equity: ${total_balance:.2f} | 📈 Daily: {daily_pnl_pct:+.2f}%",
         f"🔄 Positions: {active_count} Active | {pending_count} Pending",
         ""

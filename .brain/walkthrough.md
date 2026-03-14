@@ -155,19 +155,11 @@ Exchange (CCXT)
 
 ---
 
-### BMS v2.1 Holistic Architecture Upgrade [COMPLETED]
- (March 10, 2026)
-**Resolved systemic order spamming and management errors by shifting to account-wide orchestration:**
-- **Atomic Entry Orchestration**: `TradeOrchestrator` now collects signals from all active profiles (e.g. 1h, 4h) and deduplicates by (Exchange, Symbol), executing only the winner.
-- **Account-Aware Position Guard**: `ExecuteTradeUseCase` verifies that NO other profile on the same exchange has an active/pending trade for the symbol before placement.
-- **Root Cause Spam Fixes**:
-    - **Bybit Symbol Normalization**: Fixed `BybitAdapter` returning native `DOTUSDT` instead of CCXT `DOT/USDT:USDT`. This was the "missing link" causing the bot to ignore existing trades and open duplicates.
-    - **PENDING Status Visibility**: Updated database queries to include `PENDING` trades in all active position checks.
-- **Patience Entry (Limit Orders)**: Fixed `ExecuteTradeUseCase` to stop forcing Market orders. It now respects `USE_LIMIT_ORDERS = True` and calculates a better entry price (Limit) using `PATIENCE_ENTRY_PCT`.
-- **Auto-Seeding Foundation**: `DataManager` now automatically creates Bybit/Binance profiles from `.env` on a fresh DB, ensuring zero-configuration recovery.
-- **Signal Upgrading**:
-    - **If Pending**: Higher confidence signals now cancel and replace existing pending orders.
-    - **If Active**: New signals trigger a "Smart Sync" of existing SL/TP levels instead of opening duplicate positions.
-- **Verification**: 100% pass on specialized holistic test suite and full 214-test regression suite.
+### Iteration 11 — Bybit CT Recovery & Time Drift Resilience (March 14, 2026)
+**Resolved persistent sync failures and missing notifications for secondary accounts:**
+- **Robust Time Sync**: Enhanced `BaseExchangeClient` to handle massive system time drifts (detected 41s drift). Implemented forced CCXT offset re-calculation and safety padding.
+- **Multi-Account Reconciliation**: Performed a full manual state recovery for Bybit CT (Profile 3). This fixed the "GHOST" trade recording where trades were missed due to expired API timestamps.
+- **Notification Generalization**: Refined `notification.py` to ensure portfolio updates and trade events are clearly labeled for multiple profiles on the same exchange.
+- **Verification**: Confirmed `MNT/USDT` adoption and `ADA/USDT` ghost resolution. Time sync zeroed out the 41s offset.
 
-*Docs: [architecture.md] | [knowledge.md] | Progress: [task.md]*
+---

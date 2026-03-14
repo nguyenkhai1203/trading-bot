@@ -35,40 +35,41 @@ class BaseExchangeClient:
     async def sync_server_time(self) -> bool:
         """Sync local time with exchange server manually to ensure absolute accuracy."""
         if self._sync_lock.locked():
-            print(f"[TIME SYNC] Time sync already in progress by another task. Yielding...")
+            self.logger.info("[TIME SYNC] Time sync already in progress. Waiting...")
             async with self._sync_lock:
                 return True
                 
         async with self._sync_lock:
-            # Prevent rapid back-to-back synchronization
-            if time.time() - self._last_sync_time < 5:
+            # Prevent rapid back-to-back synchronization unless forced
+            now_ts = time.time()
+            if now_ts - self._last_sync_time < 2:
                 return True
                 
             try:
-                print(f"[TIME SYNC] Fetching raw server time from exchange...")
+                self.logger.info(f"[TIME SYNC] Fetching raw server time from {self.exchange.id}...")
                 server_time = await asyncio.wait_for(self.exchange.fetch_time(), timeout=15)
                 local_time = int(time.time() * 1000)
                 
-                # Calculate manual offset
+                # Calculate manual offset: server - local
+                # If server is 1000 and local is 900, offset is +100
                 self._server_offset_ms = server_time - local_time
                 
-                # Also sync CCXT for its internal methods
+                # Force CCXT to re-calculate its own internal offset
+                self.exchange.options['adjustForTimeDifference'] = True
                 await asyncio.wait_for(self.exchange.load_time_difference(), timeout=15)
                 
-                # Ensure recvWindow is large (60s is Binance max)
+                # Ensure recvWindow is large (60s)
                 self.exchange.options['recvWindow'] = 60000 
                 
-                print(f"[OK] Time Sync Complete!")
-                print(f"     Manual Offset: {self._server_offset_ms}ms | CCXT Offset: {self.exchange.options.get('timeDifference', 0)}ms")
-                print(f"     Safety Window (recvWindow): 60000ms")
+                self.logger.info(f"[OK] Time Sync Complete! Offset: {self._server_offset_ms}ms | CCXT: {self.exchange.options.get('timeDifference', 0)}ms")
                 
                 self._time_synced = True
+                self._last_sync_time = now_ts
                 return True
             except Exception as e:
-                print(f"[WARN] Time sync failed: {str(e)[:100]}")
+                self.logger.warning(f"[WARN] Time sync failed for {self.exchange.id}: {str(e)[:100]}")
+                self._last_sync_time = now_ts
                 return False
-            finally:
-                self._last_sync_time = time.time()
 
     def get_synced_timestamp(self) -> int:
         """Get current timestamp synchronized with exchange with safety padding."""
