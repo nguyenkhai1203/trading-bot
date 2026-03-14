@@ -33,7 +33,7 @@ async def send_telegram_message(message, exchange_name=None):
         if os.getenv('DRY_RUN', 'False').lower() == 'true':
             # print(f"[TELEGRAM MOCK] {message}") 
             return
-        # print(f"[TELEGRAM WARN] Token or Chat ID missing")
+        print(f"⚠️ [TELEGRAM] Skipping send: Token or Chat ID missing in .env")
         return
 
     # De-duplication check (15-second window)
@@ -48,6 +48,9 @@ async def send_telegram_message(message, exchange_name=None):
     
     # Store in cache
     _msg_cache[msg_hash] = now
+    
+    # DEBUG: Uncomment to trace send attempts in logs
+    # print(f"📡 [TELEGRAM] Attempting to send: {message[:50]}...")
     
     # Optional: Periodically clean old cache entries
     if len(_msg_cache) > 500:

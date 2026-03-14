@@ -241,7 +241,8 @@ class TradeOrchestrator:
                     pnl = t.pnl if hasattr(t, 'pnl') else 0.0
                     total_pnl += pnl if pnl is not None else 0.0
             except Exception as e:
-                self.logger.error(f"Error calculating PnL for profile {profile.get('label')}: {e}")
+                label = profile.get('label') or profile.get('name') or str(profile.get('id'))
+                self.logger.error(f"Error calculating PnL for profile {label}: {e}")
 
         # 2. Sum Balance across all UNIQUE physical accounts (Adapters)
         if total_pnl < 0:

@@ -86,7 +86,8 @@ class MonitorPositionsUseCase:
             if trade.status == 'PENDING':
                 fill = next((t for t in executions if str(t.get('order', t.get('orderId'))) == db_order_id), None)
                 if fill:
-                    self.logger.info(f"📈 [FILL] Trade {trade.id} ({trade.symbol}) filled! Updating PENDING -> ACTIVE.")
+                    label = profile.get('label') or ex_name
+                    self.logger.info(f"📈 [FILL] [{label}] Trade {trade.id} ({trade.symbol}) filled! Updating PENDING -> ACTIVE.")
                     trade.status = 'ACTIVE'
                     trade.entry_price = float(fill.get('price', trade.entry_price))
                     trade.qty = float(fill.get('amount', trade.qty))
@@ -124,7 +125,8 @@ class MonitorPositionsUseCase:
                 if current_time - anchor_time < 300000: # 5 min grace
                     continue
                     
-                self.logger.info(f"👻 [GHOST] Trade {trade.id} ({trade.symbol}) identified via history as closed. Syncing...")
+                label = profile.get('label') or ex_name
+                self.logger.info(f"👻 [GHOST] [{label}] Trade {trade.id} ({trade.symbol}) identified via history as closed. Syncing...")
                 await self._resolve_ghost_trade(profile, trade)
                 trade.status = 'CLOSED' # Mark locally so orphan check knows it's free
             else:
@@ -400,7 +402,8 @@ class MonitorPositionsUseCase:
                 profile_label=profile.get('label')
             )
             
-            self.logger.info(f"Resolved ghost {symbol} as {reason} at {exit_price} | PnL: ${pnl:.2f}")
+            label = profile.get('label') or ex_name
+            self.logger.info(f"Resolved ghost {symbol} [{label}] as {reason} at {exit_price} | PnL: ${pnl:.2f}")
 
         except Exception as e:
             self.logger.error(f"Failed to resolve ghost {symbol}: {e}")

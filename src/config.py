@@ -100,7 +100,7 @@ CONFIDENCE_TIERS = {
     "high": {
         "min_confidence": 0.70,  # 70%+ confidence
         "leverage": 5,          # Max leverage      
-        "cost_usdt": 6.0         # $8 per trade (Matches Global Max)
+        "cost_usdt": 5.0         # $8 per trade (Matches Global Max)
     },
     "medium": {
         "min_confidence": 0.50,  # 50-70% confidence
@@ -109,7 +109,7 @@ CONFIDENCE_TIERS = {
     },
     "low": {
         "min_confidence": 0.30,  # 30-50% confidence
-        "leverage": 2,           # Low leverage for safety
+        "leverage": 3,           # Low leverage for safety
         "cost_usdt": 3.0         # $4 per trade (Allows smaller entries)
     }
 }

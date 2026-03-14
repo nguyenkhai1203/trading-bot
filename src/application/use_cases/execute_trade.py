@@ -474,7 +474,7 @@ class ExecuteTradeUseCase:
             else:
                 await self.notification_service.notify_order_filled(new_trade, conf, dry_run=not adapter.can_trade, profile_label=profile.get('label'))
             
-            self.logger.info(f"Successfully registered {order_type.upper()} on {symbol}")
+            self.logger.info(f"Successfully registered {order_type.upper()} on {symbol} [{profile.get('label') or ex_name}]")
             return True
 
         except Exception as e:

@@ -278,21 +278,25 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
     async def ensure_isolated_and_leverage(self, symbol: str, leverage: int):
         try:
             try:
+                self.logger.info(f"[{symbol}] Setting ISOLATED margin mode (Lev: {leverage}x)")
                 await self._execute_with_timestamp_retry(
                     self.exchange.set_margin_mode, 'isolated', symbol, params={'category': 'linear', 'buyLeverage': str(leverage), 'sellLeverage': str(leverage)}
                 )
             except Exception as e:
                 err = str(e).lower()
                 if "110026" in err or "already" in err or "no change" in err:
-                    pass
+                    self.logger.debug(f"[{symbol}] Margin mode already isolated.")
                 else:
                     self.logger.debug(f"Set margin mode failed for {symbol}: {e}")
 
             try:
+                self.logger.info(f"[{symbol}] Enforcing leverage: {leverage}x")
                 await self._execute_with_timestamp_retry(self.exchange.set_leverage, leverage, symbol, params={'category': 'linear'})
             except Exception as e:
-                if "not modified" not in str(e).lower():
+                if "not modified" not in str(e).lower() and "already" not in str(e).lower():
                     self.logger.warning(f"Bybit set_leverage failed for {symbol}: {e}")
+                else:
+                    self.logger.debug(f"[{symbol}] Leverage already set to {leverage}x")
         except Exception as e:
             self.logger.error(f"Bybit ensure_isolated_and_leverage error for {symbol}: {e}")
 
