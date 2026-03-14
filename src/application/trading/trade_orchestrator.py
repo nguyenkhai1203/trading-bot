@@ -126,13 +126,14 @@ class TradeOrchestrator:
         if not all_signals:
             return
 
-        # B. DEDUPLICATE by (Exchange, Symbol)
-        # We allow same symbol on DIFFERENT exchanges, but only one per exchange.
-        winners = {} # {(exchange, symbol): (profile, signal)}
+        # B. DEDUPLICATE by (Account, Symbol)
+        # We allow same symbol on DIFFERENT physical accounts (multi-account isolation).
+        winners = {} # {(account_key, symbol): (profile, signal)}
         for profile, sig in all_signals:
-            ex_name = profile['exchange'].upper()
+            # Use account_key for granular deduplication
+            acc_key = self.container.sync_service._get_account_key(profile) if self.container.sync_service else profile['exchange'].upper()
             sym = sig['symbol']
-            key = (ex_name, sym)
+            key = (acc_key, sym)
             
             if key not in winners or sig['confidence'] > winners[key][1]['confidence']:
                 winners[key] = (profile, sig)
@@ -199,7 +200,12 @@ class TradeOrchestrator:
             self.logger.info(f"⚖️ REBALANCING: Cancelling {weakest.symbol} (Conf {weak_conf:.2f}, R/R {weak_rr:.1f}) to enter {new_signal['symbol']} (Conf {new_conf:.2f}, R/R {new_rr:.1f})")
             
             ex_name = profile['exchange'].upper()
-            adapter = self.container.adapters.get(ex_name)
+            # Resolve adapter via account key (standardized logic)
+            acc_key = self.container.sync_service._get_account_key(profile)
+            adapter = self.container.adapters.get(acc_key)
+            if not adapter:
+                adapter = self.container.adapters.get(ex_name)
+            
             if weakest.exchange_order_id and adapter:
                 try:
                     await adapter.cancel_order(weakest.exchange_order_id, weakest.symbol)
@@ -218,32 +224,54 @@ class TradeOrchestrator:
         return False
 
     async def _check_daily_circuit_breaker(self) -> bool:
-        """Checks if today's realized loss exceeds the safety threshold (5%)."""
-        total_loss = 0.0
+        """
+        Checks if today's realized loss exceeds the safety threshold (5%) 
+        across the TOTAL portfolio (all accounts combined).
+        """
+        total_pnl = 0.0
+        today_start = int(time.time() // 86400 * 86400 * 1000)
+        
+        # 1. Sum PnL across all profiles
         for profile in self.container.sync_service.profiles:
             try:
                 history = await self.container.trade_repo.get_trade_history(profile['id'], limit=200)
-                today_start = int(time.time() // 86400 * 86400 * 1000)
                 today_trades = [t for t in history if (getattr(t, 'exit_time', None) or 0) >= today_start]
                 
                 for t in today_trades:
                     pnl = t.pnl if hasattr(t, 'pnl') else 0.0
-                    total_loss += pnl if pnl is not None else 0.0
+                    total_pnl += pnl if pnl is not None else 0.0
             except Exception as e:
-                self.logger.error(f"Error calculating PnL for circuit breaker: {e}")
+                self.logger.error(f"Error calculating PnL for profile {profile.get('label')}: {e}")
 
-        if total_loss < 0:
-            try:
-                ex_name = self.container.sync_service.profiles[0]['exchange'].upper()
-                adapter = self.container.adapters.get(ex_name)
-                balance_data = await adapter.fetch_balance()
-                balance = float(balance_data.get('total', {}).get('USDT', 100.0))
-            except:
-                balance = 100.0
+        # 2. Sum Balance across all UNIQUE physical accounts (Adapters)
+        if total_pnl < 0:
+            total_balance = 0.0
+            unique_acc_keys = set()
+            
+            for profile in self.container.sync_service.profiles:
+                acc_key = self.container.sync_service._get_account_key(profile)
+                if acc_key in unique_acc_keys:
+                    continue
                 
-            loss_pct = abs(total_loss) / balance
-            if loss_pct >= 0.05: # 5% Daily Loss Limit
-                return True
+                unique_acc_keys.add(acc_key)
+                adapter = self.container.adapters.get(acc_key)
+                if not adapter:
+                    # Fallback to exchange name
+                    adapter = self.container.adapters.get(profile['exchange'].upper())
+                
+                if adapter:
+                    try:
+                        balance_data = await adapter.fetch_balance()
+                        total_balance += float(balance_data.get('total', {}).get('USDT', 0.0))
+                    except Exception as e:
+                        self.logger.warning(f"Could not fetch balance for circuit breaker check ({acc_key}): {e}")
+            
+            if total_balance > 0:
+                loss_pct = abs(total_pnl) / total_balance
+                if loss_pct >= 0.05: # Total Portfolio Daily Loss Limit: 5%
+                    self.logger.critical(f"🛑 [CIRCUIT BREAKER] Total Daily Loss exceeded: {loss_pct*100:.2f}% (${total_pnl:.2f} / ${total_balance:.2f})")
+                    return True
+                    
         return False
 
     async def stop(self):

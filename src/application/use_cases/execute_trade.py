@@ -41,13 +41,17 @@ class ExecuteTradeUseCase:
 
         symbol = signal['symbol']
         ex_name = profile.get('exchange', '').upper()
+        # Resolve adapter via account key (Multi-Account Support)
+        acc_key = self.sync_service._get_account_key(profile) if self.sync_service else f"{ex_name}_GLOBAL"
+        adapter = self.adapters.get(acc_key)
         
-        adapter = self.adapters.get(ex_name)
         if not adapter:
-            self.logger.error(f"No adapter found for {ex_name}")
+            # Fallback to exchange name for legacy compatibility
+            adapter = self.adapters.get(ex_name)
+            
+        if not adapter:
+            self.logger.error(f"No adapter found for {ex_name} (acc_key: {acc_key})")
             return False
-
-        acc_key = getattr(adapter, 'account_key', f"{ex_name}_GLOBAL")
 
         # Extract core identifiers early — needed by cooldown checks
         profile_id = profile['id']
@@ -93,9 +97,22 @@ class ExecuteTradeUseCase:
              sl_pct = sl_pct or getattr(config, 'STOP_LOSS_PCT', 0.02)
              tp_pct = tp_pct or getattr(config, 'TAKE_PROFIT_PCT', 0.04)
         
-        # 4. GLOBAL ACCOUNT GUARD (Deduplication across ALL profiles on this exchange)
+        # 4. GLOBAL ACCOUNT GUARD (Deduplication across ALL profiles SHARING THE SAME PHYSICAL ACCOUNT)
         # Check Database for any profile on this exchange
-        all_active = await self.trade_repo.get_active_positions_on_exchange(ex_name)
+        all_active_on_exchange = await self.trade_repo.get_active_positions_on_exchange(ex_name)
+        
+        # Identify profiles that share the same physical account (API Key)
+        matching_profile_ids = []
+        if self.sync_service:
+            target_acc_key = self.sync_service._get_account_key(profile)
+            matching_profile_ids = [
+                p['id'] for p in self.sync_service.profiles 
+                if self.sync_service._get_account_key(p) == target_acc_key
+            ]
+            all_active = [t for t in all_active_on_exchange if t.profile_id in matching_profile_ids]
+        else:
+            # Fallback for Unit Tests/Legacy: Consider all profiles on this exchange as one physical account
+            all_active = all_active_on_exchange
         
         from src.utils.symbol_helper import to_raw_format
         raw_symbol = to_raw_format(symbol)
@@ -166,7 +183,8 @@ class ExecuteTradeUseCase:
                             pnl=pnl,
                             pnl_pct=pnl_pct,
                             reason='REVERSAL',
-                            dry_run=not is_live
+                            dry_run=not is_live,
+                            profile_label=profile.get('label')
                         )
                         
                         # If it was a loss, apply SL Cooldown
@@ -450,10 +468,11 @@ class ExecuteTradeUseCase:
                 await self.notification_service.notify_order_pending(
                     symbol=symbol, timeframe=timeframe, side=side, price=entry_price,
                     sl=sl_price, tp=tp_price, score=conf, leverage=leverage,
-                    dry_run=not adapter.can_trade, exchange=ex_name
+                    dry_run=not adapter.can_trade, exchange=ex_name,
+                    profile_label=profile.get('label')
                 )
             else:
-                await self.notification_service.notify_order_filled(new_trade, conf, dry_run=not adapter.can_trade)
+                await self.notification_service.notify_order_filled(new_trade, conf, dry_run=not adapter.can_trade, profile_label=profile.get('label'))
             
             self.logger.info(f"Successfully registered {order_type.upper()} on {symbol}")
             return True
@@ -498,7 +517,7 @@ class ExecuteTradeUseCase:
                     await db.log_ai_snapshot(trade_id, json.dumps(signal['snapshot']), conf)
                 
                 
-                await self.notification_service.notify_order_filled(new_trade, conf, dry_run=not adapter.can_trade, is_virtual=True)
+                await self.notification_service.notify_order_filled(new_trade, conf, dry_run=not adapter.can_trade, is_virtual=True, profile_label=profile.get('label'))
                 return True
             else:
                 self.logger.error(f"Trade execution failed for {symbol}: {e}")

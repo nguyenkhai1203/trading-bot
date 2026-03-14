@@ -39,47 +39,54 @@ def get_exchange_adapter(name=config.ACTIVE_EXCHANGE):
     else:
         raise ValueError(f"Unknown exchange: {name}")
 
+def get_multi_account_adapters_map(profiles: list):
+    """
+    Groups profiles by unique physical account and returns a map
+    { 'EXCHANGE_APIKEY': adapter }
+    """
+    adapters = {}
+    for p in profiles:
+        ex_name = p.get('exchange', 'UNKNOWN').upper()
+        api_key = p.get('api_key')
+        
+        # Unique key for this physical account
+        acc_key = f"{ex_name}_{api_key}" if api_key else f"{ex_name}_PUBLIC_{p['id']}"
+        
+        if acc_key not in adapters:
+            try:
+                # Use the existing create_adapter_from_profile logic
+                # but ensure it returns an adapter with the correct key
+                import asyncio
+                # Since this is a factory, we might need a sync wrapper if create_adapter_from_profile stays async
+                # or just use it directly if we are in an async loop.
+                # For safety, we'll implement a sync-friendly creator or keep it async.
+                pass
+            except Exception as e:
+                print(f"[Factory] Failed to create adapter for {acc_key}: {e}")
+                
+    return adapters
+
 def get_active_exchanges_map():
     """
-    Returns a dict {name: adapter} for all exchanges in config.ACTIVE_EXCHANGES.
+    LEGACY: Returns a dict {name: adapter} for the FIRST set of keys.
+    Mainly used for centralized data fetching (public/main keys).
     """
-    from src import config
     adapters = {}
     for name in config.ACTIVE_EXCHANGES:
         name = name.strip().upper()
         if not name: continue
-        
-        # Check for credentials before initializing
-        if name == 'BINANCE':
-            if not config.BINANCE_API_KEY or 'your_' in config.BINANCE_API_KEY:
-                print(f"[Factory] BINANCE: Active (Public Mode - Trading Disabled)")
-        elif name == 'BYBIT':
-            if not config.BYBIT_API_KEY or 'your_' in config.BYBIT_API_KEY:
-                print(f"[Factory] BYBIT: Active (Public Mode - Trading Disabled)")
-
-                
         try:
             adapter = get_exchange_adapter(name)
             
-            # Configure Permissions based on keys
+            # Configure Permissions based on PRIMARY keys
             api_key = config.BINANCE_API_KEY if name == 'BINANCE' else config.BYBIT_API_KEY
-            
-            # Check if key is valid (simple check: present and not default placeholder)
             has_valid_key = bool(api_key and 'your_' not in api_key)
-            
             adapter.set_permissions(can_trade=has_valid_key, can_view_balance=has_valid_key)
             
-            if adapter.is_public_only:
-                print(f"[Factory] {name}: Active (Public Mode - Trading Disabled)")
-            else:
-                print(f"[Factory] {name}: Active (Trading Enabled)")
-                
             adapters[name] = adapter
-            
+            print(f"[Factory] {name}: Initialized as primary adapter.")
         except Exception as e:
             print(f"[Factory] Failed to initialize {name}: {e}")
-            
-            
     return adapters
 
 async def create_adapter_from_profile(profile_dict):
@@ -114,6 +121,8 @@ async def create_adapter_from_profile(profile_dict):
         client = ccxt.bybit(exchange_config)
         adapter = BybitAdapter(client)
         adapter.set_permissions(can_trade=valid_key, can_view_balance=valid_key)
+        # Injection for unique identification (MUST match AccountSyncService._get_account_key)
+        adapter.account_key = f"{name}_{api_key}" if api_key else f"{name}_PUBLIC_{profile_dict.get('id', 'global')}"
         return adapter
         
     elif name == 'BINANCE':
@@ -134,6 +143,8 @@ async def create_adapter_from_profile(profile_dict):
         client = ccxt.binance(exchange_config)
         adapter = BinanceAdapter(client)
         adapter.set_permissions(can_trade=valid_key, can_view_balance=valid_key)
+        # Injection for unique identification (MUST match AccountSyncService._get_account_key)
+        adapter.account_key = f"{name}_{api_key}" if api_key else f"{name}_PUBLIC_{profile_dict.get('id', 'global')}"
         return adapter
     
     return None

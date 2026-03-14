@@ -11,6 +11,8 @@ load_dotenv(env_path)
 # Exchange Credentials
 BYBIT_API_KEY = os.getenv('BYBIT_API_KEY')
 BYBIT_API_SECRET = os.getenv('BYBIT_API_SECRET')
+BYBIT_API_KEY_2 = os.getenv('BYBIT_API_KEY_2')
+BYBIT_API_SECRET_2 = os.getenv('BYBIT_API_SECRET_2')
 BINANCE_API_KEY = os.getenv('BINANCE_API_KEY')
 BINANCE_API_SECRET = os.getenv('BINANCE_API_SECRET')
 

@@ -84,7 +84,23 @@ class Container:
         
         # 5. Initialize Application Services & Use Cases
         profiles = await self.profile_repository.get_active_profiles()
+        
+        # Create unique adapters for each physical account
+        from src.infrastructure.adapters.exchange_factory import create_adapter_from_profile
+        self.adapters = {} # {account_key: adapter}
+        profile_to_adapter_map = {} # {profile_id: adapter}
+        
+        for p in profiles:
+            adapter = await create_adapter_from_profile(p)
+            if adapter:
+                acc_key = adapter.account_key
+                if acc_key not in self.adapters:
+                    self.adapters[acc_key] = adapter
+                profile_to_adapter_map[p['id']] = self.adapters[acc_key]
+        
         self.sync_service = AccountSyncService(profiles, self.adapters)
+        # We need to bridge AccountSyncService to use profile_to_adapter_map logic
+        # For now, we'll ensure ExecuteTrade and MonitorPositions use the right one.
         
         # Priority: Link active symbols to DataManager for prioritized OHLCV fetches
         self.data_manager.set_active_symbols_provider(self.sync_service.get_active_symbols)

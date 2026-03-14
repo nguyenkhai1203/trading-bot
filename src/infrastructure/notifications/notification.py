@@ -249,8 +249,9 @@ def format_pending_order(
     
     ex_tag = f" | {_escape_markdown(profile_label) if profile_label else _escape_markdown(exchange_name).upper() if exchange_name else ''}"
     
+    ex_prefix = f"[{profile_label if profile_label else exchange_name.upper() if exchange_name else ''}] "
     terminal = (
-        f"⚪ PENDING | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
+        f"{ex_prefix}⚪ PENDING | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
         f"SL: {format_price(sl_price)} | TP: {format_price(tp_price)}"
     )
     
@@ -295,8 +296,9 @@ def format_position_filled(
     
     ex_tag = f" | {_escape_markdown(profile_label) if profile_label else _escape_markdown(exchange_name).upper() if exchange_name else ''}"
     
+    ex_prefix = f"[{profile_label if profile_label else exchange_name.upper() if exchange_name else ''}] "
     terminal = (
-        f"⚪ FILLED | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
+        f"{ex_prefix}⚪ FILLED | [{symbol} {timeframe}] {dir_emoji} {dir_label} @ {format_price(entry_price)} | "
         f"Size: {format_size(size, symbol)} {base_currency}"
     )
     
@@ -352,8 +354,9 @@ def format_position_closed(
     else:
         reason_label = r_upper
     
+    ex_prefix = f"[{profile_label if profile_label else exchange_name.upper() if exchange_name else ''}] "
     terminal = (
-        f"{status_emoji} [{symbol} {timeframe}] {reason_label} @ {format_price(exit_price)} | "
+        f"{ex_prefix}{status_emoji} [{symbol} {timeframe}] {reason_label} @ {format_price(exit_price)} | "
         f"PnL: {format_pnl(pnl, pnl_pct)}"
     )
     
@@ -382,7 +385,8 @@ def format_order_cancelled(
     entry_price: float,
     reason: str,
     dry_run: bool,
-    exchange_name: Optional[str] = None
+    exchange_name: Optional[str] = None,
+    profile_label: Optional[str] = None
 ) -> Tuple[str, str]:
     """
     Format order cancelled notification.
@@ -394,10 +398,10 @@ def format_order_cancelled(
     dir_label = get_direction_label(side)
     safe_symbol = format_symbol(symbol)
     mode = get_mode_label(dry_run)
-    ex_prefix = f"[{exchange_name.upper()}] " if exchange_name else ""
+    ex_prefix = f"[{profile_label if profile_label else exchange_name.upper() if exchange_name else ''}] "
     terminal = f"{ex_prefix}❌ [{symbol} {timeframe}] CANCELLED | Reason: {reason}"
     
-    ex_tag = f" | {_escape_markdown(exchange_name).upper()}" if exchange_name else ""
+    ex_tag = f" | {_escape_markdown(profile_label) if profile_label else _escape_markdown(exchange_name).upper() if exchange_name else ''}"
     telegram = (
         f"{mode}{ex_tag} | ❌ CANCELLED\n"
         f"{safe_symbol} | {_escape_markdown(timeframe)} | {dir_label} {dir_emoji}\n"
@@ -427,6 +431,7 @@ def format_status_update(
     total_pnl: float,
     total_pnl_pct: float,
     exchange_name: Optional[str] = None,
+    profile_label: Optional[str] = None,
     is_live_sync: bool = True
 ) -> Tuple[str, str]:
     """
@@ -455,7 +460,7 @@ def format_status_update(
     )
     
     # Telegram detailed
-    ex_tag = f"[{_escape_markdown(exchange_name).upper()}] " if exchange_name else ""
+    ex_tag = f"[{_escape_markdown(profile_label) if profile_label else _escape_markdown(exchange_name).upper() if exchange_name else ''}] "
     telegram_parts = [
         f"📊 {ex_tag}POSITION STATUS UPDATE {sync_tag}\n",
         f"Active: {active_count} positions",
@@ -596,9 +601,9 @@ def format_portfolio_update_v2(
 ) -> str:
     """Format Portfolio Update in BOT STATUS v2 style."""
     now = datetime.now().strftime('%d/%m %H:%M')
-    first_ex = list(exchanges_data.keys())[0] if exchanges_data else "GLOBAL"
+    all_profiles = ", ".join(exchanges_data.keys()) if exchanges_data else "GLOBAL"
     lines = [
-        f"📊 *{first_ex} PORTFOLIO UPDATE* - {now}",
+        f"📊 *PORTFOLIO UPDATE ({all_profiles})* - {now}",
         f"💰 Total Equity: ${total_balance:.2f} | 📈 Daily: {daily_pnl_pct:+.2f}%",
         f"🔄 Positions: {active_count} Active | {pending_count} Pending",
         ""

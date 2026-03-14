@@ -322,9 +322,10 @@ class DataManager:
             ))
             return cursor.lastrowid
 
-    async def update_position_status(self, trade_id: int, status: str, exit_price: Optional[float] = None, pnl: Optional[float] = None, exit_reason: Optional[str] = None):
+    async def update_position_status(self, trade_id: int, status: str, exit_price: Optional[float] = None, pnl: Optional[float] = None, exit_reason: Optional[str] = None, exit_time: Optional[int] = None):
         """Atomically update a position to CLOSED/CANCELLED/ERROR state."""
-        exit_time = int(datetime.now().timestamp() * 1000) if status == 'CLOSED' else None
+        if status == 'CLOSED' and exit_time is None:
+            exit_time = int(datetime.now().timestamp() * 1000)
         
         await self._execute_write("""
             UPDATE trades SET 

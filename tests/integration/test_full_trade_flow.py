@@ -97,7 +97,16 @@ async def test_full_trade_flow_integration(mock_db):
         'markPrice': 0.000095,
         'leverage': 10
     }]
-
+    adapter.fetch_my_trades = AsyncMock(return_value=[{
+        'symbol': unique_symbol,
+        'id': 'fill_123',
+        'order': trades[0].exchange_order_id,
+        'side': 'buy',
+        'price': 0.00009,
+        'amount': 10000,
+        'timestamp': int(time.time() * 1000)
+    }])
+    
     await sync_service.sync_all()
     await monitor_positions.execute()
 

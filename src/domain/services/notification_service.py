@@ -11,7 +11,7 @@ class NotificationService:
     def __init__(self):
         self.logger = logging.getLogger("NotificationService")
 
-    async def notify_order_filled(self, trade: Any, score: float, dry_run: bool = False, is_virtual: bool = False):
+    async def notify_order_filled(self, trade: Any, score: float, dry_run: bool = False, is_virtual: bool = False, profile_label: Optional[str] = None):
         """Send notification for a filled position."""
         try:
             terminal_msg, telegram_msg = notification.format_position_filled(
@@ -27,14 +27,15 @@ class NotificationService:
                 leverage=int(trade.leverage or 1),
                 dry_run=dry_run,
                 is_virtual=is_virtual,
-                exchange_name=trade.exchange
+                exchange_name=trade.exchange,
+                profile_label=profile_label
             )
             self.logger.info(terminal_msg)
             await notification.send_telegram_message(telegram_msg)
         except Exception as e:
             self.logger.error(f"Failed to send filled notification: {e}")
 
-    async def notify_order_pending(self, symbol: str, timeframe: str, side: str, price: float, sl: float, tp: float, score: float, leverage: int, dry_run: bool = False, exchange: str = ""):
+    async def notify_order_pending(self, symbol: str, timeframe: str, side: str, price: float, sl: float, tp: float, score: float, leverage: int, dry_run: bool = False, exchange: str = "", profile_label: Optional[str] = None):
         """Send notification for a pending limit order."""
         try:
             terminal_msg, telegram_msg = notification.format_pending_order(
@@ -47,14 +48,15 @@ class NotificationService:
                 score=score,
                 leverage=leverage,
                 dry_run=dry_run,
-                exchange_name=exchange
+                exchange_name=exchange,
+                profile_label=profile_label
             )
             self.logger.info(terminal_msg)
             await notification.send_telegram_message(telegram_msg)
         except Exception as e:
             self.logger.error(f"Failed to send pending notification: {e}")
 
-    async def notify_order_cancelled(self, symbol: str, timeframe: str, side: str, price: float, reason: str, dry_run: bool = False, exchange: str = ""):
+    async def notify_order_cancelled(self, symbol: str, timeframe: str, side: str, price: float, reason: str, dry_run: bool = False, exchange: str = "", profile_label: Optional[str] = None):
         """Send notification for a cancelled order."""
         try:
             terminal_msg, telegram_msg = notification.format_order_cancelled(
@@ -64,7 +66,8 @@ class NotificationService:
                 entry_price=price,
                 reason=reason,
                 dry_run=dry_run,
-                exchange_name=exchange
+                exchange_name=exchange,
+                profile_label=profile_label
             )
             self.logger.info(terminal_msg)
             await notification.send_telegram_message(telegram_msg)
@@ -79,7 +82,8 @@ class NotificationService:
         pnl_pct: float, 
         reason: str, 
         dry_run: bool = False,
-        is_virtual: bool = False
+        is_virtual: bool = False,
+        profile_label: Optional[str] = None
     ):
         """Send notification for a closed position."""
         try:
@@ -103,7 +107,8 @@ class NotificationService:
                 exit_time=exit_dt,
                 dry_run=dry_run,
                 is_virtual=is_virtual,
-                exchange_name=trade.exchange
+                exchange_name=trade.exchange,
+                profile_label=profile_label
             )
             self.logger.info(terminal_msg)
             await notification.send_telegram_message(telegram_msg)

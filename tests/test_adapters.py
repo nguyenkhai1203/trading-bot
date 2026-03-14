@@ -117,7 +117,7 @@ class TestBybitAdapter:
         # Check params for triggerDirection
         args, kwargs = mock_ccxt_bybit.create_order.call_args
         params = kwargs.get('params') or (args[5] if len(args) > 5 else {})
-        assert params.get('stopPrice') == 90.0
+        assert float(params.get('stopPrice')) == 90.0
         assert params.get('triggerDirection') == 'descending'
 
     @pytest.mark.asyncio

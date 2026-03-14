@@ -19,9 +19,12 @@ class AccountSyncService:
     def _get_account_key(self, profile: Dict[str, Any]) -> str:
         """Uniquely identify an account by exchange and API key."""
         ex_name = profile.get('exchange', 'UNKNOWN').upper()
-        # Use API key if present, otherwise fallback to profile ID for simulation/public
-        api_key = profile.get('api_key', f"PROFILE_{profile['id']}")
-        return f"{ex_name}_{api_key}"
+        api_key = profile.get('api_key')
+        
+        # Consistent key generation with factory
+        if api_key:
+            return f"{ex_name}_{api_key}"
+        return f"{ex_name}_PUBLIC_{profile['id']}"
 
     async def sync_all(self, force: bool = False):
         """Fetch fresh data for all unique accounts in the system."""
@@ -30,11 +33,17 @@ class AccountSyncService:
         for p in self.profiles:
             key = self._get_account_key(p)
             if key not in unique_accounts:
-                # Find matching adapter for this profile's exchange
-                ex_name = p.get('exchange', '').upper()
-                adapter = self.adapters.get(ex_name)
+                # Find matching adapter in the unique adapters map (indexed by account_key)
+                adapter = self.adapters.get(key)
                 if not adapter:
+                    # Fallback to exchange name if legacy/data-only
+                    ex_name = p.get('exchange', '').upper()
+                    adapter = self.adapters.get(ex_name)
+                
+                if not adapter:
+                    self.logger.warning(f"No adapter found for account {key}")
                     continue
+                    
                 unique_accounts[key] = {'adapter': adapter, 'profiles': []}
             unique_accounts[key]['profiles'].append(p)
 

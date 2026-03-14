@@ -40,96 +40,109 @@ class MonitorPositionsUseCase:
             await self._manage_pending_trades(profile, db_trades)
 
     async def _monitor_profile(self, profile: Dict[str, Any], db_trades: List[Any]):
-        # 1. Get cached state for this profile's account
+        """
+        Reconciles exchange state with database records using strict Order ID matching and history.
+        """
         state = self.sync_service.get_account_state(profile)
         if not state:
             return
 
         exchange_positions = state.get('positions', [])
+        ex_name = profile['exchange'].upper()
+        # Resolve adapter via account key (Multi-Account Support)
+        acc_key = self.sync_service._get_account_key(profile)
+        adapter = self.sync_service.adapters.get(acc_key)
         
-        # 3. Reconcile
+        if not adapter:
+            # Fallback to exchange name
+            adapter = self.sync_service.adapters.get(ex_name)
+            
+        if not adapter: return
+
+        # 1. OPTIMIZATION: Fetch recent executions (fills) for all active symbols
+        symbol_executions = {}
+        symbols_to_check = list(set([t.symbol for t in db_trades] + [p['symbol'] for p in exchange_positions]))
+        
+        for sym in symbols_to_check:
+            try:
+                symbol_executions[sym] = await adapter.fetch_my_trades(sym, limit=20)
+            except Exception as e:
+                self.logger.warning(f"Failed to fetch execution history for {sym}: {e}")
+                symbol_executions[sym] = []
+
+        # 2. Reconcile DB Trades
         for trade in db_trades:
-            # A. Handle Virtual Trades (No exchange presence)
+            # A. Handle Virtual Trades
             if trade.meta.get('is_virtual'):
                 await self._monitor_virtual_trade(profile, trade)
                 continue
 
-            # Skip PENDING trades for position ghost detection since they live in orders
+            executions = symbol_executions.get(trade.symbol, [])
+            db_order_id = str(trade.exchange_order_id)
+            target_side = 'sell' if trade.side == 'BUY' else 'buy'
+            anchor_time = (trade.entry_time or 0)
+
+            # B. Handle PENDING trades (Check if filled via history)
             if trade.status == 'PENDING':
+                fill = next((t for t in executions if str(t.get('order', t.get('orderId'))) == db_order_id), None)
+                if fill:
+                    self.logger.info(f"📈 [FILL] Trade {trade.id} ({trade.symbol}) filled! Updating PENDING -> ACTIVE.")
+                    trade.status = 'ACTIVE'
+                    trade.entry_price = float(fill.get('price', trade.entry_price))
+                    trade.qty = float(fill.get('amount', trade.qty))
+                    trade.entry_time = int(fill.get('timestamp', trade.entry_time or 0)) or int(time.time() * 1000)
+                    await self.trade_repo.save_trade(trade)
+                    # Notify
+                    is_live = str(profile.get('environment', 'LIVE')).upper() == 'LIVE'
+                    conf = trade.meta.get('signal_confidence', 0.5) if trade.meta else 0.5
+                    await self.notification_service.notify_order_filled(trade, conf, dry_run=not is_live, profile_label=profile.get('label'))
                 continue
 
-            # FIX D3: Match by (symbol, side, and price) for precision.
-            # Stale trades in DB (e.g. ATOM at 1.8$) should NOT match a current position (ATOM at 6.5$).
-            def _is_price_match(db_price, pos_dict):
-                ex_price = float(pos_dict.get('entryPrice') or pos_dict.get('avgPrice') or 0)
-                if not db_price or not ex_price: 
-                    # If we can't compare prices, we only match if it's the ONLY trade for this symbol
-                    return True 
-                return abs(db_price - ex_price) / ex_price < 0.15 # 15% tolerance
-                
-            matched = next(
-                (p for p in exchange_positions 
-                 if p.get('symbol') == trade.symbol 
-                 and p.get('side', '').upper() == trade.side.upper()
-                 and _is_price_match(trade.entry_price, p)), 
-                None
-            )
+            # C. Handle ACTIVE trades (Verify lifecycle via History)
+            is_closed_in_history = False
+            for t in reversed(executions):
+                t_timestamp = t.get('timestamp', 0)
+                # If any trade happened on opposite side AFTER entry, it closed or reduced the position
+                if t_timestamp >= (anchor_time + 1000) and t.get('side', '').lower() == target_side:
+                    is_closed_in_history = True
+                    break
             
-            if not matched:
+            # Match to current exchange position only if NOT closed in history
+            matched = None
+            if not is_closed_in_history:
+                matched = next(
+                    (p for p in exchange_positions 
+                     if p.get('symbol') == trade.symbol 
+                     and p.get('side', '').upper() == trade.side.upper()), 
+                    None
+                )
+            
+            if not matched or is_closed_in_history:
+                # Ghost trade detection with grace period
                 import time
                 current_time = int(time.time() * 1000)
-                entry_time = trade.entry_time or 0
-                
-                # Grace period of 5 minutes for newly opened positions
-                if current_time - entry_time < 300000:
-                    self.logger.debug(f"Trade {trade.id} ({trade.symbol}) not found on exchange, but within 5m grace period. Skipping ghost check.")
+                if current_time - anchor_time < 300000: # 5 min grace
                     continue
                     
-                # Ghost trade: closed on exchange but OPEN in DB
-                self.logger.info(f"Trade {trade.id} ({trade.symbol}) closed on exchange. Syncing history...")
-                
-                # Try to fetch real exit data
+                self.logger.info(f"👻 [GHOST] Trade {trade.id} ({trade.symbol}) identified via history as closed. Syncing...")
                 await self._resolve_ghost_trade(profile, trade)
+                trade.status = 'CLOSED' # Mark locally so orphan check knows it's free
             else:
-                # 4. SELF-HEALING: Check if SL/TP are missing on exchange
+                # 3. SELF-HEALING: Repair missing SL/TP
                 await self._heal_missing_sltp(profile, trade, matched, state)
                 
-        # 4. Check for Orphans and Status Transitions (Exchange positions vs DB)
+        # 4. Check for Orphans
         for ep in exchange_positions:
             sym = ep.get('symbol')
-            # Check if this exchange position is already tracked in DB
-            def _is_price_match(db_price, ex_price):
-                if not db_price or not ex_price: return True
-                return abs(db_price - ex_price) / ex_price < 0.10
-
-            db_match = next(
-                (t for t in db_trades 
-                 if t.symbol == sym 
-                 and t.side.upper() == ep.get('side', '').upper()
-                 and _is_price_match(t.entry_price, float(ep.get('entryPrice', 0)))),
-                None
+            # An exchange position is an orphan if no ACTIVE or PENDING db_trade claims it
+            is_tracked = any(
+                t.symbol == sym 
+                and t.side.upper() == ep.get('side', '').upper()
+                and t.status in ('ACTIVE', 'PENDING')
+                for t in db_trades
             )
             
-            if db_match:
-                # BUG 18 FIX: If DB thinks it's PENDING but it's now an ACTIVE position, update status!
-                if db_match.status == 'PENDING':
-                    self.logger.info(f"📈 [FILL] Trade {db_match.id} ({sym}) filled! Updating PENDING -> ACTIVE.")
-                    db_match.status = 'ACTIVE'
-                    # Sync info from exchange
-                    db_match.entry_price = float(ep.get('entryPrice') or db_match.entry_price)
-                    db_match.qty = float(ep.get('contracts') or db_match.qty)
-                    # We also must ensure it has an entry time for ghost checks
-                    if not db_match.entry_time:
-                        import time
-                        db_match.entry_time = int(time.time() * 1000)
-                    await self.trade_repo.save_trade(db_match)
-                    
-                    # Notify order filled
-                    conf = db_match.meta.get('signal_confidence', 0.5) if db_match.meta else 0.5
-                    is_live = str(profile.get('environment', 'LIVE')).upper() == 'LIVE'
-                    await self.notification_service.notify_order_filled(db_match, conf, dry_run=not is_live)
-                # Already tracked - no action needed
-            else:
+            if not is_tracked:
                 # Orphan detected! Found on exchange but not in DB.
                 self.logger.info(f"🕵️ [ORPHAN] Found untracked {sym} on exchange. Adopting...")
                 try:
@@ -138,27 +151,39 @@ class MonitorPositionsUseCase:
                     
                     # Create a new Trade model for the orphan
                     orphan_id = f"adopted_{int(time.time())}"
+                    
+                    # IMPORTANT: Find actual entry time from history for accurate duration
+                    entry_time_ms = int(time.time() * 1000)
+                    try:
+                        recent_fills = symbol_executions.get(sym, [])
+                        for tf in reversed(recent_fills):
+                            if tf.get('side', '').upper() == ep['side'].upper():
+                                entry_time_ms = tf.get('timestamp', entry_time_ms)
+                                break
+                    except Exception as hist_err:
+                        self.logger.warning(f"Failed to find entry history for orphan {sym}: {hist_err}")
+
                     orphan = Trade(
                         profile_id=profile['id'],
-                        exchange=profile['exchange'].upper(),
+                        exchange=ex_name,
                         symbol=sym,
                         side=ep['side'].upper(),
                         qty=float(ep['contracts']),
                         entry_price=float(ep['entryPrice']),
-                        leverage=float(ep['leverage'] or 10),
+                        leverage=float(ep.get('leverage', 10)),
                         status='ACTIVE',
-                        timeframe='1h', # Placeholder since exchange doesn't store TF
-                        pos_key=f"{profile['exchange'].upper()}_{sym.replace('/', '_')}_{orphan_id}",
+                        timeframe='1h', # Placeholder
+                        pos_key=f"{ex_name}_{sym.replace('/', '_')}_{orphan_id}",
                         sl_price=float(ep.get('stopLoss') or 0) or None,
                         tp_price=float(ep.get('takeProfit') or 0) or None,
                         exchange_order_id=orphan_id,
-                        entry_time=int(time.time() * 1000),
+                        entry_time=entry_time_ms,
                         meta={'is_orphan': True, 'adopted_at': int(time.time() * 1000)}
                     )
                     
                     await self.trade_repo.save_trade(orphan)
                     await self.notification_service.notify_generic(
-                        f"🕵️ **ORPHAN ADOPTED** | {sym} | {orphan.side} | Entry: {orphan.entry_price}"
+                        f"🕵️ **ORPHAN ADOPTED** | {sym} | {orphan.side} | Entry: {orphan.entry_price} | {profile.get('label') or ep.get('exchange', ex_name).upper()}"
                     )
                 except Exception as e:
                     self.logger.error(f"Failed to adopt orphan {sym}: {e}")
@@ -279,6 +304,7 @@ class MonitorPositionsUseCase:
     async def _resolve_ghost_trade(self, profile: Dict[str, Any], trade: Any):
         """
         Fetches trade history to find the exit price/reason and updates DB.
+        Uses strict Order ID matching to distinguish between different trade lifecycles.
         """
         ex_name = profile['exchange'].upper()
         adapter = self.sync_service.adapters.get(ex_name)
@@ -297,11 +323,19 @@ class MonitorPositionsUseCase:
             anchor_time = (trade.entry_time or 0)
             
             for t in reversed(trades or []):
-                # Simple check: trade must be roughly newer than entry
-                # FIX: Handle missing entry_time gracefully
-                if t.get('timestamp', 0) >= (anchor_time - 5000) and t.get('side', '').lower() == target_side:
-                    close_trade = t
-                    break
+                t_timestamp = t.get('timestamp', 0)
+                t_side = t.get('side', '').lower()
+                t_order_id = str(t.get('order', t.get('orderId', '')))
+                
+                # Check for a newer trade on opposite side
+                if t_timestamp >= (anchor_time - 1000) and t_side == target_side:
+                    # Preference 1: Matches specific SL or TP order IDs
+                    if t_order_id == str(trade.sl_order_id) or t_order_id == str(trade.tp_order_id):
+                        close_trade = t
+                        break
+                    # Preference 2: It's the most recent opposite fill after entry
+                    if not close_trade:
+                        close_trade = t
             
             exit_price = trade.entry_price # Default / Fallback
             reason = 'SYNC'
@@ -310,15 +344,22 @@ class MonitorPositionsUseCase:
             
             if close_trade:
                 exit_price = float(close_trade.get('price', exit_price))
-                # Infer reason (simplified logic: if exit < entry for BUY -> SL)
-                if trade.side == 'BUY':
-                    reason = 'SL' if exit_price < trade.entry_price else 'TP'
+                t_order_id = str(close_trade.get('order', close_trade.get('orderId', '')))
+                
+                # Infer reason
+                if t_order_id == str(trade.sl_order_id):
+                    reason = 'SL'
+                elif t_order_id == str(trade.tp_order_id):
+                    reason = 'TP'
                 else:
-                    reason = 'SL' if exit_price > trade.entry_price else 'TP'
+                    if trade.side == 'BUY':
+                        reason = 'SL' if exit_price < trade.entry_price else 'TP'
+                    else:
+                        reason = 'SL' if exit_price > trade.entry_price else 'TP'
                 
                 # Trigger SL Cooldown
                 if reason == 'SL':
-                    self.logger.info(f"[{symbol}] Sync detected SL closure. Applying SL Cooldown.")
+                    self.logger.info(f"[{symbol}] Sync detected SL closure for Order {trade.exchange_order_id}. Applying SL Cooldown.")
                     await self.cooldown_manager.set_sl_cooldown(ex_name, symbol, profile['id'])
 
                 # Calculate PnL (Simplified for notifications)
@@ -333,13 +374,19 @@ class MonitorPositionsUseCase:
                 pnl_pct = (pnl / margin * 100) if margin > 0 else 0.0
             
             # Update DB
+            exit_time = int(close_trade.get('timestamp')) if close_trade else None
+            
             await self.trade_repo.update_status(
                 trade.id, 
                 status='CLOSED',
                 exit_reason=reason,
                 exit_price=exit_price,
-                pnl=pnl
+                pnl=pnl,
+                exit_time=exit_time
             )
+            
+            # Update local object for notification accuracy
+            trade.exit_time = exit_time
             
             # Notify - Using structured notification to include PnL and fixed TP/SL
             is_live = str(profile.get('environment', 'LIVE')).upper() == 'LIVE'
@@ -349,7 +396,8 @@ class MonitorPositionsUseCase:
                 pnl=pnl,
                 pnl_pct=pnl_pct,
                 reason=reason,
-                dry_run=not is_live
+                dry_run=not is_live,
+                profile_label=profile.get('label')
             )
             
             self.logger.info(f"Resolved ghost {symbol} as {reason} at {exit_price} | PnL: ${pnl:.2f}")
@@ -413,7 +461,8 @@ class MonitorPositionsUseCase:
                     pnl=pnl,
                     pnl_pct=pnl_pct,
                     reason=f'VIRTUAL_{hit_reason}',
-                    dry_run=True # Virtual is always reported as simulated
+                    dry_run=True, # Virtual is always reported as simulated
+                    profile_label=profile.get('label')
                 )
         except Exception as e:
             self.logger.error(f"Error monitoring virtual trade {trade.symbol}: {e}")
@@ -489,7 +538,7 @@ class MonitorPositionsUseCase:
                     if (int(time.time() * 1000) - (trade.entry_time or 0)) > 60000:
                         self.logger.warning(f"👻 [GHOST-PENDING] {trade.symbol} missing from exchange orders/positions. Cancelling in DB.")
                         await self.trade_repo.update_status(trade.id, 'CANCELLED', exit_reason='GHOST_PENDING')
-                        await self.notification_service.notify_generic(f"👻 **GHOST PENDING CLEANUP** | {trade.symbol} | Moved to CANCELLED")
+                        await self.notification_service.notify_generic(f"👻 **GHOST PENDING CLEANUP** | {trade.symbol} | Moved to CANCELLED | {profile.get('label') or ex_name}")
 
         # 3. New: Aggressive Duplicate Cleanup ("Best Order Only")
         await self._cleanup_duplicate_exchange_orders(profile, exchange_orders, db_trades)
@@ -545,7 +594,11 @@ class MonitorPositionsUseCase:
             
             self.logger.warning(f"⚔️ [DUPE-CLEANUP] Found {len(dupes)} {key[1]} orders for {key[0]}. Winner: {winner['order']['id']} (Score: {winner['score']:.2f})")
             
-            adapter = self.sync_service.adapters.get(profile['exchange'].upper())
+            # Resolve adapter via account key
+            acc_key = self.sync_service._get_account_key(profile)
+            adapter = self.sync_service.adapters.get(acc_key)
+            if not adapter:
+                adapter = self.sync_service.adapters.get(profile['exchange'].upper())
             if not adapter: continue
             
             for loose in loosers:
@@ -575,7 +628,8 @@ class MonitorPositionsUseCase:
                 price=trade.entry_price,
                 reason=reason,
                 dry_run=not adapter.can_trade,
-                exchange=profile['exchange'].upper()
+                exchange=profile['exchange'].upper(),
+                profile_label=profile.get('label')
             )
             self.logger.info(f"Successfully cancelled pending {trade.symbol} due to {reason}")
         except Exception as e:

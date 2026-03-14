@@ -52,4 +52,5 @@ class SQLiteTradeRepository(ITradeRepository):
         exit_price = kwargs.get('exit_price')
         pnl = kwargs.get('pnl')
         exit_reason = kwargs.get('exit_reason')
-        await self.dm.update_position_status(trade_id, status, exit_price, pnl, exit_reason)
+        exit_time = kwargs.get('exit_time')
+        await self.dm.update_position_status(trade_id, status, exit_price, pnl, exit_reason, exit_time)
