@@ -167,19 +167,19 @@ class ManagePositionUseCase:
 
         # 5. CURRENT PRICE CAPPING (Bybit Safety)
         # Ensure SL stays on the "Loss" side of current price.
-        # If price has ALREADY HIT the SL, we don't move it; we handle it in Step 6.
-        safe_buffer = 0.0005 # 0.05% safety
+        # v4.4: Using 0.2% buffer instead of 0.05% to avoid immediate stop-outs.
+        safe_buffer = 0.002 # 0.2% safety
         if final_sl:
             if side == 'BUY':
                 # For BUY, SL must be < Current. If we try to set SL >= current, Bybit rejects.
-                if final_sl >= current_price:
-                    self.logger.warning(f"⚠️ [SL-CAPPING] {trade.symbol} SL({final_sl}) >= Current({current_price}). Capping to safe level.")
+                if final_sl >= current_price * (1 - 0.0005):
+                    self.logger.warning(f"⚠️ [SL-CAPPING] {trade.symbol} SL({final_sl}) too close to Current({current_price}). Capping to safe level (-0.2%).")
                     final_sl = current_price * (1 - safe_buffer)
                     changes = True
             else: # SELL
                 # For SELL, SL must be > Current.
-                if final_sl <= current_price:
-                    self.logger.warning(f"⚠️ [SL-CAPPING] {trade.symbol} SL({final_sl}) <= Current({current_price}). Capping to safe level.")
+                if final_sl <= current_price * (1 + 0.0005):
+                    self.logger.warning(f"⚠️ [SL-CAPPING] {trade.symbol} SL({final_sl}) too close to Current({current_price}). Capping to safe level (+0.2%).")
                     final_sl = current_price * (1 + safe_buffer)
                     changes = True
 
@@ -200,8 +200,8 @@ class ManagePositionUseCase:
                 pass
             
             # If our DB thinks SL exists but exchange rejected it (or it's missing), and price HIT it -> CLOSE.
-            if not trade.sl_order_id or trade.sl_order_id == 'None':
-                self.logger.error(f"🚨 [MARKET-RESCUE] {trade.symbol} SL({final_sl}) hit, but exchange order missing. Market closing now!")
+            if not trade.sl_order_id or trade.sl_order_id in ('None', None, ''):
+                self.logger.error(f"🚨 [MARKET-RESCUE] {trade.symbol} SL({final_sl}) hit, but exchange order ID is {trade.sl_order_id}. Market closing now!")
                 try:
                     await adapter.close_position(trade.symbol, side, trade.qty)
                     

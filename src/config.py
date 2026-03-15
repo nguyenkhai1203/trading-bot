@@ -112,8 +112,8 @@ MIN_CONFIDENCE_TO_TRADE = 0.30  # Minimum 30% confidence to enter any trade
 
 # Trailing / Profit Lock-in Settings (v4.0)
 ENABLE_DYNAMIC_SLTP = True
-ATR_TRAIL_MULTIPLIER = 1.5      # 1.5 * ATR for trailing
-ATR_TRAIL_MIN_MOVE_PCT = 0.001  # 0.1% min move to update exchange
+ATR_TRAIL_MULTIPLIER = 2.5      # Increased from 1.5 to 2.5 for more breathing room
+ATR_TRAIL_MIN_MOVE_PCT = 0.002  # Increased from 0.001 to 0.002 to reduce update spam
 RSI_OVERBOUGHT_EXIT = 75        # Guard: Pull TP closer
 EMA_BREAK_CLOSE_THRESHOLD = 0.998 # Guard: Emergency exit (0.2% below EMA21)
 

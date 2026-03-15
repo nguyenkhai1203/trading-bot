@@ -99,14 +99,14 @@ class TestTraderExecutionLogic:
         df_guard = pd.DataFrame({'close': [52000.0], 'RSI_14': [50.0], 'EMA_21': [51000.0]})
         
         with patch('src.execution.config.ENABLE_DYNAMIC_SLTP', True), \
-             patch('src.execution.config.ATR_TRAIL_MULTIPLIER', 1.5), \
-             patch('src.execution.config.ATR_TRAIL_MIN_MOVE_PCT', 0.001):
+             patch('src.execution.config.ATR_TRAIL_MULTIPLIER', 2.5), \
+             patch('src.execution.config.ATR_TRAIL_MIN_MOVE_PCT', 0.002):
             
-            # 53000 - (1.5 * 500) = 52250
+            # 53000 - (2.5 * 500) = 51750
             res = await trader.update_dynamic_sltp(pos_key, df_trail=df_trail, df_guard=df_guard)
             
         assert res is True
-        assert trader.active_positions[pos_key]['sl'] == 52250.0
+        assert trader.active_positions[pos_key]['sl'] == 51750.0
         trader.recreate_missing_sl_tp.assert_called_once()
 
     @pytest.mark.asyncio
@@ -168,6 +168,7 @@ class TestTraderExecutionLogic:
         })
         
         with patch('src.execution.config.ENABLE_DYNAMIC_SLTP', True), \
+             patch('src.execution.config.ATR_TRAIL_MULTIPLIER', 2.5), \
              patch('src.execution.config.ENABLE_PROFIT_LOCK', True), \
              patch('src.execution.config.PROFIT_LOCK_THRESHOLD', 0.5): # Use our new 0.5 threshold
             
@@ -175,9 +176,9 @@ class TestTraderExecutionLogic:
             
         # Verify SL moved to lock profit, then improved by ATR Trailing
         # Profit Lock: Entry + 10% target = 50500
-        # ATR Trailing: 54000 - (1.5 * 500) = 53250
-        # Result should be 53250
-        assert trader.active_positions[pos_key]['sl'] == 53250.0
+        # ATR Trailing: 54000 - (2.5 * 500) = 52750
+        # Result should be 52750
+        assert trader.active_positions[pos_key]['sl'] == 52750.0
         assert trader.active_positions[pos_key]['tp'] == 57500.0
         assert trader.active_positions[pos_key]['profit_locked'] is True
         assert trader.active_positions[pos_key]['tp_extensions'] == 1
@@ -209,12 +210,14 @@ class TestTraderExecutionLogic:
         })
         
         with patch('src.execution.config.ENABLE_DYNAMIC_SLTP', True), \
+             patch('src.execution.config.ATR_TRAIL_MULTIPLIER', 2.5), \
              patch('src.execution.config.ENABLE_PROFIT_LOCK', True), \
              patch('src.execution.config.PROFIT_LOCK_THRESHOLD', 0.5):
             
             await trader.update_dynamic_sltp(pos_key, df_trail=df_trail, df_guard=df_guard)
             
-        assert trader.active_positions[pos_key]['sl'] == 47750.0
+        # ATR Trailing Short: 47000 + (2.5 * 500) = 48250
+        assert trader.active_positions[pos_key]['sl'] == 48250.0
         assert trader.active_positions[pos_key]['tp'] == 42500.0
         assert trader.active_positions[pos_key]['profit_locked'] is True
 
@@ -411,6 +414,7 @@ class TestExecuteTradeUseCase:
         repo = MagicMock()
         repo.save_trade = AsyncMock(return_value=1)
         repo.update_status = AsyncMock()
+        repo.get_trade_by_order_id = AsyncMock(return_value=None)
         repo.get_active_positions = AsyncMock(return_value=[])
         repo.get_active_positions_on_exchange = AsyncMock(return_value=[])
         repo.get_all_active_trade_profile_ids = AsyncMock(return_value=[])
@@ -608,6 +612,7 @@ class TestMonitorPositionsUseCase:
         repo.get_active_positions = AsyncMock(return_value=[])
         repo.update_status = AsyncMock()
         repo.save_trade = AsyncMock()
+        repo.get_trade_by_order_id = AsyncMock(return_value=None)
         repo.get_all_active_trade_profile_ids = AsyncMock(return_value=[])
         repo.get_profile_by_id = AsyncMock(return_value=None)
         return repo

@@ -37,6 +37,7 @@ class ExecuteTradeUseCase:
         Places orders on information from the signal.
         """
         from src import config
+        is_upgrade = False
         
         # 0. Basic Filter
         if signal.get('side') == 'SKIP':
@@ -228,6 +229,8 @@ class ExecuteTradeUseCase:
                     await self.trade_repo.update_status(existing_in_profile.id, 'CANCELLED', exit_reason='UPGRADE')
                     # Apply short cooldown to prevent re-entry loop in next heartbeat
                     await self.cooldown_manager.set_sl_cooldown(ex_name, symbol, profile_id, custom_duration=300)
+                    existing_in_profile = None # Clear so later logic treats this as a fresh start if needed
+                    is_upgrade = True # Flag for unique ID generation below
                     # Continue to open new position
                 else:
                     return False
@@ -311,6 +314,8 @@ class ExecuteTradeUseCase:
 
             # 8. Place Order
             order_res = {}
+            sl_oid = None
+            tp_oid = None
             use_limit = getattr(config, 'USE_LIMIT_ORDERS', False)
             patience_pct = getattr(config, 'PATIENCE_ENTRY_PCT', 0.01)
             
@@ -396,6 +401,22 @@ class ExecuteTradeUseCase:
                 
                 # Format: BMS_DOTUSDT_B_15m_1710000000 (Bybit max length: 36)
                 client_oid = f"BMS_{clean_sym}_{side.upper()[:1]}_{timeframe}_{candle_start}"
+                if is_upgrade:
+                    # Append 'U' for Upgrade to distinguish from the original pending order
+                    # This avoids 'OrderLinkedID is duplicate' if we re-enter in the same candle
+                    client_oid = f"{client_oid}_U"
+
+                # LOCAL IDEMPOTENCY CHECK (v4.3)
+                # Check if we already have this specific trade in DB (e.g. from previous tick or parallel instance)
+                existing_oid = await self.trade_repo.get_trade_by_order_id(client_oid)
+                if existing_oid:
+                    # Only block if the existing trade is still "Live" (not Cancelled/Closed)
+                    if existing_oid.get('status') in ('ACTIVE', 'PENDING'):
+                        self.logger.warning(f"🛡️ [LOCAL-IDEMPOTENCY] {symbol} order {client_oid} already live in DB. Skipping duplicate.")
+                        return True 
+                    else:
+                        # If it was cancelled/closed, we can try again with a salt to be extra safe
+                        client_oid = f"{client_oid}_{int(time.time()) % 1000}"
 
                 params = {
                     'leverage': leverage,
@@ -425,9 +446,11 @@ class ExecuteTradeUseCase:
                     err_str = str(api_err).lower()
                     # 10002: Order already exists, 110072: OrderLinkedID is duplicate
                     if "already exists" in err_str or "110072" in err_str or "10002" in err_str:
-                        self.logger.error(f"❌ [IDEMPOTENCY HIT] {symbol} order {client_oid} already exists on Bybit. This confirms a duplicate signal was sent!")
-                        return True # Return True to allow flow but log clearly as error
-                    raise api_err # Re-raise to trigger virtual trade tracking/error handling
+                        self.logger.warning(f"🛡️ [EXCHANGE-IDEMPOTENCY] {symbol} order {client_oid} already exists on Bybit. Reconstructing DB record.")
+                        order_res = {'id': client_oid} # Use clientOrderId as the exchange_order_id for recovery
+                        # Fall through to save record below
+                    else:
+                        raise api_err
             else:
                 sl_price, tp_price = self.risk_service.calculate_sl_tp(entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)
                 self.logger.info(f"[DRY-RUN] Signal {symbol} would open {side} ({order_type}) at {entry_price}")

@@ -245,6 +245,23 @@ class DataManager:
             row = await cursor.fetchone()
             return row[0]
 
+    async def get_trade_by_order_id(self, order_id: str) -> Optional[dict]:
+        """Fetch a trade by its exchange_order_id or client_order_id."""
+        db = await self.get_db()
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT * FROM trades 
+            WHERE (exchange_order_id = ? OR exchange_order_id = ?) 
+            ORDER BY id DESC LIMIT 1
+        """, (order_id, order_id)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                d = dict(row)
+                if d.get('meta_json'):
+                    d['meta'] = json.loads(d['meta_json'])
+                return d
+            return None
+
     # ------------------------------------------------------------------------
     # TRADES CRUD
     # ------------------------------------------------------------------------

@@ -41,6 +41,10 @@ class SQLiteTradeRepository(ITradeRepository):
         rows = await self.dm.get_active_positions(profile_id)
         return [self._map_row_to_trade(r) for r in rows]
 
+    async def get_trade_by_order_id(self, order_id: str) -> Optional[Trade]:
+        row = await self.dm.get_trade_by_order_id(order_id)
+        return self._map_row_to_trade(row) if row else None
+
 
     async def get_trade_history(self, profile_id: int, limit: int = 100) -> List[Trade]:
         rows = await self.dm.get_trade_history(profile_id, limit)

@@ -13,6 +13,11 @@ class ITradeRepository(ABC):
         """Fetch all ACTIVE or OPENED positions for a specific profile."""
         pass
 
+    @abstractmethod
+    async def get_trade_by_order_id(self, order_id: str) -> Optional[Trade]:
+        """Fetch a trade by its exchange_order_id or client_order_id."""
+        pass
+
 
     @abstractmethod
     async def get_trade_history(self, profile_id: int, limit: int = 100) -> List[Trade]:

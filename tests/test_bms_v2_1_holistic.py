@@ -17,6 +17,7 @@ class TestBMSv21Holistic:
         repo.get_profile_by_id = AsyncMock(return_value=None)
         repo.update_status = AsyncMock()
         repo.save_trade = AsyncMock()
+        repo.get_trade_by_order_id = AsyncMock(return_value=None)
         return repo
 
     @pytest.fixture

@@ -4,6 +4,10 @@ import time
 import signal
 import os
 import platform
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 def main():
     print("Starting Advanced Trading Bot System...")
