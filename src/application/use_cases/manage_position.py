@@ -44,8 +44,16 @@ class ManagePositionUseCase:
             self.logger.warning(f"🚨 [EMERGENCY] {trade.symbol} hit {emergency_pct*100}% threshold. Hard-closing!")
             try:
                 await adapter.close_position(trade.symbol, side, trade.qty)
-                await self.trade_repo.update_status(trade.id, 'CLOSED', exit_reason='EMERGENCY_SL', exit_price=current_price)
-                await self.notification_service.notify_generic(f"🚨 **EMERGENCY CLOSE** | {trade.symbol} | Price: {current_price}")
+                
+                # Calculate PnL for the closure
+                pnl = 0.0
+                if side == 'BUY':
+                    pnl = (current_price - entry) * trade.qty
+                else:
+                    pnl = (entry - current_price) * trade.qty
+                
+                await self.trade_repo.update_status(trade.id, 'CLOSED', exit_reason='EMERGENCY_SL', exit_price=current_price, pnl=pnl)
+                await self.notification_service.notify_generic(f"🚨 **EMERGENCY CLOSE** | {trade.symbol} | Price: {current_price} | PnL: {pnl:+.2f}")
                 return True
             except Exception as e:
                 self.logger.error(f"Failed emergency close for {trade.symbol}: {e}")
@@ -192,8 +200,16 @@ class ManagePositionUseCase:
                 self.logger.error(f"🚨 [MARKET-RESCUE] {trade.symbol} SL({final_sl}) hit, but exchange order missing. Market closing now!")
                 try:
                     await adapter.close_position(trade.symbol, side, trade.qty)
-                    await self.trade_repo.update_status(trade.id, 'CLOSED', exit_reason='RESCUE_SL', exit_price=current_price)
-                    await self.notification_service.notify_generic(f"🚨 **MARKET RESCUE** | {trade.symbol} | SL {final_sl} hit. Closed at {current_price}")
+                    
+                    # Calculate PnL for the closure
+                    pnl = 0.0
+                    if side == 'BUY':
+                        pnl = (current_price - entry) * trade.qty
+                    else:
+                        pnl = (entry - current_price) * trade.qty
+                        
+                    await self.trade_repo.update_status(trade.id, 'CLOSED', exit_reason='RESCUE_SL', exit_price=current_price, pnl=pnl)
+                    await self.notification_service.notify_generic(f"🚨 **MARKET RESCUE** | {trade.symbol} | SL {final_sl} hit. Closed at {current_price} | PnL: {pnl:+.2f}")
                     return True
                 except Exception as e:
                     self.logger.error(f"Rescue close failed for {trade.symbol}: {e}")

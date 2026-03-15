@@ -232,9 +232,16 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
                 pass
 
     async def close_position(self, symbol: str, side: str, qty: float) -> Dict:
-        await self.cancel_all_orders(symbol)
-        close_side = 'sell' if side.upper() == 'BUY' else 'buy'
-        return await self.create_order(symbol, 'market', close_side, qty, params={'reduceOnly': True})
+        try:
+            await self.cancel_all_orders(symbol)
+            close_side = 'sell' if side.upper() == 'BUY' else 'buy'
+            return await self.create_order(symbol, 'market', close_side, qty, params={'reduceOnly': True})
+        except Exception as e:
+            err = str(e).lower()
+            if "110017" in err or "reduce-only order qty" in err:
+                self.logger.info(f"[{symbol}] Position already closed on exchange (110017). Skipping close.")
+                return {'info': 'already_closed', 'status': 'CLOSED'}
+            raise e
 
     async def cancel_all_orders(self, symbol: str):
         try:

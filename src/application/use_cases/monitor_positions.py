@@ -80,9 +80,9 @@ class MonitorPositionsUseCase:
                 current_time = int(time.time() * 1000)
                 entry_time = trade.entry_time or 0
                 
-                # Grace period of 5 minutes for newly opened positions
-                if current_time - entry_time < 300000:
-                    self.logger.debug(f"Trade {trade.id} ({trade.symbol}) not found on exchange, but within 5m grace period. Skipping ghost check.")
+                # Grace period of 60s for newly opened positions
+                if current_time - entry_time < 60000:
+                    self.logger.debug(f"Trade {trade.id} ({trade.symbol}) not found on exchange, but within 60s grace period. Skipping ghost check.")
                     continue
                     
                 # Ghost trade: closed on exchange but OPEN in DB
@@ -286,51 +286,73 @@ class MonitorPositionsUseCase:
         
         symbol = trade.symbol
         try:
-            # Fetch recent trades (lookback)
-            trades = await adapter.fetch_my_trades(symbol, limit=20)
-            
-            # Find the most recent closing trade for this side
-            target_side = 'sell' if trade.side == 'BUY' else 'buy'
-            close_trade = None
+            # 1. Try to fetch precise closing trade from history using orderID or symbol
+            close_price = None
+            reason = 'SYNC'
             
             # Anchor time: Use entry_time (fallback to 0)
             anchor_time = (trade.entry_time or 0)
             
-            for t in reversed(trades or []):
-                # Simple check: trade must be roughly newer than entry
-                # FIX: Handle missing entry_time gracefully
-                if t.get('timestamp', 0) >= (anchor_time - 5000) and t.get('side', '').lower() == target_side:
-                    close_trade = t
-                    break
+            # Prefer using fetch_order if we have an exchange_order_id
+            order_info = None
+            if trade.exchange_order_id and trade.exchange_order_id != 'None':
+                try:
+                    order_info = await adapter.fetch_order(trade.exchange_order_id, symbol)
+                except Exception:
+                    pass
+            
+            if order_info and order_info.get('status') in ['closed', 'filled']:
+                close_price = float(order_info.get('average') or order_info.get('price') or 0)
+                # If average is missing, we still need to check trades
+            
+            if not close_price:
+                # Fallback: Fetch recent trades
+                trades = await adapter.fetch_my_trades(symbol, limit=20)
+                target_side = 'sell' if trade.side == 'BUY' else 'buy'
+                
+                for t in reversed(trades or []):
+                    # Match by time and side (allowing 5s leeway for entry time)
+                    if t.get('timestamp', 0) >= (anchor_time - 5000) and t.get('side', '').lower() == target_side:
+                        close_price = float(t.get('price', 0))
+                        break
             
             exit_price = trade.entry_price # Default / Fallback
-            reason = 'SYNC'
-            pnl = 0.0
-            pnl_pct = 0.0
-            
-            if close_trade:
-                exit_price = float(close_trade.get('price', exit_price))
-                # Infer reason (simplified logic: if exit < entry for BUY -> SL)
+            if close_price:
+                exit_price = close_price
+                # Infer reason based on price movement
                 if trade.side == 'BUY':
                     reason = 'SL' if exit_price < trade.entry_price else 'TP'
                 else:
                     reason = 'SL' if exit_price > trade.entry_price else 'TP'
-                
-                # Trigger SL Cooldown
-                if reason == 'SL':
-                    self.logger.info(f"[{symbol}] Sync detected SL closure. Applying SL Cooldown.")
-                    await self.cooldown_manager.set_sl_cooldown(ex_name, symbol, profile['id'])
+            else:
+                # 2. Fallback: If exchange history is unreachable or too old, use current ticker
+                try:
+                    ticker = await adapter.fetch_ticker(symbol)
+                    exit_price = float(ticker['last'])
+                    if trade.side == 'BUY':
+                        reason = 'SL' if exit_price < trade.entry_price else 'TP'
+                    else:
+                        reason = 'SL' if exit_price > trade.entry_price else 'TP'
+                except Exception:
+                    exit_price = trade.entry_price
+                    reason = 'SYNC'
+                self.logger.warning(f"⚠️ [GHOST] Could not find history for {symbol} (Order {trade.exchange_order_id}). Using ticker price.")
 
-                # Calculate PnL (Simplified for notifications)
-                qty = float(trade.qty)
-                leverage = float(trade.leverage or 10)
-                if trade.side == 'BUY':
-                    pnl = (exit_price - trade.entry_price) * qty
-                else:
-                    pnl = (trade.entry_price - exit_price) * qty
-                
-                margin = (trade.entry_price * qty) / leverage if (trade.entry_price and qty and leverage) else 1.0
-                pnl_pct = (pnl / margin * 100) if margin > 0 else 0.0
+            # Trigger SL Cooldown if applicable
+            if reason == 'SL':
+                self.logger.info(f"[{symbol}] Sync detected SL closure. Applying SL Cooldown.")
+                await self.cooldown_manager.set_sl_cooldown(ex_name, symbol, profile['id'])
+
+            # Calculate PnL (Source of truth: entry_price, exit_price, qty)
+            qty = float(trade.qty)
+            leverage = float(trade.leverage or 10)
+            if trade.side == 'BUY':
+                pnl = (exit_price - trade.entry_price) * qty
+            else:
+                pnl = (trade.entry_price - exit_price) * qty
+            
+            margin = (trade.entry_price * qty) / leverage if (trade.entry_price and qty and leverage) else 1.0
+            pnl_pct = (pnl / margin * 100) if margin > 0 else 0.0
             
             # Update DB
             await self.trade_repo.update_status(

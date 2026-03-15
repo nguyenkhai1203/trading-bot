@@ -32,10 +32,7 @@ SIMULATION_BALANCE = 100.0  # Starting balance for Paper Trading
 # Symbols to trade
 # Symbols to trade (Perpetual Futures format for Bybit/CCXT)
 # Binance supports broad list
-BINANCE_SYMBOLS = [
-    'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'BNB/USDT', 
-    'BCH/USDT', 'LINK/USDT'
-]
+BINANCE_SYMBOLS = [ ]
 
 # Bybit supports unique gems like HYPE (Updated User Request: Top 20 Stable High-Vol)
 BYBIT_SYMBOLS = [

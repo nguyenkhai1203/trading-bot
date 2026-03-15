@@ -104,7 +104,8 @@ async def create_adapter_from_profile(profile_dict):
             'connector': connector,
             'options': {
                 'defaultType': 'swap',
-                'adjustForTimeDifference': True
+                'adjustForTimeDifference': True,
+                'recvWindow': 10000
             }
         }
         if valid_key and valid_secret:

@@ -20,13 +20,15 @@ class ExecuteTradeUseCase:
                  risk_service: RiskService, 
                  notification_service: NotificationService,
                  cooldown_manager: CooldownManager,
-                 sync_service: Any = None): # Inject sync_service for account-wide checks
+                 sync_service: Any = None,
+                 container: Any = None): # Inject container for profile adapters
         self.trade_repo = trade_repo
         self.adapters = adapters
         self.risk_service = risk_service
         self.notification_service = notification_service
         self.cooldown_manager = cooldown_manager
         self.sync_service = sync_service
+        self.container = container
         self.logger = logging.getLogger("ExecuteTradeUseCase")
 
     async def execute(self, profile: Dict[str, Any], signal: Dict[str, Any]) -> bool:
@@ -42,12 +44,21 @@ class ExecuteTradeUseCase:
         symbol = signal['symbol']
         ex_name = profile.get('exchange', '').upper()
         
-        adapter = self.adapters.get(ex_name)
+        # 0.5. Get Adapter
+        adapter = None
+        if self.container and hasattr(self.container, 'adapters_by_profile'):
+            adapter = self.container.adapters_by_profile.get(profile.get('id'))
+        
         if not adapter:
-            self.logger.error(f"No adapter found for {ex_name}")
+            adapter = self.adapters.get(ex_name) # Fallback
+
+        if not adapter:
+            self.logger.error(f"No adapter found for {ex_name} (Profile {profile.get('id')})")
             return False
 
-        acc_key = getattr(adapter, 'account_key', f"{ex_name}_GLOBAL")
+        # Use profile ID to ensure marginal throttling is account-specific
+        # Format: BYBIT_3 (for profile ID 3)
+        acc_key = f"{ex_name}_{profile['id']}"
 
         # Extract core identifiers early — needed by cooldown checks
         profile_id = profile['id']
@@ -93,60 +104,79 @@ class ExecuteTradeUseCase:
              sl_pct = sl_pct or getattr(config, 'STOP_LOSS_PCT', 0.02)
              tp_pct = tp_pct or getattr(config, 'TAKE_PROFIT_PCT', 0.04)
         
-        # 4. GLOBAL ACCOUNT GUARD (Deduplication across ALL profiles on this exchange)
-        # Check Database for any profile on this exchange
-        all_active = await self.trade_repo.get_active_positions_on_exchange(ex_name)
+        # 4. PROFILE SYMBOL ISOLATION (Strict: 1 position per symbol per profile)
+        # Check Database for any active/pending trade for THIS profile and symbol
+        active_in_profile = await self.trade_repo.get_active_positions(profile_id)
         
         from src.utils.symbol_helper import to_raw_format
         raw_symbol = to_raw_format(symbol)
         
         # Match by normalized (raw) symbol to be robust against "AVAXUSDT" vs "AVAX/USDT:USDT"
-        existing_on_account = next((t for t in all_active if to_raw_format(t.symbol) == raw_symbol), None)
+        existing_in_profile = next((t for t in active_in_profile if to_raw_format(t.symbol) == raw_symbol), None)
         
         # Check Sync Cache for live exchange state (Safety net)
-        if not existing_on_account and self.sync_service:
+        if not existing_in_profile and self.sync_service:
             state = self.sync_service.get_account_state(profile)
             if state:
+                # IMPORTANT: Since we are in a specific Profile, we ONLY care about trades
+                # on this specific account that match our symbol.
+                
                 # 1. Check Positions
                 for p in state.get('positions', []):
-                    if to_raw_format(p.get('symbol')) == raw_symbol and p.get('side', '').upper() == side.upper():
-                        self.logger.info(f"Signal for {symbol} skipped: {side} position already found in exchange cache.")
+                    if to_raw_format(p.get('symbol')) == raw_symbol:
+                        # If it exists on exchange, we treat it as blocking this symbol for this profile
+                        self.logger.info(f"Signal for {symbol} skipped: Profile {profile_id} restricted to 1 active position per symbol.")
                         return False
                 
                 # 2. Check Open Orders
                 for o in state.get('orders', []):
-                    if to_raw_format(o.get('symbol')) == raw_symbol and o.get('side', '').upper() == side.upper():
-                        self.logger.info(f"Signal for {symbol} skipped: {side} open order already found in exchange cache.")
+                    if to_raw_format(o.get('symbol')) == raw_symbol:
+                        self.logger.info(f"Signal for {symbol} skipped: Profile {profile_id} has existing open order for {symbol}.")
                         return False
 
-        if existing_on_account:
+        if existing_in_profile:
+            # GHOST PROTECTION: If DB thinks we have an ACTIVE trade, verify against exchange cache
+            if existing_in_profile.status == 'ACTIVE' and self.sync_service:
+                state = self.sync_service.get_account_state(profile)
+                if state:
+                    # Check if this specific symbol exists in exchange positions
+                    ex_match = next((p for p in state.get('positions', []) if to_raw_format(p.get('symbol')) == raw_symbol), None)
+                    if not ex_match:
+                        self.logger.warning(f"👻 [REVERSAL-GUARD] {symbol} in DB as ACTIVE, but not found on exchange. Marking as CLOSED and proceeding.")
+                        await self.trade_repo.update_status(existing_in_profile.id, 'CLOSED', exit_reason='GHOST_SYNC')
+                        existing_in_profile = None # Allow execution to proceed as a fresh trade
+            
+        if existing_in_profile:
             # Case A: Reversal (Current is BUY, signal is SELL or vice versa)
-            if existing_on_account.side != side.upper():
+            if existing_in_profile.side != side.upper():
                 if conf >= 0.6: # Moderate confidence required for reversal
-                    self.logger.info(f"🔄 **REVERSAL** | {symbol}: Closing {existing_on_account.side} for {side}")
+                    self.logger.info(f"🔄 **REVERSAL** | {symbol}: Closing {existing_in_profile.side} for {side}")
                     
                     # Use adapter to close
-                    await adapter.close_position(symbol, existing_on_account.side, existing_on_account.qty)
+                    close_res = await adapter.close_position(symbol, existing_in_profile.side, existing_in_profile.qty)
+                    # Handle already closed case
+                    if isinstance(close_res, dict) and close_res.get('info') == 'already_closed':
+                        self.logger.info(f"[{symbol}] Reversal bypass: Position already closed on exchange.")
                     
                     # If the trade was ACTIVE, it's a REAL loss/profit. Record it as CLOSED with PnL.
-                    if existing_on_account.status == 'ACTIVE':
+                    if existing_in_profile.status == 'ACTIVE':
                         # Fetch current price for accurate PnL recording
                         try:
                             ticker = await adapter.fetch_ticker(symbol)
                             exit_price = float(ticker['last'])
                         except:
-                            exit_price = existing_on_account.entry_price # Fallback
+                            exit_price = existing_in_profile.entry_price # Fallback
                         
                         # Calculate PnL
-                        qty = float(existing_on_account.qty)
-                        if existing_on_account.side == 'BUY':
-                            pnl = (exit_price - existing_on_account.entry_price) * qty
+                        qty = float(existing_in_profile.qty)
+                        if existing_in_profile.side == 'BUY':
+                            pnl = (exit_price - existing_in_profile.entry_price) * qty
                         else:
-                            pnl = (existing_on_account.entry_price - exit_price) * qty
+                            pnl = (existing_in_profile.entry_price - exit_price) * qty
                         
                         # Update as CLOSED
                         await self.trade_repo.update_status(
-                            existing_on_account.id, 
+                            existing_in_profile.id, 
                             'CLOSED', 
                             exit_reason='REVERSAL', 
                             exit_price=exit_price, 
@@ -155,13 +185,13 @@ class ExecuteTradeUseCase:
                         
                         # Notify proper closure
                         # Leverage might be missing in some models, default to 10
-                        leverage = getattr(existing_on_account, 'leverage', 10)
-                        margin = (existing_on_account.entry_price * qty) / leverage if (existing_on_account.entry_price and qty and leverage) else 1.0
+                        leverage = getattr(existing_in_profile, 'leverage', 10)
+                        margin = (existing_in_profile.entry_price * qty) / leverage if (existing_in_profile.entry_price and qty and leverage) else 1.0
                         pnl_pct = (pnl / margin * 100) if margin > 0 else 0.0
                         
                         is_live = str(profile.get('environment', 'LIVE')).upper() == 'LIVE'
                         await self.notification_service.notify_position_closed(
-                            trade=existing_on_account,
+                            trade=existing_in_profile,
                             exit_price=exit_price,
                             pnl=pnl,
                             pnl_pct=pnl_pct,
@@ -175,17 +205,17 @@ class ExecuteTradeUseCase:
                             await self.cooldown_manager.set_sl_cooldown(ex_name, symbol, profile['id'])
                     else:
                         # For PENDING orders, it's just a cancellation
-                        await self.trade_repo.update_status(existing_on_account.id, 'CANCELLED', exit_reason='REVERSAL')
-                        await self.notification_service.notify_generic(f"🔄 **REVERSAL** | {symbol} | Cancelling PENDING {existing_on_account.side} for {side}")
+                        await self.trade_repo.update_status(existing_in_profile.id, 'CANCELLED', exit_reason='REVERSAL')
+                        await self.notification_service.notify_generic(f"🔄 **REVERSAL** | {symbol} | Cancelling PENDING {existing_in_profile.side} for {side}")
                     
                     # Continue to open new position
                 else:
                     return False
             
             # Case B: Signal Upgrade (Current is PENDING, signal is BETTER)
-            elif existing_on_account.status == 'PENDING':
-                old_conf = existing_on_account.meta.get('signal_confidence') or 0.5
-                old_rr = existing_on_account.meta.get('rr_ratio') or 1.5
+            elif existing_in_profile.status == 'PENDING':
+                old_conf = existing_in_profile.meta.get('signal_confidence') or 0.5
+                old_rr = existing_in_profile.meta.get('rr_ratio') or 1.5
                 new_rr = tp_pct / sl_pct if sl_pct > 0 else 1.0
                 
                 # Logic: Replace if confidence is significantly better (+0.2) OR R/R is better
@@ -193,9 +223,9 @@ class ExecuteTradeUseCase:
                 
                 if is_better:
                     self.logger.info(f"⚖️ **UPGRADE** | {symbol}: Replacing PENDING (Conf {old_conf:.2f}➔{conf:.2f})")
-                    if existing_on_account.exchange_order_id:
-                        await adapter.cancel_order(existing_on_account.exchange_order_id, symbol)
-                    await self.trade_repo.update_status(existing_on_account.id, 'CANCELLED', exit_reason='UPGRADE')
+                    if existing_in_profile.exchange_order_id:
+                        await adapter.cancel_order(existing_in_profile.exchange_order_id, symbol)
+                    await self.trade_repo.update_status(existing_in_profile.id, 'CANCELLED', exit_reason='UPGRADE')
                     # Apply short cooldown to prevent re-entry loop in next heartbeat
                     await self.cooldown_manager.set_sl_cooldown(ex_name, symbol, profile_id, custom_duration=300)
                     # Continue to open new position
@@ -203,18 +233,18 @@ class ExecuteTradeUseCase:
                     return False
             
             # Case C: Passive Upgrade (Current is ACTIVE, signal is BETTER)
-            elif existing_on_account.status == 'ACTIVE':
+            elif existing_in_profile.status == 'ACTIVE':
                 # We don't open a new trade, but we check if we should update SL/TP
-                old_conf = existing_on_account.meta.get('signal_confidence') or 0.5
+                old_conf = existing_in_profile.meta.get('signal_confidence') or 0.5
                 if conf > old_conf + 0.15:
                     self.logger.info(f"📈 **POSITION OPTIMIZATION** | {symbol}: Updating SL/TP from better signal (Conf {old_conf:.2f}➔{conf:.2f})")
-                    sl_price, tp_price = self.risk_service.calculate_sl_tp(existing_on_account.entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)
+                    sl_price, tp_price = self.risk_service.calculate_sl_tp(existing_in_profile.entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)
                     await adapter.set_position_sl_tp(symbol, side, sl=sl_price, tp=tp_price)
                     # Update DB
-                    existing_on_account.sl_price = sl_price
-                    existing_on_account.tp_price = tp_price
-                    existing_on_account.meta['signal_confidence'] = conf
-                    await self.trade_repo.save_trade(existing_on_account)
+                    existing_in_profile.sl_price = sl_price
+                    existing_in_profile.tp_price = tp_price
+                    existing_in_profile.meta['signal_confidence'] = conf
+                    await self.trade_repo.save_trade(existing_in_profile)
                 return False
             else:
                 return False
@@ -359,9 +389,12 @@ class ExecuteTradeUseCase:
                 elif timeframe.endswith('d'): tf_secs = int(timeframe[:-1]) * 86400
                 
                 candle_start = int(time.time() / tf_secs) * tf_secs
-                clean_sym = symbol.replace('/', '').replace('-', '')
+                import re
+                # Handle CCXT unified format (e.g. DOT/USDT:USDT -> DOTUSDT)
+                base_sym = symbol.split(':')[0]
+                clean_sym = re.sub(r'[^a-zA-Z0-9]', '', base_sym)
                 
-                # Format: BMS_BTCUSDT_B_15m_1710000000 (Bybit max length: 36)
+                # Format: BMS_DOTUSDT_B_15m_1710000000 (Bybit max length: 36)
                 client_oid = f"BMS_{clean_sym}_{side.upper()[:1]}_{timeframe}_{candle_start}"
 
                 params = {
@@ -381,9 +414,6 @@ class ExecuteTradeUseCase:
                     
                     if not tpsl_attached and (sl_price or tp_price):
                         self.logger.info(f"[{symbol}] Attachment not supported. Placing separate SL/TP orders...")
-                        # For market orders, we can place them now. 
-                        # For limit orders, OrderExecutor (if used) would handle fill monitoring, 
-                        # but ExecuteTradeUseCase is more manual.
                         try:
                             # Note: place_stop_orders now supports is_pending which we set if order_type is limit
                             ids = await adapter.place_stop_orders(symbol, side, qty, sl=sl_price, tp=tp_price, is_pending=(order_type == 'limit'))
@@ -393,9 +423,10 @@ class ExecuteTradeUseCase:
                             self.logger.error(f"Fallback SL/TP placement failed: {pso_err}")
                 except Exception as api_err:
                     err_str = str(api_err).lower()
-                    if "already exists" in err_str or "10002" in err_str:
+                    # 10002: Order already exists, 110072: OrderLinkedID is duplicate
+                    if "already exists" in err_str or "110072" in err_str or "10002" in err_str:
                         self.logger.warning(f"[{symbol}] Idempotency Key saved us! Order {client_oid} already exists on Bybit. Skipping duplicate creation.")
-                        return False
+                        return True # Return True (treated as success) to skip duplicate logic but continue flow
                     raise api_err # Re-raise to trigger virtual trade tracking/error handling
             else:
                 sl_price, tp_price = self.risk_service.calculate_sl_tp(entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)

@@ -42,6 +42,27 @@ class TradeOrchestrator:
                     self.logger.info("🛑 Stop signal file detected. Shutting down gracefully...")
                     self.running = False
                     break
+
+                # [PHASE 0] Periodic Maintenance (Configs & Time)
+                now = time.time()
+                if not hasattr(self, '_last_maint_time'): self._last_maint_time = 0
+                if now - self._last_maint_time > 3600: # Every 1 hour
+                    # Refresh Config Cache
+                    try:
+                        from src.strategy import WeightedScoringStrategy
+                        all_configs = await self.container.db_manager.get_all_strategy_configs()
+                        WeightedScoringStrategy.update_cache(all_configs)
+                        self.logger.info(f"🔄 Strategy config cache refreshed ({len(all_configs)} configs).")
+                    except Exception as e:
+                        self.logger.error(f"Failed to refresh strategy cache: {e}")
+                    
+                    # Sync Time
+                    tasks = [a.sync_time() for a in self.container.adapters_by_profile.values()]
+                    if tasks:
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                        self.logger.info("⏱️ Time synchronized across adapters.")
+                    
+                    self._last_maint_time = now
                 
                 # [PHASE 9] Daily Loss Circuit Breaker
                 if await self._check_daily_circuit_breaker():
@@ -118,10 +139,13 @@ class TradeOrchestrator:
         for profile in self.container.sync_service.profiles:
             symbols = config.BINANCE_SYMBOLS if profile['exchange'].upper() == 'BINANCE' else config.BYBIT_SYMBOLS
             tasks = [self._get_best_signal_guarded(profile, s) for s in symbols]
-            signals = await asyncio.gather(*tasks)
-            for sig in signals:
-                if sig and sig.get('side') != 'SKIP':
-                    all_signals.append((profile, sig))
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in results:
+                if isinstance(res, Exception):
+                    self.logger.error(f"Error evaluating signal: {res}")
+                    continue
+                if res and res.get('side') != 'SKIP':
+                    all_signals.append((profile, res))
 
         if not all_signals:
             return
@@ -219,30 +243,38 @@ class TradeOrchestrator:
 
     async def _check_daily_circuit_breaker(self) -> bool:
         """Checks if today's realized loss exceeds the safety threshold (5%)."""
-        total_loss = 0.0
+        total_pnl = 0.0
+        total_equity = 0.0
+        
         for profile in self.container.sync_service.profiles:
             try:
-                history = await self.container.trade_repo.get_trade_history(profile['id'], limit=200)
+                profile_id = profile['id']
+                history = await self.container.trade_repo.get_trade_history(profile_id, limit=200)
                 today_start = int(time.time() // 86400 * 86400 * 1000)
                 today_trades = [t for t in history if (getattr(t, 'exit_time', None) or 0) >= today_start]
                 
-                for t in today_trades:
-                    pnl = t.pnl if hasattr(t, 'pnl') else 0.0
-                    total_loss += pnl if pnl is not None else 0.0
-            except Exception as e:
-                self.logger.error(f"Error calculating PnL for circuit breaker: {e}")
-
-        if total_loss < 0:
-            try:
-                ex_name = self.container.sync_service.profiles[0]['exchange'].upper()
-                adapter = self.container.adapters.get(ex_name)
-                balance_data = await adapter.fetch_balance()
-                balance = float(balance_data.get('total', {}).get('USDT', 100.0))
-            except:
-                balance = 100.0
+                profile_loss = sum(t.pnl if hasattr(t, 'pnl') and t.pnl is not None else 0.0 for t in today_trades)
+                total_pnl += profile_loss
                 
-            loss_pct = abs(total_loss) / balance
-            if loss_pct >= 0.05: # 5% Daily Loss Limit
+                # Fetch equity using profile-specific adapter
+                adapter = self.container.adapters_by_profile.get(profile_id)
+                if adapter:
+                    balance_data = await adapter.fetch_balance()
+                    # For Bybit Unified, totalEquity is the most accurate metric
+                    if 'info' in balance_data and 'result' in balance_data['info']:
+                        try:
+                            equity = float(balance_data['info']['result']['list'][0]['totalEquity'])
+                        except:
+                            equity = float(balance_data.get('total', {}).get('USDT', 0.0))
+                    else:
+                        equity = float(balance_data.get('total', {}).get('USDT', 0.0))
+                    total_equity += equity
+            except Exception as e:
+                self.logger.error(f"Error calculating stats for circuit breaker: {e}")
+
+        if total_pnl < 0 and total_equity > 0:
+            loss_pct = abs(total_pnl) / total_equity
+            if loss_pct >= config.DAILY_LOSS_LIMIT_PCT: # 5% Daily Loss Limit
                 return True
         return False
 
