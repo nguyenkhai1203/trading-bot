@@ -196,7 +196,7 @@ class MonitorPositionsUseCase:
         Adopts exchange targets if DB is invalid or missing.
         """
         ex_name = profile['exchange'].upper()
-        adapter = self.sync_service.adapters.get(ex_name)
+        adapter = self.sync_service.adapters.get(profile.get('id'))
         if not adapter: return
 
         # Helper to validate if SL/TP are logical (Not Inverted)
@@ -308,7 +308,7 @@ class MonitorPositionsUseCase:
         Fetches trade history to find the exit price/reason and updates DB.
         """
         ex_name = profile['exchange'].upper()
-        adapter = self.sync_service.adapters.get(ex_name)
+        adapter = self.sync_service.adapters.get(profile.get('id'))
         if not adapter: return
         
         symbol = trade.symbol
@@ -418,7 +418,7 @@ class MonitorPositionsUseCase:
     async def _monitor_virtual_trade(self, profile: Dict[str, Any], trade: Any):
         """Monitors a virtual trade by checking ticker prices manually."""
         ex_name = profile['exchange'].upper()
-        adapter = self.sync_service.adapters.get(ex_name)
+        adapter = self.sync_service.adapters.get(profile.get('id'))
         if not adapter: return
 
         try:
@@ -488,8 +488,9 @@ class MonitorPositionsUseCase:
         if not pending_trades:
             return
 
+        profile_id = profile.get('id')
         ex_name = profile['exchange'].upper()
-        adapter = self.sync_service.adapters.get(ex_name)
+        adapter = self.sync_service.adapters.get(profile_id)
         if not adapter: return
 
         # Get current state to see if orders still exist
@@ -602,7 +603,8 @@ class MonitorPositionsUseCase:
             
             self.logger.warning(f"⚔️ [DUPE-CLEANUP] Found {len(dupes)} {key[1]} orders for {key[0]}. Winner: {winner['order']['id']} (Score: {winner['score']:.2f})")
             
-            adapter = self.sync_service.adapters.get(profile['exchange'].upper())
+            profile_id = profile.get('id')
+            adapter = self.sync_service.adapters.get(profile_id)
             if not adapter: continue
             
             for loose in loosers:

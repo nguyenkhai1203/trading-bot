@@ -79,6 +79,12 @@ class Container:
         all_profiles = await self.profile_repository.get_active_profiles()
         profiles = [p for p in all_profiles if p['id'] != 0]
         active_exchanges = set(p['exchange'].upper() for p in profiles)
+        if profiles:
+            self.logger.info(f"Loaded {len(profiles)} active profiles:")
+            for p in profiles:
+                self.logger.info(f"  - Profile {p['id']} | {p['name']} | {p['exchange']} | active={p.get('is_active', 1)}")
+        else:
+            self.logger.warning("No active profiles found in DB. Bot has nothing to trade.")
 
         # 4. Infrastructure Adapters (Filtered)
         full_adapters_map = get_active_exchanges_map()
@@ -139,7 +145,7 @@ class Container:
 
         self.manage_position_use_case = ManagePositionUseCase(
             self.trade_repo,
-            self.adapters,
+            self.adapters_by_profile, # Pass profile-specific adapters
             self.notification_service
         )
         

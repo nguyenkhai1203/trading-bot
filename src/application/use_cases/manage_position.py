@@ -25,10 +25,14 @@ class ManagePositionUseCase:
         """
         Calculates and applies Emergency Close, ATR Trailing, and Profit Lock.
         """
-        ex_name = profile['exchange'].upper()
-        adapter = self.adapters.get(ex_name)
+        profile_id = profile.get('id')
+        ex_name = profile.get('exchange', 'UNKNOWN').upper()
+        
+        # 0. Get Adapter (Priority: Profile-ID, Fallback: Exchange Name)
+        adapter = self.adapters.get(profile_id) or self.adapters.get(ex_name)
+        
         if not adapter:
-            self.logger.error(f"Adapter not found for exchange {ex_name}")
+            self.logger.error(f"Adapter not found for profile {profile_id} or exchange {ex_name}")
             return False
 
         # 0. Emergency SLTP Guardian (8% Hard-Close)
