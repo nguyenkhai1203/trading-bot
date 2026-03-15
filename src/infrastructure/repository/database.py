@@ -362,22 +362,6 @@ class DataManager:
                 result.append(d)
             return result
 
-    async def get_active_positions_on_exchange(self, exchange_name: str) -> List[dict]:
-        """Fetch all ACTIVE or OPENED positions across ALL profiles for a specific exchange."""
-        db = await self.get_db()
-        db.row_factory = aiosqlite.Row
-        async with db.execute("""
-            SELECT * FROM trades 
-            WHERE exchange = ? AND status IN ('ACTIVE', 'OPENED', 'PENDING')
-        """, (exchange_name.upper(),)) as cursor:
-            rows = await cursor.fetchall()
-            result = []
-            for r in rows:
-                d = dict(r)
-                if d.get('meta_json'):
-                    d['meta'] = json.loads(d['meta_json'])
-                result.append(d)
-            return result
 
     async def insert_trade_history(self, trade_data: dict) -> int:
         """Alias for save_position when inserting past trades."""

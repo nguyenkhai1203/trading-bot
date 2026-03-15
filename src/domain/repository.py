@@ -13,10 +13,6 @@ class ITradeRepository(ABC):
         """Fetch all ACTIVE or OPENED positions for a specific profile."""
         pass
 
-    @abstractmethod
-    async def get_active_positions_on_exchange(self, exchange_name: str) -> List[Trade]:
-        """Fetch all ACTIVE or OPENED positions across ALL profiles for a specific exchange."""
-        pass
 
     @abstractmethod
     async def get_trade_history(self, profile_id: int, limit: int = 100) -> List[Trade]:
@@ -26,6 +22,16 @@ class ITradeRepository(ABC):
     @abstractmethod
     async def update_status(self, trade_id: int, status: str, **kwargs) -> None:
         """Atomically update trade status and details."""
+        pass
+
+    @abstractmethod
+    async def get_all_active_trade_profile_ids(self) -> List[int]:
+        """Fetch all profile IDs that currently have non-closed trades."""
+        pass
+
+    @abstractmethod
+    async def get_profile_by_id(self, profile_id: int) -> Optional[Dict[str, Any]]:
+        """Fetch profile metadata directly."""
         pass
 
 class IProfileRepository(ABC):

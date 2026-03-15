@@ -28,48 +28,7 @@ class EvaluateStrategyUseCase:
             return None
 
         # 3. Data Freshness Guard
-        import time
-        import pandas as pd
-        import numpy as np
-
-        # Determine last candle timestamp
-        try:
-            raw_ts = df.iloc[-1]['timestamp']
-            last_ts = 0
-            
-            # Robust conversion to milliseconds
-            if isinstance(raw_ts, pd.Timestamp):
-                last_ts = int(raw_ts.timestamp() * 1000)
-            elif isinstance(raw_ts, np.datetime64):
-                # Convert ns to ms
-                last_ts = int(raw_ts.astype('datetime64[ms]').astype(int))
-            elif hasattr(raw_ts, 'timestamp'):
-                last_ts = int(raw_ts.timestamp() * 1000)
-            else:
-                try:
-                    val = float(raw_ts)
-                    # If it's in seconds (e.g. 1.7e9), convert to ms
-                    last_ts = int(val * 1000) if val < 1e11 else int(val)
-                except:
-                    last_ts = 0
-        except Exception as e:
-            self.logger.error(f"Error extracting timestamp: {e}")
-            last_ts = 0
-        
-        now_ts = int(time.time() * 1000)
-        
-        # Calculate max allowable age based on timeframe (allow 3 candles lag)
-        tf_ms = 3600000 # Default 1h
-        if str(timeframe).endswith('m'): tf_ms = int(str(timeframe)[:-1]) * 60000
-        elif str(timeframe).endswith('h'): tf_ms = int(str(timeframe)[:-1]) * 3600000
-        elif str(timeframe).endswith('d'): tf_ms = int(str(timeframe)[:-1]) * 86400000
-        
-        if (now_ts - last_ts) > (tf_ms * 3):
-            age_mins = int((now_ts - last_ts) / 60000)
-            self.logger.warning(
-                f"[{symbol}:{timeframe}] STALE DATA DETECTED ({age_mins}m old). "
-                f"last_ts={last_ts}, now_ts={now_ts}, raw_ts={raw_ts} (type:{type(raw_ts)}). Skipping evaluation."
-            )
+        if not self._is_data_fresh(df, timeframe, symbol):
             return None
 
         # 2. Extract last row
@@ -94,3 +53,38 @@ class EvaluateStrategyUseCase:
 
         signal['last_row_summary'] = last_row.to_dict()
         return signal
+    def _is_data_fresh(self, df: pd.DataFrame, timeframe: str, symbol: str) -> bool:
+        """Helper to verify if the latest candle in DataFrame is recent enough."""
+        try:
+            import time
+            import numpy as np
+            raw_ts = df.iloc[-1]['timestamp']
+            
+            if isinstance(raw_ts, pd.Timestamp):
+                last_ts = int(raw_ts.timestamp() * 1000)
+            elif isinstance(raw_ts, np.datetime64):
+                last_ts = int(raw_ts.astype('datetime64[ms]').astype(int))
+            else:
+                last_ts = int(float(raw_ts) * 1000) if float(raw_ts) < 1e11 else int(raw_ts)
+                
+            now_ts = int(time.time() * 1000)
+            
+            # Calculate max allowable age (allow 3 candles lag)
+            tf_ms = self._get_timeframe_ms(timeframe)
+            
+            if (now_ts - last_ts) > (tf_ms * 3):
+                age_mins = int((now_ts - last_ts) / 60000)
+                self.logger.warning(f"[{symbol}:{timeframe}] STALE DATA DETECTED ({age_mins}m old). Skipping evaluation.")
+                return False
+            return True
+        except Exception as e:
+            self.logger.error(f"Freshness check error for {symbol}: {e}")
+            return False
+
+    def _get_timeframe_ms(self, timeframe: str) -> int:
+        """Convert timeframe string to milliseconds."""
+        tf_str = str(timeframe)
+        if tf_str.endswith('m'): return int(tf_str[:-1]) * 60000
+        if tf_str.endswith('h'): return int(tf_str[:-1]) * 3600000
+        if tf_str.endswith('d'): return int(tf_str[:-1]) * 86400000
+        return 3600000 # Default 1h

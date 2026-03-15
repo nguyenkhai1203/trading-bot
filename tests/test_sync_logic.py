@@ -271,6 +271,8 @@ class TestMonitorPositionsUseCaseIntegration:
         repo.save_trade = AsyncMock(return_value=1)
         repo.update_status = AsyncMock()
         repo.get_active_positions = AsyncMock(return_value=[])
+        repo.get_all_active_trade_profile_ids = AsyncMock(return_value=[])
+        repo.get_profile_by_id = AsyncMock(return_value=None)
         return repo
 
     @pytest.fixture

@@ -30,15 +30,19 @@ class AccountSyncService:
         for p in self.profiles:
             key = self._get_account_key(p)
             if key not in unique_accounts:
-                # Find matching adapter for this profile's exchange
-                ex_name = p.get('exchange', '').upper()
-                adapter = self.adapters.get(ex_name)
+                # Prefer profile-specific adapter (by profile_id), fallback to exchange-level adapter
+                adapter = self.adapters.get(p.get('id'))
                 if not adapter:
+                    ex_name = p.get('exchange', '').upper()
+                    adapter = self.adapters.get(ex_name)
+                if not adapter:
+                    self.logger.warning(f"No adapter for profile {p.get('id')} ({p.get('name')}) while sync grouping.")
                     continue
                 unique_accounts[key] = {'adapter': adapter, 'profiles': []}
             unique_accounts[key]['profiles'].append(p)
 
         # 2. Fetch data for each unique account concurrently
+        self.logger.info(f"Syncing {len(unique_accounts)} unique accounts from {len(self.profiles)} profiles.")
         tasks = []
         for account_key, data in unique_accounts.items():
             tasks.append(self._sync_account(account_key, data['adapter']))

@@ -41,13 +41,26 @@ class BaseAdapter(ABC):
         """Standardize exchange status to internal DB status."""
         if not raw_status: return 'OPENED'
         s = raw_status.lower()
-        if s in ['open', 'untouched', 'new', 'partially_filled', 'working']:
+        if s in ['open', 'untouched', 'new', 'partially_filled', 'working', 'unfilled']:
             return 'OPENED'
         if s in ['closed', 'filled']:
             return 'CLOSED'
-        if s in ['canceled', 'cancelled', 'expired', 'rejected']:
+        if s in ['canceled', 'cancelled', 'expired', 'rejected', 'deactivated']:
             return 'CANCELLED'
         return 'OPENED'
+
+    def normalize_symbol(self, raw_symbol: str) -> str:
+        """Standardize raw exchange symbol (e.g. BTCUSDT) to unified format (e.g. BTC/USDT:USDT)."""
+        if not raw_symbol: return ""
+        # If it's already unified, return as is
+        if '/' in raw_symbol and ':' in raw_symbol:
+            return raw_symbol
+        
+        # Heuristic for perpetuals (Bybit/Binance default)
+        if raw_symbol.endswith('USDT'):
+            return f"{raw_symbol[:-4]}/USDT:USDT"
+        
+        return raw_symbol
 
     @abstractmethod
     async def sync_time(self) -> bool:

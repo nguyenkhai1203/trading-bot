@@ -42,15 +42,15 @@ class BinanceAdapter(BaseExchangeClient, BaseAdapter):
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             all_orders = []
-            if isinstance(results[0], list):
-                for o in results[0]:
-                    o['status'] = self.normalize_status(o.get('status'))
-                    all_orders.append(o)
-            if isinstance(results[1], list):
-                for o in results[1]:
-                    o['is_algo'] = True
-                    o['status'] = self.normalize_status(o.get('algoStatus') or o.get('status'))
-                    all_orders.append(o)
+            for o in results[0] if isinstance(results[0], list) else []:
+                o['status'] = self.normalize_status(o.get('status'))
+                o['symbol'] = self.normalize_symbol(o.get('symbol'))
+                all_orders.append(o)
+            for o in results[1] if isinstance(results[1], list) else []:
+                o['is_algo'] = True
+                o['status'] = self.normalize_status(o.get('algoStatus') or o.get('status'))
+                o['symbol'] = self.normalize_symbol(o.get('symbol'))
+                all_orders.append(o)
             return all_orders
         except:
             return []

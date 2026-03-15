@@ -413,6 +413,8 @@ class TestExecuteTradeUseCase:
         repo.update_status = AsyncMock()
         repo.get_active_positions = AsyncMock(return_value=[])
         repo.get_active_positions_on_exchange = AsyncMock(return_value=[])
+        repo.get_all_active_trade_profile_ids = AsyncMock(return_value=[])
+        repo.get_profile_by_id = AsyncMock(return_value=None)
         return repo
 
     @pytest.fixture
@@ -546,7 +548,7 @@ class TestExecuteTradeUseCase:
         mock_trade.entry_price = 50000.0
         mock_trade.leverage = 10
         mock_trade.entry_time = 123456789
-        mock_repo.get_active_positions_on_exchange.return_value = [mock_trade]
+        mock_repo.get_active_positions.return_value = [mock_trade]
         
         # Mock ticker for exit price
         mock_adapter.fetch_ticker.return_value = {'last': 49000.0} # $1000 loss
@@ -577,7 +579,7 @@ class TestExecuteTradeUseCase:
         mock_trade.side = "BUY"
         mock_trade.id = 456
         mock_trade.status = 'PENDING'
-        mock_repo.get_active_positions_on_exchange.return_value = [mock_trade]
+        mock_repo.get_active_positions.return_value = [mock_trade]
         
         await use_case.execute(profile, signal)
         
@@ -606,6 +608,8 @@ class TestMonitorPositionsUseCase:
         repo.get_active_positions = AsyncMock(return_value=[])
         repo.update_status = AsyncMock()
         repo.save_trade = AsyncMock()
+        repo.get_all_active_trade_profile_ids = AsyncMock(return_value=[])
+        repo.get_profile_by_id = AsyncMock(return_value=None)
         return repo
 
     @pytest.fixture

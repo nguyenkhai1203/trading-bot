@@ -75,10 +75,7 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             all_orders = std + cond
             for o in all_orders:
                 o['status'] = self.normalize_status(o.get('status'))
-                # Normalize symbol to unified format 
-                raw_sym = o.get('symbol', '')
-                if raw_sym and '/' not in raw_sym:
-                    o['symbol'] = f"{raw_sym[:-4]}/USDT:USDT" if raw_sym.endswith('USDT') else raw_sym
+                o['symbol'] = self.normalize_symbol(o.get('symbol'))
             return all_orders
         except Exception as e:
             self.logger.error(f"Fetch open orders failed: {e}")
@@ -94,9 +91,7 @@ class BybitAdapter(BaseExchangeClient, BaseAdapter):
             for p in raw_list:
                 size = float(p.get('size', 0))
                 if size > 0:
-                    raw_sym = p.get('symbol', '')
-                    # Normalize raw symbol (e.g. DOTUSDT) to CCXT standard (e.g. DOT/USDT:USDT)
-                    norm_sym = f"{raw_sym[:-4]}/USDT:USDT" if raw_sym.endswith("USDT") else raw_sym
+                    norm_sym = self.normalize_symbol(p.get('symbol', ''))
                     
                     active.append({
                         'symbol': norm_sym,

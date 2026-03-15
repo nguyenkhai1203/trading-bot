@@ -6,20 +6,15 @@ from src.application.trading.trade_orchestrator import TradeOrchestrator
 from src.infrastructure.adapters.bybit_adapter import BybitAdapter
 from src.domain.models import Trade
 
-def run_async(coro):
-    """Helper to run async code in a temporary loop."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
 
 class TestBMSv21Holistic:
     @pytest.fixture
     def mock_repo(self):
         repo = MagicMock()
+        repo.get_active_positions = AsyncMock(return_value=[])
         repo.get_active_positions_on_exchange = AsyncMock(return_value=[])
+        repo.get_all_active_trade_profile_ids = AsyncMock(return_value=[])
+        repo.get_profile_by_id = AsyncMock(return_value=None)
         repo.update_status = AsyncMock()
         repo.save_trade = AsyncMock()
         return repo
@@ -72,7 +67,8 @@ class TestBMSv21Holistic:
             sync_service=mock_sync_service
         )
 
-    def test_global_position_guard_blocks_duplicate(self, execute_use_case, mock_repo):
+    @pytest.mark.asyncio
+    async def test_global_position_guard_blocks_duplicate(self, execute_use_case, mock_repo):
         """Verify that a trade is blocked if another profile already has an active trade on the same exchange."""
         profile = {'id': 2, 'exchange': 'BYBIT'}
         signal = {'symbol': 'BTC/USDT', 'side': 'BUY', 'confidence': 0.7, 'sl_pct': 0.02, 'tp_pct': 0.05}
@@ -82,14 +78,15 @@ class TestBMSv21Holistic:
             id=100, profile_id=1, symbol='BTC/USDT', side='BUY', 
             qty=0.1, entry_price=50000, status='ACTIVE', exchange='BYBIT'
         )
-        mock_repo.get_active_positions_on_exchange.return_value = [existing_trade]
+        mock_repo.get_active_positions.return_value = [existing_trade]
         
-        result = run_async(execute_use_case.execute(profile, signal))
+        result = await execute_use_case.execute(profile, signal)
         
         assert result is False
         execute_use_case.adapters['BYBIT'].create_order.assert_not_called()
 
-    def test_signal_upgrade_replaces_pending(self, execute_use_case, mock_repo, mock_adapter):
+    @pytest.mark.asyncio
+    async def test_signal_upgrade_replaces_pending(self, execute_use_case, mock_repo, mock_adapter):
         """Verify that a higher confidence signal replaces a PENDING order."""
         profile = {'id': 1, 'exchange': 'BYBIT'}
         new_signal = {'symbol': 'BTC/USDT', 'side': 'BUY', 'confidence': 0.8, 'sl_pct': 0.01, 'tp_pct': 0.1, 'support_level': 49500.0, 'Support': 49500.0}
@@ -101,16 +98,17 @@ class TestBMSv21Holistic:
             exchange_order_id='old_oid',
             meta={'signal_confidence': 0.5, 'rr_ratio': 1.5}
         )
-        mock_repo.get_active_positions_on_exchange.return_value = [pending_trade]
+        mock_repo.get_active_positions.return_value = [pending_trade]
         
-        result = run_async(execute_use_case.execute(profile, new_signal))
+        result = await execute_use_case.execute(profile, new_signal)
         
         # Verify upgrade logic
         mock_adapter.cancel_order.assert_called_once_with('old_oid', 'BTC/USDT')
         mock_repo.update_status.assert_called_with(100, 'CANCELLED', exit_reason='UPGRADE')
         assert result is True # Should proceed to place new order
 
-    def test_position_optimization_updates_active_sl_tp(self, execute_use_case, mock_repo, mock_adapter):
+    @pytest.mark.asyncio
+    async def test_position_optimization_updates_active_sl_tp(self, execute_use_case, mock_repo, mock_adapter, mock_sync_service):
         """Verify that a better signal for an ACTIVE trade updates SL/TP instead of opening new."""
         profile = {'id': 1, 'exchange': 'BYBIT'}
         better_signal = {'symbol': 'BTC/USDT', 'side': 'BUY', 'confidence': 0.9, 'sl_pct': 0.01, 'tp_pct': 0.08}
@@ -121,18 +119,25 @@ class TestBMSv21Holistic:
             qty=0.1, entry_price=50000, status='ACTIVE', exchange='BYBIT',
             meta={'signal_confidence': 0.6}
         )
-        mock_repo.get_active_positions_on_exchange.return_value = [active_trade]
+        mock_repo.get_active_positions.return_value = [active_trade]
         
         # Need to ensure risk_service returns expected values
         execute_use_case.risk_service.calculate_sl_tp.return_value = (49500.0, 54000.0)
         
-        result = run_async(execute_use_case.execute(profile, better_signal))
+        # Mock exchange state: needs to HAVE the position for optimization to happen (Ghost Protection)
+        mock_sync_service.get_account_state.return_value = {
+            'positions': [{'symbol': 'BTCUSDT', 'side': 'BUY', 'entryPrice': 50000.0}],
+            'orders': []
+        }
+        
+        result = await execute_use_case.execute(profile, better_signal)
         
         assert result is False # We optimize, don't re-enter
         mock_adapter.set_position_sl_tp.assert_called_once_with('BTC/USDT', 'BUY', sl=49500.0, tp=54000.0)
         mock_repo.save_trade.assert_called_once()
 
-    def test_atomic_orchestration_deduplicates_signals(self, mock_sync_service):
+    @pytest.mark.asyncio
+    async def test_atomic_orchestration_deduplicates_signals(self, mock_sync_service):
         """Verify that TradeOrchestrator picks only one winner across profiles."""
         container = MagicMock()
         container.sync_service = mock_sync_service
@@ -152,7 +157,7 @@ class TestBMSv21Holistic:
             mock_config.BYBIT_SYMBOLS = ['BTC/USDT']
             mock_config.TRADING_TIMEFRAMES = ['1h', '4h']
             
-            run_async(orch._process_all_entries())
+            await orch._process_all_entries()
             
         # Verify execute was called EXACTLY ONCE globally
         assert container.execute_trade_use_case.execute.call_count == 1
@@ -166,7 +171,8 @@ class TestBMSv21Holistic:
         assert adapter._get_bybit_symbol('FLOW/USDT:USDT') == 'FLOWUSDT'
         assert adapter._get_bybit_symbol('BTCUSDT') == 'BTCUSDT'
 
-    def test_available_balance_guard_blocks_trade(self, execute_use_case, mock_repo, mock_adapter):
+    @pytest.mark.asyncio
+    async def test_available_balance_guard_blocks_trade(self, execute_use_case, mock_repo, mock_adapter):
         """Verify that a trade is blocked if there's not enough available balance + 10% buffer."""
         profile = {'id': 1, 'exchange': 'BYBIT'}
         # high confidence -> cost_usdt = 8.0 -> required_margin = 8.8
@@ -175,7 +181,7 @@ class TestBMSv21Holistic:
         # Mock low balance by updating the return_value
         mock_adapter.fetch_balance.return_value = {'USDT': {'free': 5.0, 'total': 10.0}}
         
-        result = run_async(execute_use_case.execute(profile, signal))
+        result = await execute_use_case.execute(profile, signal)
         
         assert result is False
         mock_adapter.create_order.assert_not_called()

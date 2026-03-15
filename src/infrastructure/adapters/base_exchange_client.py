@@ -139,7 +139,8 @@ class BaseExchangeClient:
                     # Log non-timestamp errors or max retries reached
                     if not is_timestamp_error:
                         # Handle Rate Limit (429) / 418 / 403 or Bybit 10006 specifically
-                        if any(x in error_msg for x in ["429", "418", "403", "too many requests", "10006"]):
+                        # EXCLUDE Bybit 10001 (zero position) from backoff as it's a terminal state error
+                        if any(x in error_msg for x in ["429", "418", "403", "too many requests", "10006"]) and "10001" not in error_msg:
                             wait_s = (attempt + 1) * 5 # Backoff: 5s, 10s, 15s
                             self.logger.warning(f"[RATE LIMIT/403] backing off for {wait_s}s... Error: {error_msg[:100]}")
                             await asyncio.sleep(wait_s)
@@ -151,9 +152,10 @@ class BaseExchangeClient:
                         silence_errors = [
                             "side cannot be changed",
                             "last 500 orders", "acknowledged", "already", "not modified",
-                            "-2011", "-2013", "order does not exist",
+                            "-2011", "-2013", "order does not exist", "already passed",
                             "fetchpositionmode", "is not supported", "missing some parameters",
-                            "can not set tp/sl/ts for zero position", "10001"
+                            "can not set tp/sl/ts for zero position", "10001", "110017",
+                            "reduce-only order qty"
                         ]
                         if not any(s.lower() in error_msg for s in silence_errors):
                             self.logger.error(f"[API ERROR] {type(e).__name__} in {api_call.__name__} for {args}: {str(e)[:250]}")
