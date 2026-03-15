@@ -340,11 +340,14 @@ async def get_summary_message(period: str) -> str:
             status = t.get('status', '').upper()
             exit_reason = t.get('exit_reason', '').upper()
             
-            # Skip cancelled / pending trades for win rate and PnL calculation
-            if status == 'CANCELLED' or exit_reason in ['CANCELLED', 'EVICTED', 'REVERSAL', 'SYNC_ERR']:
+            t_pnl = float(t.get('pnl') or 0)
+            
+            # Skip cancelled / technical adjustment trades with 0 PnL
+            # REVERSAL trades with PnL are now included
+            is_technical = exit_reason in ['CANCELLED', 'EVICTED', 'SYNC_ERR', 'SYNC', 'GHOST_SYNC'] or not exit_reason
+            if status == 'CANCELLED' or (is_technical and t_pnl == 0):
                 continue
                 
-            t_pnl = float(t.get('pnl') or 0)
             t_entry = float(t.get('entry_price') or 0)
             t_qty = float(t.get('qty') or 0)
             t_leverage = float(t.get('leverage') or 1)
@@ -367,7 +370,8 @@ async def get_summary_message(period: str) -> str:
         
         lines = [
             title, "─" * 20,
-            f"📊 Total Executed Trades: {valid_trades_count} (Out of {total} signals)",
+            f"👤 Profiles: {', '.join([p['name'] for p in profiles])}",
+            f"📊 Total Executed Trades: {valid_trades_count} (Signal count: {total})",
             f"✅ Wins: {wins} | ❌ Losses: {valid_trades_count - wins}",
             f"🎯 Win Rate: *{win_rate:.1f}%*",
             f"💰 Net P&L: *{total_usd:+.2f}* (Avg: {avg_pnl_pct:+.2f}% / trade)",
