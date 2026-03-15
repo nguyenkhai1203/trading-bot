@@ -61,20 +61,16 @@ class MonitorPositionsUseCase:
             await self._monitor_profile(profile, db_trades)
             await self._manage_pending_trades(profile, db_trades)
 
-    def _get_adapter(self, profile: Dict[str, Any]) -> Optional[BaseAdapter]:
-        """Robustly retrieve adapter by profile_id or exchange name (fallback for tests)."""
-        # 1. Try by profile ID (standard for live)
-        adapter = self.sync_service.adapters.get(profile.get('id'))
-        if not adapter:
-            # 2. Try by exchange name (fallback for tests)
-            ex_name = str(profile.get('exchange', '')).upper()
-            adapter = self.sync_service.adapters.get(ex_name)
-        return adapter
-
     async def _monitor_profile(self, profile: Dict[str, Any], db_trades: List[Any]):
         # 1. Get cached state for this profile's account
         state = self.sync_service.get_account_state(profile)
         if not state:
+            return
+
+        # 2. Get adapter for this profile
+        adapter = self.sync_service.adapters.get(profile.get('id')) or self.sync_service.adapters.get(profile.get('exchange', '').upper())
+        if not adapter:
+            self.logger.error(f"No adapter found for profile {profile.get('id')}")
             return
 
         exchange_positions = state.get('positions', [])
@@ -141,6 +137,36 @@ class MonitorPositionsUseCase:
                      and t.side.upper() == ep.get('side', '').upper()),
                     None
                 )
+                
+                if db_match:
+                    # [ID-HANDSHAKE] Verify ID or strictly match price for status transition
+                    is_id_match = str(ep.get('id')) == str(db_match.exchange_order_id)
+                    
+                    # If we don't have an ID match, we check history to see if this position 
+                    # actually belongs to our pending order.
+                    if not is_id_match:
+                        self.logger.info(f"🔍 [ID-CHECK] Position {sym} found. Verifying against PENDING {db_match.id} via history...")
+                        try:
+                            # Try to find a trade in history that matches our PENDING order ID
+                            recent_trades = await adapter.fetch_my_trades(sym, limit=10)
+                            history_match = next((t for t in recent_trades if str(t.get('order')) == str(db_match.exchange_order_id)), None)
+                            
+                            if history_match:
+                                self.logger.info(f"✅ [ID-MATCH] Verified {sym} position belongs to PENDING {db_match.id} (Order {db_match.exchange_order_id})")
+                                is_id_match = True
+                            else:
+                                # Price sanity check as last resort for non-ID platforms
+                                price_tol = 0.12 # 12% tolerance for matching filling positions
+                                ex_entry = float(ep.get('entryPrice', 0))
+                                if db_match.entry_price and abs(db_match.entry_price - ex_entry) / ex_entry < price_tol:
+                                    self.logger.info(f"🤝 [PRICE-MATCH] No ID but price is within {price_tol*100}%. Adopting PENDING {db_match.id}.")
+                                    is_id_match = True
+                                else:
+                                    self.logger.warning(f"🚫 [ID-MISMATCH] {sym} position does NOT match PENDING {db_match.id}. Treating as NEW ORPHAN.")
+                                    db_match = None # Force adoption as new record
+                        except Exception as e:
+                            self.logger.error(f"Failed to verify ID handshake for {sym}: {e}")
+                            db_match = None # Safety: don't hijack if we can't verify
 
             if db_match:
                 # BUG 18 FIX: If DB thinks it's PENDING but it's now an ACTIVE position, update status!
@@ -206,7 +232,7 @@ class MonitorPositionsUseCase:
         Adopts exchange targets if DB is invalid or missing.
         """
         ex_name = profile['exchange'].upper()
-        adapter = self._get_adapter(profile)
+        adapter = self.sync_service.adapters.get(profile.get('id')) or self.sync_service.adapters.get(profile.get('exchange', '').upper())
         if not adapter: return
 
         # Helper to validate if SL/TP are logical (Not Inverted)
@@ -318,7 +344,7 @@ class MonitorPositionsUseCase:
         Fetches trade history to find the exit price/reason and updates DB.
         """
         ex_name = profile['exchange'].upper()
-        adapter = self._get_adapter(profile)
+        adapter = self.sync_service.adapters.get(profile.get('id')) or self.sync_service.adapters.get(profile.get('exchange', '').upper())
         if not adapter: return
         
         symbol = trade.symbol
@@ -428,7 +454,7 @@ class MonitorPositionsUseCase:
     async def _monitor_virtual_trade(self, profile: Dict[str, Any], trade: Any):
         """Monitors a virtual trade by checking ticker prices manually."""
         ex_name = profile['exchange'].upper()
-        adapter = self._get_adapter(profile)
+        adapter = self.sync_service.adapters.get(profile.get('id')) or self.sync_service.adapters.get(profile.get('exchange', '').upper())
         if not adapter: return
 
         try:
@@ -500,7 +526,7 @@ class MonitorPositionsUseCase:
 
         profile_id = profile.get('id')
         ex_name = profile['exchange'].upper()
-        adapter = self._get_adapter(profile)
+        adapter = self.sync_service.adapters.get(profile_id) or self.sync_service.adapters.get(profile.get('exchange', '').upper())
         if not adapter: return
 
         # Get current state to see if orders still exist
@@ -537,8 +563,7 @@ class MonitorPositionsUseCase:
                 # Check if it was filled (which should have been updated by _monitor_profile)
                 # We re-fetch state to be absolutely sure we don't cancel a trade that just filled/transitioned
                 # But since _monitor_profile runs first, if it's still PENDING in our snapshot, we check if it's in positions
-                raw_symbol = to_raw_format(trade.symbol)
-                is_in_positions = any(to_raw_format(p.get('symbol')) == raw_symbol for p in (state or {}).get('positions', []))
+                is_in_positions = any(p.get('symbol') == trade.symbol for p in (state or {}).get('positions', []))
                 
                 if not is_in_positions:
                     import time
@@ -615,7 +640,7 @@ class MonitorPositionsUseCase:
             self.logger.warning(f"⚔️ [DUPE-CLEANUP] Found {len(dupes)} {key[1]} orders for {key[0]}. Winner: {winner['order']['id']} (Score: {winner['score']:.2f})")
             
             profile_id = profile.get('id')
-            adapter = self.sync_service.adapters.get(profile_id)
+            adapter = self.sync_service.adapters.get(profile_id) or self.sync_service.adapters.get(profile.get('exchange', '').upper())
             if not adapter: continue
             
             for loose in loosers:
