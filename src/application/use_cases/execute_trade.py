@@ -8,6 +8,7 @@ from src.domain.services.risk_service import RiskService
 from src.domain.services.notification_service import NotificationService
 from src.domain.exceptions import InsufficientFundsError
 from src.cooldown_manager import CooldownManager
+from src.utils.symbol_helper import to_raw_format
 import json
 
 class ExecuteTradeUseCase:
@@ -108,7 +109,6 @@ class ExecuteTradeUseCase:
         # Check Database for any active/pending trade for THIS profile and symbol
         active_in_profile = await self.trade_repo.get_active_positions(profile_id)
         
-        from src.utils.symbol_helper import to_raw_format
         raw_symbol = to_raw_format(symbol)
         
         # Match by normalized (raw) symbol to be robust against "AVAXUSDT" vs "AVAX/USDT:USDT"
@@ -425,8 +425,8 @@ class ExecuteTradeUseCase:
                     err_str = str(api_err).lower()
                     # 10002: Order already exists, 110072: OrderLinkedID is duplicate
                     if "already exists" in err_str or "110072" in err_str or "10002" in err_str:
-                        self.logger.warning(f"[{symbol}] Idempotency Key saved us! Order {client_oid} already exists on Bybit. Skipping duplicate creation.")
-                        return True # Return True (treated as success) to skip duplicate logic but continue flow
+                        self.logger.error(f"❌ [IDEMPOTENCY HIT] {symbol} order {client_oid} already exists on Bybit. This confirms a duplicate signal was sent!")
+                        return True # Return True to allow flow but log clearly as error
                     raise api_err # Re-raise to trigger virtual trade tracking/error handling
             else:
                 sl_price, tp_price = self.risk_service.calculate_sl_tp(entry_price, side, sl_pct=sl_pct, tp_pct=tp_pct)

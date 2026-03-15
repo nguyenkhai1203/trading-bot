@@ -33,7 +33,10 @@ def to_raw_format(symbol: str) -> str:
         str: Raw alphanumeric string in uppercase.
     """
     if not symbol: return ""
-    return symbol.replace('/', '').replace(':', '').replace('-', '').replace('_', '').upper()
+    # Strip settlement suffixes (e.g., :USDT) first to ensure 
+    # 'LINK/USDT:USDT' and 'LINK/USDT' both map to 'LINKUSDT'
+    base = symbol.split(':')[0]
+    return base.replace('/', '').replace('-', '').replace('_', '').upper()
 
 def to_display_format(symbol: str) -> str:
     """

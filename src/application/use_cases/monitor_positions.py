@@ -6,6 +6,7 @@ from src.domain.services.risk_service import RiskService
 from src.domain.services.notification_service import NotificationService
 from src.cooldown_manager import CooldownManager
 from src.infrastructure.adapters.base_adapter import BaseAdapter
+from src.utils.symbol_helper import to_raw_format
 
 class MonitorPositionsUseCase:
     """
@@ -60,6 +61,16 @@ class MonitorPositionsUseCase:
             await self._monitor_profile(profile, db_trades)
             await self._manage_pending_trades(profile, db_trades)
 
+    def _get_adapter(self, profile: Dict[str, Any]) -> Optional[BaseAdapter]:
+        """Robustly retrieve adapter by profile_id or exchange name (fallback for tests)."""
+        # 1. Try by profile ID (standard for live)
+        adapter = self.sync_service.adapters.get(profile.get('id'))
+        if not adapter:
+            # 2. Try by exchange name (fallback for tests)
+            ex_name = str(profile.get('exchange', '')).upper()
+            adapter = self.sync_service.adapters.get(ex_name)
+        return adapter
+
     async def _monitor_profile(self, profile: Dict[str, Any], db_trades: List[Any]):
         # 1. Get cached state for this profile's account
         state = self.sync_service.get_account_state(profile)
@@ -79,9 +90,10 @@ class MonitorPositionsUseCase:
             if trade.status == 'PENDING':
                 continue
 
+            raw_symbol = to_raw_format(trade.symbol)
             matched = next(
                 (p for p in exchange_positions 
-                 if p.get('symbol') == trade.symbol 
+                 if to_raw_format(p.get('symbol')) == raw_symbol
                  and p.get('side', '').upper() == trade.side.upper()
                  and self._is_price_match(trade.entry_price, p)), 
                 None
@@ -109,12 +121,10 @@ class MonitorPositionsUseCase:
         # 4. Check for Orphans and Status Transitions (Exchange positions vs DB)
         for ep in exchange_positions:
             sym = ep.get('symbol')
-            # HYBRID MATCHING: 
-            # 1. First, check ACTIVE trades in DB (Matching by Symbol+Side is reliable due to isolation)
-            # 2. Second, check PENDING trades in DB (Matching by Symbol+Side)
+            raw_sym = to_raw_format(sym)
             db_match = next(
                 (t for t in db_trades 
-                 if t.symbol == sym 
+                 if to_raw_format(t.symbol) == raw_sym
                  and t.status == 'ACTIVE'
                  and t.side.upper() == ep.get('side', '').upper()
                  and self._is_price_match(t.entry_price, ep)),
@@ -127,7 +137,7 @@ class MonitorPositionsUseCase:
                 db_match = next(
                     (t for t in db_trades 
                      if t.status == 'PENDING'
-                     and t.symbol == sym
+                     and to_raw_format(t.symbol) == raw_sym
                      and t.side.upper() == ep.get('side', '').upper()),
                     None
                 )
@@ -196,7 +206,7 @@ class MonitorPositionsUseCase:
         Adopts exchange targets if DB is invalid or missing.
         """
         ex_name = profile['exchange'].upper()
-        adapter = self.sync_service.adapters.get(profile.get('id'))
+        adapter = self._get_adapter(profile)
         if not adapter: return
 
         # Helper to validate if SL/TP are logical (Not Inverted)
@@ -308,7 +318,7 @@ class MonitorPositionsUseCase:
         Fetches trade history to find the exit price/reason and updates DB.
         """
         ex_name = profile['exchange'].upper()
-        adapter = self.sync_service.adapters.get(profile.get('id'))
+        adapter = self._get_adapter(profile)
         if not adapter: return
         
         symbol = trade.symbol
@@ -418,7 +428,7 @@ class MonitorPositionsUseCase:
     async def _monitor_virtual_trade(self, profile: Dict[str, Any], trade: Any):
         """Monitors a virtual trade by checking ticker prices manually."""
         ex_name = profile['exchange'].upper()
-        adapter = self.sync_service.adapters.get(profile.get('id'))
+        adapter = self._get_adapter(profile)
         if not adapter: return
 
         try:
@@ -490,7 +500,7 @@ class MonitorPositionsUseCase:
 
         profile_id = profile.get('id')
         ex_name = profile['exchange'].upper()
-        adapter = self.sync_service.adapters.get(profile_id)
+        adapter = self._get_adapter(profile)
         if not adapter: return
 
         # Get current state to see if orders still exist
@@ -527,7 +537,8 @@ class MonitorPositionsUseCase:
                 # Check if it was filled (which should have been updated by _monitor_profile)
                 # We re-fetch state to be absolutely sure we don't cancel a trade that just filled/transitioned
                 # But since _monitor_profile runs first, if it's still PENDING in our snapshot, we check if it's in positions
-                is_in_positions = any(p.get('symbol') == trade.symbol for p in (state or {}).get('positions', []))
+                raw_symbol = to_raw_format(trade.symbol)
+                is_in_positions = any(to_raw_format(p.get('symbol')) == raw_symbol for p in (state or {}).get('positions', []))
                 
                 if not is_in_positions:
                     import time

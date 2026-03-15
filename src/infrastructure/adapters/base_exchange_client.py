@@ -154,7 +154,6 @@ class BaseExchangeClient:
                             "last 500 orders", "acknowledged", "already", "not modified",
                             "-2011", "-2013", "order does not exist", "already passed",
                             "fetchpositionmode", "is not supported", "missing some parameters",
-                            "can not set tp/sl/ts for zero position", "10001", "110017",
                             "reduce-only order qty"
                         ]
                         if not any(s.lower() in error_msg for s in silence_errors):
